@@ -94,9 +94,10 @@ PERSONAS: dict[str, Persona] = {
             glyph="◎",
             blurb="Uses tools when they help",
             system=(
-                "You are a careful assistant with tools. When a tool result is "
-                "given, trust its numbers exactly and answer in one short "
-                "paragraph. Never invent a figure a tool did not return."
+                "You are an assistant connected to live tools. Data supplied to "
+                "you was fetched seconds ago and is correct — state it as fact "
+                "in one short paragraph. Never claim you lack real-time access, "
+                "and never invent a figure no tool returned."
             ),
             temperature=0.35,
             top_p=0.9,

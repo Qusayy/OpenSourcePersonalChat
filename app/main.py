@@ -228,11 +228,22 @@ async def api_chat(payload: ChatRequest):
                 )})
             else:
                 if summaries:
-                    messages.append({"role": "system", "content": (
-                        "Tool results — use these figures exactly and do not "
-                        "recompute them:\n" + "\n".join(f"- {s}" for s in summaries)
+                    # The tool output goes inside the user turn, not into a
+                    # second system message. A 1.5B model barely attends to a
+                    # trailing system message and falls back on its "I don't
+                    # have real-time data" prior — it will describe the weather
+                    # as unavailable while the card beside it shows today's
+                    # temperature. Stated as part of the question, it complies.
+                    facts = "\n".join(f"- {s}" for s in summaries)
+                    messages.append({"role": "user", "content": (
+                        f"{user_text}\n\n"
+                        f"Live data, retrieved just now by a tool:\n{facts}\n\n"
+                        "Answer the question using only the data above. It is "
+                        "current and correct. Do not say you lack real-time "
+                        "access, and do not recalculate any figure."
                     )})
-                messages.append({"role": "user", "content": user_text})
+                else:
+                    messages.append({"role": "user", "content": user_text})
 
             fitted, prompt_tokens, dropped = engine.fit_context(
                 messages, sampling["max_tokens"]

@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Aurora — {{ info.model }}{% endblock %}
-{% block styles %}<link rel="stylesheet" href="/static/css/chat.css">{% endblock %}
+{% block styles %}
+<link rel="stylesheet" href="/static/css/chat.css?v={{ version }}">
+<link rel="stylesheet" href="/static/css/cards.css?v={{ version }}">
+{% endblock %}
 
 {% block rail %}
 <button class="btn btn-primary" id="new-chat" style="width:100%">
@@ -41,20 +44,8 @@
       <span class="pill mono">{{ info.hardware }}</span>
       <span class="pill mono">{{ info.n_threads }} threads</span>
     </div>
-    <div class="suggestions">
-      <button class="suggest" data-q="Explain quantization like I have five minutes and some technical background.">
-        <b>Explain quantization</b><span>What 4-bit actually trades away</span>
-      </button>
-      <button class="suggest" data-q="Write a Python function that streams a large file over HTTP in chunks, with retries.">
-        <b>Write a Python function</b><span>Streaming download with retries</span>
-      </button>
-      <button class="suggest" data-q="Give me 10 unusual project ideas for a 4GB VPS that has no GPU.">
-        <b>Ideas for a tiny server</b><span>10 things a 4 GB box can do</span>
-      </button>
-      <button class="suggest" data-q="Why is CPU text generation limited by memory bandwidth rather than clock speed?">
-        <b>Why is it this fast?</b><span>Memory bandwidth, not clock speed</span>
-      </button>
-    </div>
+    <p class="hero-lead">Pick a skill, or just type. Press <span class="kbd">/</span> for tools.</p>
+    <div class="skill-grid" id="skill-grid"></div>
   </section>
 
   <div class="thread" id="thread" aria-live="polite" aria-relevant="additions"></div>
@@ -62,6 +53,8 @@
 
 <div class="composer-wrap">
   <form class="composer" id="composer">
+    <div class="palette" id="palette" hidden role="listbox" aria-label="Tools and skills"></div>
+    <div class="skill-active" id="skill-active" hidden></div>
     <div class="persona-row" id="persona-row" role="group" aria-label="Persona">
       {% for p in personas %}
       <button type="button" class="persona" data-persona="{{ p.id }}"
@@ -157,4 +150,4 @@
 </aside>
 {% endblock %}
 
-{% block scripts %}<script type="module" src="/static/js/chat.js"></script>{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/chat.js?v={{ version }}"></script>{% endblock %}

@@ -1,9 +1,13 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth } from "./app.js";
+import { $, $$, toast, setRail, onHealth, canvas } from "./app.js";
 import { renderMarkdown, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
+import { mountCard } from "./cards.js";
+import { mountSkills, setupPalette, getSkill } from "./skills.js";
+import { enter } from "./motion.js";
+import { icon, hasIcon } from "./icons.js";
 
 const ARROW = "M5 12h13M12 5l7 7-7 7";
 const SQUARE = "M8 8h8v8H8z";
@@ -12,9 +16,9 @@ const RING_C = 2 * Math.PI * 22;
 const state = {
   conversationId: null,
   persona: localStorage.getItem("aurora.persona") || window.AURORA.defaultPersona,
+  skill: null,
   streaming: false,
   requestId: null,
-  abort: null,
 };
 
 const els = {
@@ -34,6 +38,9 @@ const els = {
   ctxRing: $("#ctx-ring"),
   sparkLine: $("#spark-line"),
   sparkFill: $("#spark-fill"),
+  skillGrid: $("#skill-grid"),
+  skillChip: $("#skill-active"),
+  palette: $("#palette"),
 };
 
 /* ------------------------------------------------------------- personas -- */
@@ -52,6 +59,35 @@ $$(".persona").forEach((b) =>
 );
 paintPersonas();
 
+/* --------------------------------------------------------------- skills -- */
+
+function setSkill(skill) {
+  state.skill = skill;
+  if (!els.skillChip) return;
+  if (!skill) {
+    els.skillChip.hidden = true;
+    els.input.placeholder = `Ask ${window.AURORA.info.model} something…`;
+    return;
+  }
+  els.skillChip.hidden = false;
+  els.skillChip.innerHTML = `
+    <span class="g">${escapeHtml(skill.glyph)}</span>
+    <span>${escapeHtml(skill.name)}</span>
+    <button class="x" type="button" aria-label="Clear skill">✕</button>`;
+  els.skillChip.querySelector(".x").addEventListener("click", () => setSkill(null));
+  els.input.placeholder = skill.placeholder || `${skill.name}…`;
+  els.input.focus();
+}
+
+mountSkills(els.skillGrid, (skill) => {
+  setSkill(skill);
+  els.input.focus();
+});
+
+if (els.palette) {
+  setupPalette(els.input, els.palette, { onSkill: setSkill });
+}
+
 /* -------------------------------------------------------------- composer - */
 
 function autosize() {
@@ -60,7 +96,7 @@ function autosize() {
 }
 els.input.addEventListener("input", autosize);
 els.input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  if (e.key === "Enter" && !e.shiftKey && els.palette?.hidden !== false) {
     e.preventDefault();
     els.form.requestSubmit();
   }
@@ -75,13 +111,6 @@ els.form.addEventListener("submit", (e) => {
   send(text);
 });
 
-$$(".suggest").forEach((b) =>
-  b.addEventListener("click", () => {
-    if (state.streaming) return;
-    send(b.dataset.q);
-  })
-);
-
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
@@ -95,9 +124,6 @@ function nearBottom() {
   const el = els.wrap;
   return el.scrollHeight - el.scrollTop - el.clientHeight < 140;
 }
-function stick(was) {
-  if (was) els.wrap.scrollTop = els.wrap.scrollHeight;
-}
 
 function hideHero() {
   if (els.hero && !els.hero.hidden) els.hero.hidden = true;
@@ -108,7 +134,7 @@ function addUser(text) {
   el.className = "msg user";
   el.innerHTML = `<div class="body">${escapeHtml(text).replace(/\n/g, "<br>")}</div>`;
   els.thread.appendChild(el);
-  stick(true);
+  els.wrap.scrollTop = els.wrap.scrollHeight;
   return el;
 }
 
@@ -118,12 +144,37 @@ function addAssistant() {
   el.innerHTML = `
     <div class="avatar" aria-hidden="true">✦</div>
     <div class="body">
+      <div class="timeline" hidden></div>
+      <div class="cards"></div>
       <div class="prose"></div>
       <div class="msg-foot" hidden></div>
     </div>`;
   els.thread.appendChild(el);
   els.wrap.scrollTop = els.wrap.scrollHeight;
   return el;
+}
+
+/** Create or update one row of the answer timeline. */
+function upsertStep(host, data) {
+  host.hidden = false;
+  let row = host.querySelector(`[data-id="${CSS.escape(data.id)}"]`);
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "tl-step";
+    row.dataset.id = data.id;
+    row.innerHTML =
+      '<span class="g"></span><span class="label"></span>' +
+      '<span class="detail"></span><span class="ms"></span>';
+    host.appendChild(row);
+    enter(row, { distance: 8 });
+  }
+  row.dataset.status = data.status || "running";
+  const art = data.tool && hasIcon(data.tool) ? icon(data.tool, 13) : icon(data.kind, 13);
+  row.querySelector(".g").innerHTML = art || escapeHtml(data.glyph || "◇");
+  row.querySelector(".label").textContent = data.label || "";
+  row.querySelector(".detail").textContent = data.detail || "";
+  row.querySelector(".ms").textContent = data.ms ? fmtMs(data.ms) : "";
+  return row;
 }
 
 function notice(kind, html) {
@@ -141,6 +192,7 @@ function footer(el, m) {
   if (m.gen_tps) bits.push(`${fmt(m.gen_tps, 1)} tok/s`);
   if (m.ttft_ms) bits.push(`${fmtMs(m.ttft_ms)} ttft`);
   if (m.completion_tokens) bits.push(`${fmtInt(m.completion_tokens)} tok`);
+  if (m.tool_calls) bits.push(`${m.tool_calls} tool${m.tool_calls > 1 ? "s" : ""}`);
   if (m.cancelled) bits.push("stopped");
   foot.innerHTML =
     bits.map((b) => `<span>${b}</span>`).join('<span class="sep">·</span>') +
@@ -168,8 +220,6 @@ els.thread.addEventListener("click", (e) => {
     if (state.streaming) return;
     const prev = msg.previousElementSibling;
     const q = prev?.classList.contains("user") ? prev.querySelector(".body").innerText : null;
-    // Re-asks as a fresh turn rather than rewriting history — what the
-    // transcript shows and what the model was sent stay identical.
     if (q) send(q);
   }
 });
@@ -206,6 +256,7 @@ function setMode(streaming) {
   els.send.dataset.mode = streaming ? "stop" : "send";
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
   els.glyph.setAttribute("d", streaming ? SQUARE : ARROW);
+  canvas?.setGenerating(streaming);
 }
 
 async function stopGeneration() {
@@ -213,7 +264,7 @@ async function stopGeneration() {
   try {
     await fetch(`/api/cancel/${state.requestId}`, { method: "POST" });
   } catch {
-    /* the stream's own teardown will stop it anyway */
+    /* the stream's own teardown stops it anyway */
   }
 }
 
@@ -223,20 +274,24 @@ async function send(text) {
   setRail(false);
   addUser(text);
 
+  const skill = state.skill;
   const bot = addAssistant();
   const prose = bot.querySelector(".prose");
+  const timeline = bot.querySelector(".timeline");
+  const cardHost = bot.querySelector(".cards");
   let queueCard = null;
   let raw = "";
   let dirty = false;
   let caretOn = true;
+  let cardIndex = 0;
 
   const paint = () => {
     if (!dirty) return;
     dirty = false;
     prose.innerHTML = renderMarkdown(raw) + (caretOn ? '<span class="caret"></span>' : "");
   };
-  // Re-parsing markdown on every token is the classic way to make streaming
-  // feel slower than it is. 100 ms is well under the eye's threshold here.
+  // Re-parsing markdown per token is the classic way to make streaming feel
+  // slower than it is. 100ms is well under the eye's threshold.
   const painter = setInterval(paint, 100);
 
   setMode(true);
@@ -246,33 +301,37 @@ async function send(text) {
   els.out.textContent = "0";
 
   const controller = new AbortController();
-  state.abort = controller;
 
   try {
     await sseFetch("/api/chat", {
-      body: { message: text, conversation_id: state.conversationId, persona: state.persona },
+      body: {
+        message: text,
+        conversation_id: state.conversationId,
+        persona: state.persona,
+        skill: skill ? skill.id : null,
+      },
       signal: controller.signal,
       onEvent: (event, data) => {
         if (event === "conversation") {
           state.conversationId = data.id;
           if (data.created) refreshList();
-          if (data.dropped) {
-            notice(
-              "",
-              `<span>${data.dropped} earlier message${data.dropped > 1 ? "s" : ""} trimmed to fit the context window</span>`
-            );
-          }
         } else if (event === "queue") {
           if (!queueCard) {
-            queueCard = notice(
-              "queue",
-              '<span class="spin"></span><span></span>'
-            );
+            queueCard = notice("queue", '<span class="spin"></span><span></span>');
           }
           queueCard.lastElementChild.textContent =
             data.position > 0
               ? `${data.position} request${data.position > 1 ? "s" : ""} ahead — one generation runs at a time on 2 cores`
               : "Next in line — starting shortly";
+        } else if (event === "step") {
+          upsertStep(timeline, data);
+        } else if (event === "card") {
+          mountCard(cardHost, data.card, data.data, cardIndex++);
+          if (nearBottom()) els.wrap.scrollTop = els.wrap.scrollHeight;
+        } else if (event === "trimmed") {
+          notice("", `<span>${data.dropped} earlier message${
+            data.dropped > 1 ? "s" : ""
+          } trimmed to fit the context window</span>`);
         } else if (event === "start") {
           state.requestId = data.request_id;
           queueCard?.remove();
@@ -283,6 +342,7 @@ async function send(text) {
           raw += data.t;
           dirty = true;
           meter.token(1);
+          canvas?.pulse();
           if (was) els.wrap.scrollTop = els.wrap.scrollHeight;
         } else if (event === "done") {
           caretOn = false;
@@ -319,8 +379,8 @@ async function send(text) {
     meter.stop();
     setMode(false);
     state.requestId = null;
-    state.abort = null;
-    if (!raw.trim() && !bot.querySelector(".msg-foot").innerHTML) bot.remove();
+    if (!raw.trim() && !cardHost.children.length) bot.remove();
+    setSkill(null); // a skill applies to one message, not the whole thread
     els.input.focus();
   }
 }
@@ -385,8 +445,16 @@ async function loadConversation(cid) {
       } else {
         const bot = addAssistant();
         bot.dataset.raw = m.content;
+        // Replay stored tool cards, so reloading a conversation is not lossy.
+        const cardHost = bot.querySelector(".cards");
+        (m.tool_calls || []).forEach((call, i) => {
+          if (call.ok && call.card) mountCard(cardHost, call.card, call.data, i);
+          else mountCard(cardHost, "error", { message: call.summary }, i);
+        });
         bot.querySelector(".prose").innerHTML = renderMarkdown(m.content);
-        if (m.gen_tps || m.ttft_ms) footer(bot, m);
+        if (m.gen_tps || m.ttft_ms) {
+          footer(bot, { ...m, tool_calls: (m.tool_calls || []).length });
+        }
         ctx = (m.prompt_tokens || 0) + (m.completion_tokens || 0) || ctx;
       }
     }
@@ -404,6 +472,7 @@ function newChat() {
   state.conversationId = null;
   els.thread.innerHTML = "";
   if (els.hero) els.hero.hidden = false;
+  setSkill(null);
   setContext(0);
   els.tps.dataset.empty = "true";
   els.tps.textContent = "—";
@@ -422,11 +491,13 @@ $("#new-chat").addEventListener("click", newChat);
 onHealth((info) => {
   const ready = info.status === "ready";
   els.send.disabled = !ready;
-  els.input.placeholder = ready
-    ? `Ask ${info.model} something…`
-    : info.status === "error"
-    ? "Model unavailable — see the About page"
-    : "Warming the model…";
+  if (!state.skill) {
+    els.input.placeholder = ready
+      ? `Ask ${info.model} something…  (press / for tools)`
+      : info.status === "error"
+      ? "Model unavailable — see the About page"
+      : "Warming the model…";
+  }
 });
 
 setContext(0);

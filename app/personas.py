@@ -5,6 +5,8 @@ fresh conversation, and on 2 vCPU that is measured in hundreds of milliseconds.
 Keep each under ~60 tokens.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, asdict
 
 
@@ -20,6 +22,9 @@ class Persona:
     top_k: int
     repeat_penalty: float
     max_tokens: int
+    # Tools cost a routing pass (~2-5s on 2 vCPU), so only the Agent persona
+    # pays for it. Slash commands work everywhere regardless.
+    tools: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -82,6 +87,23 @@ PERSONAS: dict[str, Persona] = {
             top_k=40,
             repeat_penalty=1.0,
             max_tokens=512,
+        ),
+        Persona(
+            id="agent",
+            name="Agent",
+            glyph="◎",
+            blurb="Uses tools when they help",
+            system=(
+                "You are a careful assistant with tools. When a tool result is "
+                "given, trust its numbers exactly and answer in one short "
+                "paragraph. Never invent a figure a tool did not return."
+            ),
+            temperature=0.35,
+            top_p=0.9,
+            top_k=40,
+            repeat_penalty=1.05,
+            max_tokens=320,
+            tools=True,
         ),
         Persona(
             id="brainstorm",

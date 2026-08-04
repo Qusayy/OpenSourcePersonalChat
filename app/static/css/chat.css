@@ -51,8 +51,45 @@
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  margin-bottom: 30px;
+  margin-bottom: 26px;
 }
+
+.hero-lead {
+  margin: 0 0 14px;
+  font-size: var(--t-sm);
+  color: var(--ink-3);
+}
+
+/* the armed-skill chip above the composer */
+.skill-active {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 0;
+  padding: 5px 6px 5px 10px;
+  border-radius: 99px;
+  align-self: flex-start;
+  width: fit-content;
+  font-size: var(--t-xs);
+  color: #ede9fe;
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22));
+}
+.skill-active[hidden] { display: none; }
+.skill-active .g { font-size: 12px; }
+.skill-active .x {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.skill-active .x:hover { background: rgba(255, 255, 255, 0.24); }
 
 .suggestions {
   display: grid;
@@ -322,6 +359,7 @@
 }
 
 .composer {
+  position: relative; /* anchors the "/" palette */
   max-width: var(--col-max);
   margin: 0 auto;
   border-radius: var(--r-xl);

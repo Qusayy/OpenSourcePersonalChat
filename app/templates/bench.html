@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Benchmark — {{ info.model }}{% endblock %}
-{% block styles %}<link rel="stylesheet" href="/static/css/bench.css">{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/bench.css?v={{ version }}">{% endblock %}
 
 {% block rail %}
 <div class="rail-scroll">
@@ -244,5 +244,5 @@
 
 {% block scripts %}
 <script id="reference-data" type="application/json">{{ reference | tojson }}</script>
-<script type="module" src="/static/js/bench.js"></script>
+<script type="module" src="/static/js/bench.js?v={{ version }}"></script>
 {% endblock %}

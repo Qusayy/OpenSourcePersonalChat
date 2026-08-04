@@ -6,6 +6,7 @@ tokens a second, a connection pool would be ceremony without benefit.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -38,6 +39,25 @@ CREATE TABLE IF NOT EXISTS messages (
     completion_tokens  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
+
+-- Tool calls carry the conversation id as well as the message id, so a call
+-- whose answer was cancelled still replays on the page instead of vanishing.
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id               TEXT PRIMARY KEY,
+    conversation_id  TEXT NOT NULL,
+    message_id       TEXT,
+    tool             TEXT NOT NULL,
+    via              TEXT,
+    args_json        TEXT,
+    card             TEXT,
+    data_json        TEXT,
+    summary          TEXT,
+    ms               REAL,
+    ok               INTEGER NOT NULL DEFAULT 1,
+    created_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_msg ON tool_calls(message_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_conv ON tool_calls(conversation_id, created_at);
 
 CREATE TABLE IF NOT EXISTS runs (
     id             TEXT PRIMARY KEY,
@@ -148,10 +168,24 @@ def get_conversation(cid: str) -> dict | None:
         "  FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
         (cid,),
     )
+    # Hang each tool call off the message it produced, so reloading a
+    # conversation replays its cards instead of losing them.
+    calls = conversation_tool_calls(cid)
+    by_message: dict[str, list[dict]] = {}
+    orphans = []
+    for call in calls:
+        if call["message_id"]:
+            by_message.setdefault(call["message_id"], []).append(call)
+        else:
+            orphans.append(call)
+    for message in convo["messages"]:
+        message["tool_calls"] = by_message.get(message["id"], [])
+    convo["orphan_tool_calls"] = orphans
     return convo
 
 
 def delete_conversation(cid: str) -> None:
+    _write("DELETE FROM tool_calls WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM messages WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM conversations WHERE id = ?", (cid,))
 
@@ -181,6 +215,49 @@ def add_message(
         (mid, cid, role, content, time.time(), ttft_ms, gen_tps, prompt_tokens, completion_tokens),
     )
     return mid
+
+
+def add_tool_call(
+    conversation_id: str,
+    tool: str,
+    *,
+    message_id: str | None = None,
+    via: str = "heuristic",
+    args: dict | None = None,
+    card: str | None = None,
+    data: dict | None = None,
+    summary: str = "",
+    ms: float = 0.0,
+    ok: bool = True,
+) -> str:
+    tid = uuid.uuid4().hex
+    _write(
+        "INSERT INTO tool_calls (id, conversation_id, message_id, tool, via, args_json,"
+        " card, data_json, summary, ms, ok, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            tid, conversation_id, message_id, tool, via,
+            json.dumps(args or {}), card, json.dumps(data or {}),
+            summary, ms, 1 if ok else 0, time.time(),
+        ),
+    )
+    return tid
+
+
+def attach_tool_calls(message_id: str, tool_call_ids: list[str]) -> None:
+    for tid in tool_call_ids:
+        _write("UPDATE tool_calls SET message_id = ? WHERE id = ?", (message_id, tid))
+
+
+def conversation_tool_calls(cid: str) -> list[dict]:
+    rows = _rows(
+        "SELECT * FROM tool_calls WHERE conversation_id = ? ORDER BY created_at ASC", (cid,)
+    )
+    for r in rows:
+        r["args"] = json.loads(r.pop("args_json") or "{}")
+        r["data"] = json.loads(r.pop("data_json") or "{}")
+        r["ok"] = bool(r["ok"])
+    return rows
 
 
 def conversation_messages(cid: str) -> list[dict]:

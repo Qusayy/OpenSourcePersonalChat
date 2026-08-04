@@ -4,3 +4,7 @@ jinja2>=3.1.4
 pydantic>=2.8.0
 pydantic-settings>=2.4.0
 llama-cpp-python>=0.3.2
+# tools
+httpx>=0.27.0
+# IANA timezone database — already present on most Linux hosts, required on Windows
+tzdata>=2024.1

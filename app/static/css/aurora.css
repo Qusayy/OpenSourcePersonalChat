@@ -13,6 +13,34 @@
      near-identical, dramatically cheaper when hundreds of them scroll.
    ========================================================================= */
 
+/* The WebGL canvas. When the shader starts it sets data-canvas="on" and the
+   CSS gradient layers below get out of the way — they are the fallback, not a
+   second layer to composite over. */
+.gl {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -3;
+  display: none;
+  pointer-events: none;
+}
+:root[data-canvas="on"] .gl {
+  display: block;
+}
+:root[data-canvas="on"] .aurora,
+:root[data-canvas="on"] .aurora-alt {
+  display: none;
+}
+:root[data-canvas="on"] .veil {
+  /* The shader already carries its own vignette; a second one buries it. */
+  background: radial-gradient(
+    140% 100% at 50% 0%,
+    rgba(6, 7, 15, 0.05),
+    rgba(6, 7, 15, 0.5) 80%
+  );
+}
+
 .aurora,
 .aurora-alt {
   position: fixed;

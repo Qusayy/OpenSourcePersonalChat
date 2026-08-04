@@ -103,6 +103,7 @@ class Engine:
         self._lock = asyncio.Lock()
         self._waiting: deque[str] = deque()
         self._cancels: dict[str, threading.Event] = {}
+        self._grammars: dict[int, Any] = {}
         self._busy = False
         self._completed = 0
 
@@ -250,6 +251,64 @@ class Engine:
             close = getattr(stream, "close", None)
             if close is not None:
                 close()
+
+    # -- constrained completion (tool routing) ------------------------------
+
+    def _grammar(self, text: str):
+        """Compile and cache a GBNF grammar."""
+        from llama_cpp import LlamaGrammar
+
+        key = hash(text)
+        cached = self._grammars.get(key)
+        if cached is None:
+            cached = LlamaGrammar.from_string(text, verbose=False)
+            self._grammars[key] = cached
+        return cached
+
+    def _complete_json_blocking(self, messages: list[dict], grammar_text: str,
+                                max_tokens: int) -> tuple[dict | None, str]:
+        import json
+
+        out = self._llm.create_chat_completion(
+            messages=messages,
+            grammar=self._grammar(grammar_text),
+            temperature=0.0,  # the grammar decides the shape; greedy picks the content
+            top_k=1,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+        raw = (out["choices"][0]["message"].get("content") or "").strip()
+        try:
+            return json.loads(raw), raw
+        except json.JSONDecodeError:
+            return None, raw
+
+    async def complete_json(
+        self, messages: list[dict], grammar_text: str, max_tokens: int | None = None
+    ) -> tuple[dict | None, float, str]:
+        """One short grammar-constrained pass. Returns (parsed, ms, raw).
+
+        Takes the same lock as generation — a 2 vCPU box must never run two
+        inferences at once, routing included.
+        """
+        if not self.ready:
+            return None, 0.0, ""
+        if self.cfg.mock:
+            return {"tool": "none"}, 0.0, '{"tool": "none"}'
+
+        max_tokens = max_tokens or self.cfg.route_max_tokens
+        t0 = time.perf_counter()
+        async with self._lock:
+            self._busy = True
+            try:
+                parsed, raw = await asyncio.to_thread(
+                    self._complete_json_blocking, messages, grammar_text, max_tokens
+                )
+            except Exception as exc:  # noqa: BLE001 — routing must never break chat
+                self._busy = False
+                return None, (time.perf_counter() - t0) * 1000, f"{type(exc).__name__}: {exc}"
+            self._busy = False
+        return parsed, (time.perf_counter() - t0) * 1000, raw
 
     async def stream_chat(
         self,

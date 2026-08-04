@@ -57,13 +57,22 @@ export class Meter {
   }
 }
 
-/* Sparkline geometry for a 120x38 viewBox. Returns [linePath, fillPath]. */
-export function sparkPaths(values, w = 120, h = 38) {
+/**
+ * Sparkline geometry for a 120x38 viewBox. Returns [linePath, fillPath].
+ *
+ * `autoMin` scales to the data's own range instead of to zero. Throughput
+ * wants a zero baseline (2 tok/s really is half of 4); a temperature series
+ * does not — 17-28°C against a zero baseline is a flat line that hides the
+ * whole day's shape.
+ */
+export function sparkPaths(values, w = 120, h = 38, { autoMin = false } = {}) {
   if (!values || values.length < 2) return ["", ""];
-  const max = Math.max(...values, 1);
+  const hi = Math.max(...values, autoMin ? -Infinity : 1);
+  const lo = autoMin ? Math.min(...values) : 0;
+  const span = hi - lo || 1;
   const pad = 3;
   const step = w / (values.length - 1);
-  const y = (v) => h - pad - (v / max) * (h - pad * 2);
+  const y = (v) => h - pad - ((v - lo) / span) * (h - pad * 2);
 
   let d = `M0 ${y(values[0]).toFixed(2)}`;
   for (let i = 1; i < values.length; i++) {

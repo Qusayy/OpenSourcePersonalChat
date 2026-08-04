@@ -1,7 +1,26 @@
-/* Shared shell behaviour: mobile rail, toasts, health polling, code copy. */
+/* Shared shell behaviour: canvas, mobile rail, toasts, health polling, copy. */
+
+import { startCanvas } from "./canvas.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+/* ------------------------------------------------------------- canvas --- */
+
+/**
+ * Null when WebGL2 is unavailable — every caller uses `canvas?.pulse()`, and
+ * the CSS gradient layers stay visible as the fallback.
+ */
+export const canvas = (() => {
+  const el = $("#gl");
+  if (!el) return null;
+  try {
+    return startCanvas(el);
+  } catch (err) {
+    console.warn("[aurora] canvas unavailable:", err);
+    return null;
+  }
+})();
 
 /* -------------------------------------------------------------- toasts -- */
 

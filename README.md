@@ -8,15 +8,24 @@ the feature: live tokens/sec while the answer streams, time-to-first-token under
 every reply, and a benchmark page that measures the machine it's running on and
 plots it against reference hardware.
 
+It also gives the model a tool belt — exact arithmetic, a clock, Wikipedia,
+weather, currency and a URL reader — because those are precisely the things a
+1.5B model gets wrong, and they are fixable without a bigger model.
+
 ```
 app/
-  main.py        FastAPI: pages, SSE chat, benchmark, history
-  llm.py         one Llama instance, one lock, honest metrics
+  main.py        FastAPI: pages, SSE chat, tools, skills, benchmark, history
+  llm.py         one Llama instance, one lock, honest metrics, grammar routing
+  router.py      slash commands -> heuristics -> grammar-constrained routing
+  skills.py      one-click workflows built on the tools
+  tools/         base (registry + GBNF) · offline · web · reader (SSRF guard)
   bench.py       the benchmark suite + reference data
-  personas.py    four presets (system prompt + sampling profile)
-  db.py          SQLite (WAL): conversations, messages, runs
+  personas.py    five presets (system prompt + sampling profile)
+  db.py          SQLite (WAL): conversations, messages, tool_calls, runs
   templates/     Jinja2 — chat, bench, about
   static/        hand-written CSS + ES modules, no build step
+    js/canvas.js   WebGL2 aurora that reacts to the token stream
+    js/cards.js    visual answers — weather, calculator tape, clock, …
 scripts/bench_cli.py    headless benchmark → JSON
 deploy/                 systemd unit + nginx site
 ```
@@ -121,8 +130,69 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
 | `AURORA_HARDWARE_LABEL` | `2 vCPU · 4 GB VPS` | shown throughout the UI |
 | `AURORA_MOCK` | `false` | run the site with no model present |
+| `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
+| `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
+| `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
 
 ---
+
+## Tools and skills
+
+Eight tools, no API keys anywhere:
+
+| Tool | | Network |
+|---|---|---|
+| `calculator` | exact arithmetic via `Fraction` — `0.1+0.2` really is `0.3` | — |
+| `clock` | date and time; accepts `Europe/Paris`, `Tokyo`, `new york` or `Japan` | — |
+| `convert_units` | length, mass, time, data, speed, volume, temperature | — |
+| `text_stats` | words, sentences, reading time, top terms | — |
+| `wikipedia` | article summaries | yes |
+| `weather` | current conditions + 5-day forecast (open-meteo) | yes |
+| `currency` | ECB rates (Frankfurter) | yes |
+| `read_url` | fetch a page and extract its readable text | yes |
+
+**Skills** are one-click workflows on top of them — *Summarise a link*,
+*Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
+*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path.
+
+### How a 1.5B model is made to route reliably
+
+It isn't, on its own — asked politely for JSON it produces trailing commas,
+prose preambles and invented keys. Four layers, cheapest first:
+
+1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. Free
+   and certain. Press `/` in the composer for the palette.
+2. **Heuristics** — a pasted link, `1247 * 89`, `15% of 200`, `100 EUR to USD`,
+   `what time is it in Tokyo`. Regex, free, and better than the model's
+   judgement. These handle most real traffic with no model call at all.
+3. **Grammar-constrained routing** — only for the *Agent* persona, and only
+   when the first two miss. A short pass runs under a GBNF grammar generated
+   from the tool registry, so malformed output is not unlikely, it is
+   unrepresentable.
+4. **Failure is visible** — a tool that errors or times out renders as a failed
+   step in the timeline and the model answers without it.
+
+A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
+for it. The per-step timings are printed in the UI rather than hidden.
+
+### Safety
+
+`read_url` is the only tool that makes the server fetch a user-supplied
+address, so it resolves the hostname first and refuses any private, loopback,
+link-local, CGNAT, reserved or multicast address — including
+`169.254.169.254`, the cloud metadata endpoint. Redirects are followed by hand,
+maximum three hops, re-validating at each one. Bodies are capped at 2 MB and
+only `text/html` / `text/plain` is read.
+
+The calculator parses with `ast` and a node whitelist. It never calls `eval`,
+and rejects attribute access, comprehensions, lambdas and `__import__`.
+
+Set `AURORA_ALLOW_OUTBOUND=false` to drop every network tool from the registry,
+the grammar and the UI in one move.
+
+> Wikipedia returns **403** for a User-Agent with no contact details. Set
+> `AURORA_USER_AGENT` to something including your repository URL or email.
 
 ## How it works
 
@@ -153,11 +223,19 @@ its own token and lets sampling sit at a normal `0.7` with a light
 `repeat_penalty`.
 
 **The front-end has no dependencies.** No build step, no CDN, no third-party
-JavaScript — the markdown renderer is ~150 lines in `static/js/md.js`, and it
-escapes everything before producing a tag. The aurora background is soft radial
-gradients animated with `transform` only (no `filter: blur()`, no per-frame
-repaint), and message cards use a translucent fill rather than `backdrop-filter`,
-which is what keeps a long thread scrolling smoothly on a weak client.
+JavaScript — the markdown renderer is ~150 lines in `static/js/md.js` and
+escapes everything before producing a tag; the icons are inline SVG, because
+symbols like `⧉` and `⇹` are missing from plenty of font stacks and render as
+tofu boxes on somebody else's machine.
+
+**The background is a shader that reacts to generation.** `static/js/canvas.js`
+is a hand-written WebGL2 fragment shader: domain-warped fbm noise whose
+`u_energy` uniform spikes on every token and decays, so the aurora surges while
+the model writes and settles when it stops. It renders at half resolution, caps
+`devicePixelRatio` at 1.5, runs at 30 fps idle and 60 fps while generating, and
+cancels its frame loop when the tab is hidden. Three fallbacks: no WebGL2 keeps
+the CSS gradient layers, `prefers-reduced-motion` paints one static frame, and
+a hidden tab paints nothing. All of it is client-side — the VPS pays nothing.
 
 ---
 
@@ -215,7 +293,9 @@ load, and if it did, every token would come off disk.
 
 | Endpoint | |
 |---|---|
-| `POST /api/chat` → SSE | events: `conversation`, `queue`, `start`, `token`, `done`, `error` |
+| `POST /api/chat` → SSE | events: `conversation`, `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error` |
+| `GET /api/tools` | the registry, as the UI sees it |
+| `GET /api/skills` | workflow definitions |
 | `POST /api/cancel/{id}` | stop an in-flight generation |
 | `GET /api/health` | model, status, RSS, queue depth, uptime |
 | `GET/DELETE /api/conversations[/{id}]` | history |

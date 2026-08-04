@@ -1,5 +1,7 @@
 """Environment-driven settings. Defaults target a 2 vCPU / 4 GB VPS."""
 
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -35,6 +37,20 @@ class Settings(BaseSettings):
     # generation ceilings
     max_tokens: int = 512
     reply_headroom: int = 64  # tokens kept free above prompt + max_tokens
+
+    # tools
+    tools_enabled: bool = True
+    # One switch to make the whole install offline-only. Network tools vanish
+    # from the registry, the grammar, and the UI.
+    allow_outbound: bool = True
+    tool_timeout: float = 10.0
+    # Wikimedia's robot policy returns 403 for a User-Agent with no contact
+    # information, so this must carry a URL or an email. Point it at your own
+    # repository via AURORA_USER_AGENT.
+    user_agent: str = (
+        "Aurora/2.0 (+https://github.com/topics/llama-cpp; self-hosted llama.cpp chat)"
+    )
+    route_max_tokens: int = 96
 
     # app
     host: str = "127.0.0.1"

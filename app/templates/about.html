@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}About — Aurora{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/bench.css">{% endblock %}
+
+{% block rail %}
+<div class="rail-scroll">
+  <div class="rail-label">On this page</div>
+  <a class="convo" href="#stack"><span class="t">The stack</span></a>
+  <a class="convo" href="#queue"><span class="t">One request at a time</span></a>
+  <a class="convo" href="#template"><span class="t">Getting the prompt right</span></a>
+  <a class="convo" href="#limits"><span class="t">What it cannot do</span></a>
+</div>
+{% endblock %}
+
+{% block main %}
+<div class="page">
+  <div class="wrap">
+    <header class="page-head">
+      <h1>Everything here runs on one small server</h1>
+      <p>
+        No API key, no upstream provider, no GPU. {{ info.model }} at
+        {{ info.quant }} on a {{ info.hardware }}, answering in the open with its
+        own speed printed under every reply.
+      </p>
+    </header>
+
+    <section class="section" id="stack">
+      <h2>The stack</h2>
+      <div class="panel explain">
+        <p>
+          <b>llama.cpp</b> via <code>llama-cpp-python</code> holds the model —
+          one instance, loaded once at startup and kept warm. <b>FastAPI</b> on a
+          single <code>uvicorn</code> worker serves the pages and streams tokens
+          over Server-Sent Events. <b>SQLite</b> in WAL mode stores conversations
+          and every recorded run. The front-end is hand-written CSS and ES
+          modules with <b>no build step and no third-party JavaScript</b> — the
+          markdown renderer included.
+        </p>
+        <p>
+          Generation happens on a worker thread and tokens cross back to the
+          event loop through a queue, so health checks, cancellation and other
+          visitors' queue positions all keep responding while the model is busy.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="queue">
+      <h2>One request at a time — on purpose</h2>
+      <div class="panel explain">
+        <p>
+          With two cores, two generations running side by side finish
+          <em>later</em> than the same two run back to back: they fight over the
+          same memory bandwidth and the same threads. So this server takes one at
+          a time and shows you your place in the line. Honest queueing beats fake
+          concurrency.
+        </p>
+        <p>
+          The lock is released by the generation thread itself, in its own
+          <code>finally</code>. Releasing it from the request handler would let a
+          disconnecting client hand the slot to the next visitor while llama.cpp
+          was still mid-token.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="template">
+      <h2>Getting the prompt right matters more than the sampler</h2>
+      <div class="panel explain">
+        <p>
+          An instruct model fed raw text behaves like a base model: it rambles,
+          it repeats, it never stops cleanly. The usual reaction is to clamp the
+          sampler down to near-greedy and bolt on a loop that detects repeated
+          sentences — which makes the repetition worse, because greedy decoding
+          is exactly what produces loops.
+        </p>
+        <p>
+          The fix is the chat template. Every turn goes through the
+          <code>&lt;|im_start|&gt;</code> / <code>&lt;|im_end|&gt;</code> format
+          the model was fine-tuned on, so it stops on its own token, and sampling
+          can sit at a normal <code>temperature 0.7</code> with a light
+          <code>repeat_penalty</code>. No dedup hack required.
+        </p>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Memory</h2>
+      {% set total = budget | sum(attribute='mb') %}
+      <div class="panel">
+        <div class="stack" role="img"
+             aria-label="{% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
+          {% for b in budget %}
+          <span style="width:{{ (100 * b.mb / total) | round(2) }}%;background:var(--c{{ loop.index }})"
+                title="{{ b.name }} — {{ b.mb }} MB"></span>
+          {% endfor %}
+        </div>
+        <div class="legend">
+          {% for b in budget %}
+          <span class="item">
+            <span class="sw" style="background:var(--c{{ loop.index }})"></span>
+            <span>{{ b.name }} <b class="num">{{ b.mb }} MB</b></span>
+          </span>
+          {% endfor %}
+        </div>
+        <p class="explain" style="margin-top:14px">
+          About <b class="num">{{ (total / 1024) | round(2) }} GB</b> resident, leaving
+          room for nginx, the OS and a little headroom.
+          <a href="/bench">See the measured numbers →</a>
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="limits">
+      <h2>What it cannot do</h2>
+      <div class="panel explain">
+        <p>
+          It is a <b>1.5-billion-parameter</b> model quantised to four bits. It
+          will get arithmetic wrong, invent citations, lose the thread on long
+          reasoning chains, and know nothing about anything recent. It is good at
+          short explanations, quick drafts, summarising what you paste in, and
+          simple code — and it answers in a couple of seconds without sending a
+          byte off this machine.
+        </p>
+        <p>
+          The context window is <b class="num">{{ info.n_ctx }}</b> tokens. Older
+          turns are trimmed automatically when a conversation outgrows it; the
+          system prompt is always kept.
+        </p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
+
+{% block hud %}
+<aside class="hud" aria-label="Server">
+  <h2>Server</h2>
+  <div class="hud-card">
+    <div class="boot-line"><span>model</span><b>{{ info.model }}</b></div>
+    <div class="boot-line"><span>params</span><b class="num">{{ info.params }}</b></div>
+    <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
+    <div class="boot-line"><span>context</span><b class="num">{{ info.n_ctx }}</b></div>
+    <div class="boot-line"><span>threads</span><b class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</b></div>
+    <div class="boot-line"><span>load time</span><b class="num">{{ info.load_ms or '—' }} ms</b></div>
+    <div class="boot-line"><span>memory</span><b class="num" id="b-rss">—</b></div>
+    <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
+  </div>
+  <a class="btn" href="/" style="justify-content:space-between">
+    Back to chat
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H6M12 5l-7 7 7 7"/></svg>
+  </a>
+</aside>
+{% endblock %}

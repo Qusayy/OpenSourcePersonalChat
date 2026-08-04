@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Aurora — {{ info.model }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/chat.css">{% endblock %}
+
+{% block rail %}
+<button class="btn btn-primary" id="new-chat" style="width:100%">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  New conversation
+</button>
+
+<div class="rail-scroll">
+  <div class="rail-label">History</div>
+  <div id="convo-list">
+    {% for c in conversations %}
+    <button class="convo" data-id="{{ c.id }}">
+      <span class="t">{{ c.title }}</span>
+      <span class="m">{{ c.n }} messages</span>
+      <span class="x" role="button" tabindex="0" aria-label="Delete conversation" data-del="{{ c.id }}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </span>
+    </button>
+    {% else %}
+    <p class="muted" style="padding:6px 10px;font-size:var(--t-sm)">Nothing yet.</p>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+
+{% block main %}
+<div class="stream-wrap" id="stream-wrap">
+  <section class="hero" id="hero">
+    <h1>A small model,<br>hosted honestly.</h1>
+    <p>
+      {{ info.model }} runs entirely on this server — no API, no upstream provider.
+      Every answer shows what it actually cost to produce.
+    </p>
+    <div class="spec-row">
+      <span class="pill mono">{{ info.params }} params</span>
+      <span class="pill mono">{{ info.quant }}</span>
+      <span class="pill mono">{{ info.n_ctx }} ctx</span>
+      <span class="pill mono">{{ info.hardware }}</span>
+      <span class="pill mono">{{ info.n_threads }} threads</span>
+    </div>
+    <div class="suggestions">
+      <button class="suggest" data-q="Explain quantization like I have five minutes and some technical background.">
+        <b>Explain quantization</b><span>What 4-bit actually trades away</span>
+      </button>
+      <button class="suggest" data-q="Write a Python function that streams a large file over HTTP in chunks, with retries.">
+        <b>Write a Python function</b><span>Streaming download with retries</span>
+      </button>
+      <button class="suggest" data-q="Give me 10 unusual project ideas for a 4GB VPS that has no GPU.">
+        <b>Ideas for a tiny server</b><span>10 things a 4 GB box can do</span>
+      </button>
+      <button class="suggest" data-q="Why is CPU text generation limited by memory bandwidth rather than clock speed?">
+        <b>Why is it this fast?</b><span>Memory bandwidth, not clock speed</span>
+      </button>
+    </div>
+  </section>
+
+  <div class="thread" id="thread" aria-live="polite" aria-relevant="additions"></div>
+</div>
+
+<div class="composer-wrap">
+  <form class="composer" id="composer">
+    <div class="persona-row" id="persona-row" role="group" aria-label="Persona">
+      {% for p in personas %}
+      <button type="button" class="persona" data-persona="{{ p.id }}"
+              aria-pressed="{{ 'true' if p.id == default_persona else 'false' }}"
+              title="{{ p.blurb }}">
+        <span aria-hidden="true">{{ p.glyph }}</span>{{ p.name }}
+      </button>
+      {% endfor %}
+    </div>
+    <div class="input-row">
+      <textarea id="input" rows="1" placeholder="Ask {{ info.model }} something…"
+                autocomplete="off" spellcheck="true"></textarea>
+      <button class="send" id="send" type="submit" data-mode="send" aria-label="Send message">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path class="glyph" id="send-glyph" d="M5 12h13M12 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+    <div class="composer-foot">
+      <span><span class="kbd">Enter</span> send · <span class="kbd">Shift ↵</span> newline</span>
+      <span class="spacer"></span>
+      <span id="ctx-hint" class="mono"></span>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block hud %}
+<aside class="hud" aria-label="Live metrics">
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <linearGradient id="ringgrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient>
+      <linearGradient id="sparkgrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient>
+      <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#22d3ee" stop-opacity=".28"/>
+        <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <h2>Throughput</h2>
+  <div class="hud-card">
+    <div class="big-stat">
+      <span class="v num" id="tps-value" data-empty="true">—</span>
+      <span class="u">tokens / sec</span>
+    </div>
+    <svg class="spark" id="spark" viewBox="0 0 120 38" preserveAspectRatio="none" aria-hidden="true">
+      <path id="spark-fill" fill="url(#sparkfill)" d=""></path>
+      <path id="spark-line" fill="none" stroke="url(#sparkgrad)" stroke-width="1.6"
+            stroke-linejoin="round" stroke-linecap="round" d=""></path>
+    </svg>
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="stat"><div class="k">TTFT</div><div class="v" id="ttft-value">—</div></div>
+      <div class="stat"><div class="k">Tokens out</div><div class="v" id="out-value">—</div></div>
+    </div>
+  </div>
+
+  <h2>Context</h2>
+  <div class="hud-card">
+    <div class="ring-row">
+      <svg class="ring" viewBox="0 0 54 54" aria-hidden="true">
+        <circle class="track" cx="27" cy="27" r="22"></circle>
+        <circle class="val" id="ctx-ring" cx="27" cy="27" r="22"
+                stroke-dasharray="138.2" stroke-dashoffset="138.2"></circle>
+      </svg>
+      <div>
+        <div class="v num" id="ctx-value" style="font-size:var(--t-lg)">0</div>
+        <div class="k" style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)">
+          of {{ info.n_ctx }} tokens
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Server</h2>
+  <div class="hud-card" id="boot-panel">
+    <div class="boot-line"><span>model</span><b id="b-model">{{ info.model }}</b></div>
+    <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
+    <div class="boot-line"><span>threads</span><b>{{ info.n_threads }} / {{ info.cpu_count or '?' }}</b></div>
+    <div class="boot-line"><span>memory</span><b class="num" id="b-rss">—</b></div>
+    <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
+  </div>
+
+  <a class="btn" href="/bench" style="justify-content:space-between">
+    Run the benchmark
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h13M12 5l7 7-7 7"/></svg>
+  </a>
+</aside>
+{% endblock %}
+
+{% block scripts %}<script type="module" src="/static/js/chat.js"></script>{% endblock %}

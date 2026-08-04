@@ -1,0 +1,38 @@
+[Unit]
+Description=Aurora — local LLM web front-end
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurora
+Group=aurora
+WorkingDirectory=/srv/aurora
+Environment="PATH=/srv/aurora/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/srv/aurora/.env
+
+# One worker. The model is a single in-process object; a second worker would
+# load a second copy of the weights and put the box straight into swap.
+ExecStart=/srv/aurora/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1 --no-access-log --timeout-keep-alive 75
+
+# Required when AURORA_USE_MLOCK=true — without it llama.cpp cannot pin the
+# weights and silently falls back to pageable memory.
+LimitMEMLOCK=infinity
+
+# OOM guard: kill and restart rather than dragging the whole VPS down.
+MemoryMax=3G
+MemoryHigh=2600M
+
+Restart=always
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

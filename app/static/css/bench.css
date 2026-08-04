@@ -1,0 +1,352 @@
+/* Benchmark page.
+ *
+ * Chart palette validated against the dark chart surface (#11142a) for
+ * lightness band, chroma floor, CVD separation, normal-vision separation and
+ * 3:1 contrast. Every stacked segment is also direct-labelled, which is the
+ * required secondary encoding for the tritan pair.
+ */
+
+:root {
+  --c1: #6366f1; /* indigo  */
+  --c2: #0d9488; /* teal    */
+  --c3: #a855f7; /* violet  */
+  --c4: #e11d48; /* rose    */
+  --grid: rgba(255, 255, 255, 0.07);
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wrap {
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 34px 24px 90px;
+}
+
+.page-head {
+  margin-bottom: 26px;
+}
+.page-head h1 {
+  margin: 0 0 8px;
+  font-size: clamp(26px, 4vw, 36px);
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.page-head p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--ink-1);
+  font-size: var(--t-lg);
+}
+
+.section {
+  margin-top: 34px;
+}
+.section > h2 {
+  margin: 0 0 4px;
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.section > .sub {
+  margin: 0 0 16px;
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+  max-width: 68ch;
+}
+
+.panel {
+  padding: 20px 22px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--glass-brd);
+  background: linear-gradient(180deg, rgba(17, 20, 42, 0.66), rgba(11, 13, 26, 0.6));
+  box-shadow: var(--sh-md);
+}
+
+/* ------------------------------------------------------------- run panel */
+
+.runbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.runbar .grow { flex: 1; min-width: 220px; }
+
+.progress {
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.progress i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--c1), var(--aur-cyan));
+  transition: width var(--dur-3) var(--ease-out);
+}
+.run-status {
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+  margin-top: 8px;
+  font-family: var(--font-mono);
+}
+
+/* ---------------------------------------------------------- stat tiles -- */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+.tile {
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
+}
+.tile .k {
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tile .v {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+.tile .u { font-size: var(--t-xs); color: var(--ink-2); margin-left: 4px; }
+.tile .n { font-size: var(--t-xs); color: var(--ink-3); }
+
+/* ------------------------------------------------------------ bar chart */
+
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.bar-row .lab {
+  font-size: var(--t-sm);
+  color: var(--ink-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar-row .lab small { display: block; color: var(--ink-3); font-size: var(--t-xs); }
+
+.track {
+  position: relative;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+.track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  /* 4px rounded data end, anchored square to the baseline */
+  border-radius: 0 4px 4px 0;
+  background: var(--c1);
+  width: 0;
+  transition: width 600ms var(--ease-out);
+}
+.track i.alt { background: var(--c3); }
+.bar-row .val {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-sm);
+  color: var(--ink-0);
+  white-space: nowrap;
+}
+.bar-row .val small { color: var(--ink-3); }
+
+/* Hardware names are longer than case names — give them room rather than
+   truncating the one column a reader needs to identify the row. */
+#chart-ref .bar-row {
+  grid-template-columns: 196px minmax(0, 1fr) auto;
+}
+
+/* range strip: where this machine sits against reference hardware */
+.strip {
+  position: relative;
+  height: 22px;
+}
+.strip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--grid);
+}
+.strip i {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 9px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+}
+.strip.self i { background: linear-gradient(90deg, var(--c1), var(--aur-cyan)); }
+.strip b {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  transform: translateY(-50%);
+  border-radius: 99px;
+  background: #fff;
+  /* 2px surface ring so the marker stays legible over the band */
+  box-shadow: 0 0 0 2px #11142a, 0 0 12px rgba(34, 211, 238, 0.8);
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+/* --------------------------------------------------------- stacked bar -- */
+
+.stack {
+  display: flex;
+  gap: 2px; /* 2px surface gap between segments */
+  height: 30px;
+  margin-bottom: 14px;
+}
+.stack span {
+  height: 100%;
+  border-radius: 3px;
+}
+.stack span:first-child { border-radius: 6px 3px 3px 6px; }
+.stack span:last-child { border-radius: 3px 6px 6px 3px; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.legend .item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--t-sm);
+  color: var(--ink-1);
+}
+.legend .sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  transform: translateY(1px);
+}
+.legend .num { color: var(--ink-0); }
+.legend .note { color: var(--ink-3); font-size: var(--t-xs); }
+
+/* ------------------------------------------------------------ line chart */
+
+.linechart {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 720 / 190; /* uniform scaling — non-uniform would stretch labels */
+  display: block;
+  overflow: visible;
+}
+.linechart .grid { stroke: var(--grid); stroke-width: 1; }
+.linechart .lbl {
+  fill: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.linechart .series { fill: none; stroke: var(--c1); stroke-width: 2; stroke-linejoin: round; }
+.linechart .area { fill: url(#histfill); }
+.linechart .pt { fill: var(--c1); stroke: #11142a; stroke-width: 2; }
+
+/* ---------------------------------------------------------------- table */
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+.tbl th,
+.tbl td {
+  padding: 9px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--glass-brd);
+}
+.tbl th:first-child,
+.tbl td:first-child { text-align: left; }
+.tbl thead th {
+  font-size: var(--t-xs);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+.tbl td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-1); }
+.tbl td:first-child { font-family: var(--font-ui); color: var(--ink-0); }
+.tbl tr.self td { color: var(--ink-0); background: rgba(99, 102, 241, 0.1); }
+.tbl-scroll { overflow-x: auto; }
+
+.explain {
+  color: var(--ink-1);
+  font-size: var(--t-md);
+}
+.explain p { margin: 0 0 0.9em; max-width: 70ch; }
+.explain p:last-child { margin-bottom: 0; }
+.explain b { color: var(--ink-0); font-weight: 600; }
+.explain code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.caveat {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.07);
+  color: #ffe6ad;
+  font-size: var(--t-sm);
+  margin-bottom: 16px;
+}
+
+.empty {
+  text-align: center;
+  padding: 26px 10px;
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+}
+
+@media (max-width: 640px) {
+  .wrap { padding: 22px 14px 70px; }
+  .bar-row { grid-template-columns: 96px minmax(0, 1fr) auto; }
+  .panel { padding: 16px; }
+}

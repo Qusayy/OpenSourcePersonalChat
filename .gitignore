@@ -1,0 +1,33 @@
+# virtualenvs
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# local config — never commit the real one
+.env
+
+# runtime data: conversations, benchmark history
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# model weights (~1 GB each) — see README for the download command
+models/*
+!models/.gitkeep
+
+# output
+bench.json
+*.log
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

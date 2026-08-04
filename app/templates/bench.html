@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Benchmark — {{ info.model }}{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/css/bench.css">{% endblock %}
+
+{% block rail %}
+<div class="rail-scroll">
+  <div class="rail-label">On this page</div>
+  <a class="convo" href="#measured"><span class="t">Measured on this box</span></a>
+  <a class="convo" href="#throughput"><span class="t">Throughput by prompt size</span></a>
+  <a class="convo" href="#latency"><span class="t">Time to first token</span></a>
+  <a class="convo" href="#context"><span class="t">Against other hardware</span></a>
+  <a class="convo" href="#memory"><span class="t">Memory budget</span></a>
+  <a class="convo" href="#history"><span class="t">History</span></a>
+  <a class="convo" href="#why"><span class="t">Why it is this fast</span></a>
+</div>
+{% endblock %}
+
+{% block main %}
+<div class="page">
+  <div class="wrap">
+
+    <header class="page-head">
+      <h1>What this server actually does</h1>
+      <p>
+        The suite below runs {{ info.model }} through the same code path the chat
+        page uses — same lock, same sampling, same context window — and reports
+        what came back. Nothing here is quoted from a spec sheet.
+      </p>
+    </header>
+
+    <section class="panel runbar" id="measured">
+      <div>
+        <button class="btn btn-primary" id="run-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Run the benchmark
+        </button>
+      </div>
+      <div class="grow">
+        <div class="progress"><i id="progress"></i></div>
+        <div class="run-status" id="run-status">
+          {% if latest %}Last run stored on this server.{% else %}No run recorded yet — takes about two minutes.{% endif %}
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Headline</h2>
+      <p class="sub">Median across every case in the most recent suite.</p>
+      <div class="tiles" id="tiles">
+        <div class="tile">
+          <div class="k">Generation</div>
+          <div class="v num" id="t-gen">—</div>
+          <div class="n">tokens per second</div>
+        </div>
+        <div class="tile">
+          <div class="k">Prefill</div>
+          <div class="v num" id="t-prefill">—</div>
+          <div class="n">prompt tokens per second</div>
+        </div>
+        <div class="tile">
+          <div class="k">First token</div>
+          <div class="v num" id="t-ttft">—</div>
+          <div class="n">short prompt, p50</div>
+        </div>
+        <div class="tile">
+          <div class="k">Peak memory</div>
+          <div class="v num" id="t-rss">—</div>
+          <div class="n">resident, whole process</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="throughput">
+      <h2>Throughput by prompt size</h2>
+      <p class="sub">
+        Generation speed barely moves as the prompt grows — the weights read per
+        token are the same either way. Prompt length shows up in the wait before
+        the first token, not in the speed after it.
+      </p>
+      <div class="panel">
+        <div class="chart" id="chart-gen"><div class="empty">Run the suite to fill this in.</div></div>
+      </div>
+    </section>
+
+    <section class="section" id="latency">
+      <h2>Time to first token</h2>
+      <p class="sub">
+        Prefill is compute-bound and batches, so a 1024-token prompt costs far
+        less than 32× a 32-token one. The lighter bar is the p95.
+      </p>
+      <div class="panel">
+        <div class="chart" id="chart-ttft"><div class="empty">Run the suite to fill this in.</div></div>
+      </div>
+    </section>
+
+    <section class="section" id="context">
+      <h2>Against other hardware</h2>
+      <p class="sub">Same model, same quantisation, different machines.</p>
+      <div class="caveat">
+        <span aria-hidden="true">⚠</span>
+        <span>
+          Every row except this server is an order-of-magnitude range collected
+          from published llama.cpp figures, not a measurement taken here. Real
+          numbers swing widely with memory bandwidth, AVX support and — on shared
+          cloud — whoever else is on the host.
+        </span>
+      </div>
+      <div class="panel">
+        <div class="chart" id="chart-ref"></div>
+        <div class="axis"><span>0</span><span>tokens / sec</span><span id="ref-max">70</span></div>
+      </div>
+    </section>
+
+    <section class="section" id="memory">
+      <h2>Memory budget</h2>
+      <p class="sub">Why a 1.5B model at 4-bit fits on this box and a 7B one does not.</p>
+      {% set total = budget | sum(attribute='mb') %}
+      <div class="panel">
+        <div class="stack" role="img"
+             aria-label="Memory use: {% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
+          {% for b in budget %}
+          <span style="width:{{ (100 * b.mb / total) | round(2) }}%;background:var(--c{{ loop.index }})"
+                title="{{ b.name }} — {{ b.mb }} MB"></span>
+          {% endfor %}
+        </div>
+        <div class="legend">
+          {% for b in budget %}
+          <span class="item">
+            <span class="sw" style="background:var(--c{{ loop.index }})"></span>
+            <span>{{ b.name }} <b class="num">{{ b.mb }} MB</b>
+              <span class="note">· {{ b.note }}</span></span>
+          </span>
+          {% endfor %}
+        </div>
+        <p class="explain" style="margin-top:16px">
+          <b class="num">{{ (total / 1024) | round(2) }} GB</b> peak of the 4 GB on this
+          machine. A 7B model at the same quantisation is roughly 4.4 GB of weights
+          alone — it would not load, and if it did, every token would come off disk.
+        </p>
+      </div>
+    </section>
+
+    <section class="section" id="history">
+      <h2>History</h2>
+      <p class="sub">Every benchmark run this server has recorded, oldest first.</p>
+      <div class="panel">
+        <svg class="linechart" id="history-chart" viewBox="0 0 720 190"
+             role="img" aria-label="Generation speed across past benchmark runs">
+          <defs>
+            <linearGradient id="histfill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>
+              <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <div class="empty" id="history-empty">No history yet.</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>The numbers</h2>
+      <p class="sub">The same data as the charts above, for reading and copying.</p>
+      <div class="panel tbl-scroll">
+        <table class="tbl" id="case-table">
+          <thead>
+            <tr>
+              <th>Case</th><th>Prompt tok</th><th>Gen tok</th><th>Runs</th>
+              <th>Prefill tok/s</th><th>Gen tok/s</th><th>TTFT p50</th><th>TTFT p95</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="8" style="text-align:center;color:var(--ink-3)">No run recorded yet.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="why">
+      <h2>Why it is this fast</h2>
+      <div class="panel explain">
+        <p>
+          Generating a token means reading <b>every weight in the model once</b>.
+          At <code>Q4_K_M</code> that is about a gigabyte per token, so throughput
+          tracks memory bandwidth far more closely than clock speed:
+          <b>tokens per second ≈ effective bandwidth ÷ model size</b>. Two shared
+          vCPUs reach single-digit gigabytes per second, which lands this model in
+          the region the charts above show.
+        </p>
+        <p>
+          That formula is also the whole argument for 4-bit. Dropping from 16-bit
+          to 4-bit weights cuts the bytes moved per token by roughly four, and the
+          speed rises by roughly the same factor — which is what makes a 1.5B model
+          usable here and a 7B model hopeless.
+        </p>
+        <p>
+          Prefill behaves differently. Reading the prompt is a batched matrix
+          multiply, so it is <b>compute-bound</b> and processes many tokens per
+          pass. That is why a long prompt costs seconds rather than minutes, and
+          why follow-up turns are quicker still: llama.cpp keeps the KV cache from
+          the previous turn and only prefills what is new.
+        </p>
+        <p>
+          The last piece is the queue. With two cores, two generations running
+          together finish later than the same two run back to back, so this server
+          serialises them and tells you your position instead of pretending to be
+          parallel.
+        </p>
+      </div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block hud %}
+<aside class="hud" aria-label="Environment">
+  <h2>Environment</h2>
+  <div class="hud-card" id="boot-panel">
+    <div class="boot-line"><span>model</span><b>{{ info.model }}</b></div>
+    <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
+    <div class="boot-line"><span>context</span><b class="num">{{ info.n_ctx }}</b></div>
+    <div class="boot-line"><span>threads</span><b class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</b></div>
+    <div class="boot-line"><span>n_batch</span><b class="num">{{ info.n_batch }}</b></div>
+    <div class="boot-line"><span>memory</span><b class="num" id="b-rss">—</b></div>
+    <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
+  </div>
+
+  <h2>Suite</h2>
+  <div class="hud-card">
+    {% for c in cases %}
+    <div class="boot-line">
+      <span>{{ c.label|lower }}</span>
+      <b class="num">~{{ c.target }} tok × {{ c.reps }}</b>
+    </div>
+    {% endfor %}
+    <div class="boot-line"><span>generated</span><b class="num">128 tok each</b></div>
+    <div class="boot-line"><span>warm-up</span><b>discarded</b></div>
+  </div>
+
+  <a class="btn" href="/" style="justify-content:space-between">
+    Back to chat
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H6M12 5l-7 7 7 7"/></svg>
+  </a>
+</aside>
+{% endblock %}
+
+{% block scripts %}
+<script id="reference-data" type="application/json">{{ reference | tojson }}</script>
+<script type="module" src="/static/js/bench.js"></script>
+{% endblock %}

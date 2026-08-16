@@ -1,16 +1,13 @@
-/* Benchmark and about pages.
+/* Benchmark page.
  *
- * Chart palette validated against the dark chart surface for lightness band,
- * chroma floor, CVD separation, normal-vision separation and 3:1 contrast.
- * Every stacked segment is also direct-labelled, which is the required
- * secondary encoding for the tritan pair. --c1..--c4 and --grid live in
- * tokens.css so every surface can reach them.
- *
- * Two names moved when the plate world arrived: `.legend` now belongs to the
- * plate's engraved label style and `.track` to the ground-track layer, so the
- * chart key is `.chart-key` and the bar's groove is `.bar-track`. Two
- * unrelated things answering to one selector is how a design system starts
- * lying about itself. */
+ * Chart palette validated against the dark chart surface (#11142a) for
+ * lightness band, chroma floor, CVD separation, normal-vision separation and
+ * 3:1 contrast. Every stacked segment is also direct-labelled, which is the
+ * required secondary encoding for the tritan pair.
+ */
+
+/* --c1..--c4 and --grid now live in tokens.css so every surface can reach
+   them, not just the two pages that load this file. */
 
 .page {
   flex: 1;
@@ -21,22 +18,18 @@
 .wrap {
   max-width: 940px;
   margin: 0 auto;
-  padding: 32px 24px 90px;
+  padding: 34px 24px 90px;
 }
 
 .page-head {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--grat-edge);
+  margin-bottom: 26px;
 }
 .page-head h1 {
   margin: 0 0 8px;
-  font-family: var(--font-mono);
-  font-size: clamp(24px, 4vw, 34px);
-  letter-spacing: -0.035em;
-  font-weight: 400;
-  line-height: 1.08;
-  color: var(--ink-0);
+  font-size: clamp(26px, 4vw, 36px);
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  line-height: 1.1;
 }
 .page-head p {
   margin: 0;
@@ -46,26 +39,27 @@
 }
 
 .section {
-  margin-top: 32px;
+  margin-top: 34px;
 }
 .section > h2 {
   margin: 0 0 4px;
   font-size: var(--t-xl);
   font-weight: 600;
   letter-spacing: -0.015em;
-  color: var(--ink-0);
 }
 .section > .sub {
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   color: var(--ink-2);
   font-size: var(--t-sm);
   max-width: 68ch;
 }
 
 .panel {
-  padding: 18px 20px;
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-1);
+  padding: 20px 22px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--glass-brd);
+  background: linear-gradient(180deg, rgba(17, 20, 42, 0.93), rgba(11, 13, 26, 0.92));
+  box-shadow: var(--sh-md);
 }
 
 /* ------------------------------------------------------------- run panel */
@@ -80,20 +74,21 @@
 
 .progress {
   height: 6px;
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-0);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
 .progress i {
   display: block;
   height: 100%;
   width: 100%;
-  background: var(--signal);
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--c1), var(--aur-cyan));
   /* scaleX, not width: this bar advances on every benchmark rep, and animating
      width relayouts the row each frame. */
   transform: scaleX(0);
   transform-origin: left center;
-  transition: transform var(--dur-3) var(--ease-draw);
+  transition: transform var(--dur-3) var(--ease-out);
 }
 .run-status {
   font-size: var(--t-sm);
@@ -107,18 +102,18 @@
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-1);
+  gap: 12px;
 }
 .tile {
-  padding: 14px 16px;
-  border-left: 1px solid var(--grat-edge);
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd);
+  /* the caption under each number is --ink-3 */
+  background: var(--surface);
 }
-.tile:first-child { border-left: 0; }
 .tile .k {
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.14em;
+  font-size: var(--t-xs);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
@@ -126,16 +121,11 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 30px;
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1.2;
-  letter-spacing: -0.03em;
-  color: var(--ink-0);
+  letter-spacing: -0.02em;
 }
-.tile .v[data-empty="true"] {
-  font-size: var(--t-xl);
-  color: var(--ink-3);
-}
-.tile .u { font-family: var(--font-mono); font-size: var(--t-xs); color: var(--ink-3); margin-left: 4px; }
+.tile .u { font-size: var(--t-xs); color: var(--ink-2); margin-left: 4px; }
 .tile .n { font-size: var(--t-xs); color: var(--ink-3); }
 
 /* ------------------------------------------------------------ bar chart */
@@ -143,7 +133,7 @@
 .chart {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .bar-row {
@@ -161,23 +151,24 @@
 }
 .bar-row .lab small { display: block; color: var(--ink-3); font-size: var(--t-xs); }
 
-/* The groove a bar is measured in — square, so the data end is a real edge. */
-.bar-track {
+.track {
   position: relative;
-  height: 20px;
-  border: 1px solid var(--grat-major);
-  background: var(--plate-0);
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
   overflow: hidden;
 }
-.bar-track i {
+.track i {
   position: absolute;
   inset: 0;
+  /* 4px rounded data end, anchored square to the baseline */
+  border-radius: 0 4px 4px 0;
   background: var(--c1);
   transform: scaleX(0);
   transform-origin: left center;
-  transition: transform 600ms var(--ease-draw);
+  transition: transform 600ms var(--ease-out);
 }
-.bar-track i.alt { background: var(--c3); }
+.track i.alt { background: var(--c3); }
 .bar-row .val {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -196,7 +187,7 @@
 /* range strip: where this machine sits against reference hardware */
 .strip {
   position: relative;
-  height: 20px;
+  height: 22px;
 }
 .strip::before {
   content: "";
@@ -211,21 +202,22 @@
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  height: 8px;
-  background: var(--grat-edge);
+  height: 9px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
 }
-.strip.self i { background: var(--c1); }
-/* A surveyed mark: a square with a plate-coloured ring so it stays legible
-   over the band. No glow — the ring does the separating. */
+.strip.self i { background: linear-gradient(90deg, var(--c1), var(--aur-cyan)); }
 .strip b {
   position: absolute;
   top: 50%;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
   transform: translateY(-50%);
-  background: var(--ink-0);
-  box-shadow: 0 0 0 2px var(--plate-1);
+  border-radius: 99px;
+  background: #fff;
+  /* 2px surface ring so the marker stays legible over the band */
+  box-shadow: 0 0 0 2px #11142a, 0 0 12px rgba(34, 211, 238, 0.8);
 }
 
 .axis {
@@ -233,8 +225,7 @@
   justify-content: space-between;
   margin-top: 2px;
   font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.08em;
+  font-size: 10px;
   color: var(--ink-3);
 }
 
@@ -242,35 +233,38 @@
 
 .stack {
   display: flex;
-  gap: 2px; /* 2px plate gap between segments */
-  height: 28px;
+  gap: 2px; /* 2px surface gap between segments */
+  height: 30px;
   margin-bottom: 14px;
 }
 .stack span {
   height: 100%;
+  border-radius: 3px;
 }
+.stack span:first-child { border-radius: 6px 3px 3px 6px; }
+.stack span:last-child { border-radius: 3px 6px 6px 3px; }
 
-/* the chart key (was `.legend`, which the plate world now owns) */
-.chart-key {
+.legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 18px;
 }
-.chart-key .item {
+.legend .item {
   display: flex;
   align-items: baseline;
   gap: 8px;
   font-size: var(--t-sm);
   color: var(--ink-1);
 }
-.chart-key .sw {
+.legend .sw {
   width: 10px;
   height: 10px;
+  border-radius: 3px;
   flex: 0 0 auto;
   transform: translateY(1px);
 }
-.chart-key .num { color: var(--ink-0); }
-.chart-key .note { color: var(--ink-3); font-size: var(--t-xs); }
+.legend .num { color: var(--ink-0); }
+.legend .note { color: var(--ink-3); font-size: var(--t-xs); }
 
 /* ------------------------------------------------------------ line chart */
 
@@ -288,8 +282,8 @@
   font-size: 10px;
 }
 .linechart .series { fill: none; stroke: var(--c1); stroke-width: 2; stroke-linejoin: round; }
-.linechart .area { fill: var(--signal-wash); }
-.linechart .pt { fill: var(--c1); stroke: var(--plate-1); stroke-width: 2; }
+.linechart .area { fill: url(#histfill); }
+.linechart .pt { fill: var(--c1); stroke: #11142a; stroke-width: 2; }
 
 /* ---------------------------------------------------------------- table */
 
@@ -300,27 +294,28 @@
 }
 .tbl th,
 .tbl td {
-  padding: 8px 12px;
+  padding: 9px 12px;
   text-align: right;
-  border-bottom: 1px solid var(--grat-major);
+  border-bottom: 1px solid var(--glass-brd);
 }
 .tbl th:first-child,
 .tbl td:first-child { text-align: left; }
 .tbl thead th {
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.14em;
+  font-size: var(--t-xs);
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--ink-3);
-  font-weight: 400;
-  border-bottom-color: var(--grat-edge);
+  font-weight: 500;
 }
 .tbl td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-1); }
 .tbl td:first-child { font-family: var(--font-ui); color: var(--ink-0); }
-.tbl tr.self td { color: var(--ink-0); background: var(--signal-wash); }
+.tbl tr.self td { color: var(--ink-0); background: rgba(99, 102, 241, 0.1); }
 .tbl-scroll { overflow-x: auto; }
 .tbl-empty { text-align: center; color: var(--ink-3); }
 
+/* An eight-column table does not survive a phone by scrolling sideways. Below
+   this width each row becomes a small card and every cell carries its own
+   heading, so the data is read rather than dragged. */
 /* Three columns on one line leaves the bar with ~55px on a phone — the value
    text wins and the chart stops being a chart. Stack instead: label and value
    share a line, the bar gets the full width beneath them. */
@@ -338,7 +333,7 @@
     grid-area: lab;
     white-space: normal;
   }
-  .bar-row .bar-track,
+  .bar-row .track,
   .bar-row .strip {
     grid-area: bar;
   }
@@ -348,9 +343,6 @@
   }
 }
 
-/* An eight-column table does not survive a phone by scrolling sideways. Below
-   this width each row becomes a small plate and every cell carries its own
-   heading, so the data is read rather than dragged. */
 @media (max-width: 640px) {
   .tbl thead {
     position: absolute;
@@ -370,8 +362,9 @@
   .tbl tr {
     margin-bottom: 10px;
     padding: 10px 12px;
-    border: 1px solid var(--grat-edge);
-    background: var(--plate-2);
+    border: 1px solid var(--glass-brd);
+    border-radius: var(--r-sm);
+    background: var(--surface-inset);
   }
   .tbl td {
     display: flex;
@@ -390,7 +383,7 @@
   .tbl td:first-child {
     margin-bottom: 6px;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--grat-major);
+    border-bottom: 1px solid var(--glass-brd);
     font-size: var(--t-md);
   }
   .tbl td:first-child::before,
@@ -414,18 +407,18 @@
   font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 1px 5px;
-  background: var(--plate-3);
-  border: 1px solid var(--grat-major);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .caveat {
   display: flex;
   gap: 10px;
-  padding: 11px 13px;
-  border: 1px solid var(--grat-edge);
-  border-left: 2px solid var(--caution);
-  background: rgba(242, 185, 80, 0.07);
-  color: #ffe9c2;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.07);
+  color: #ffe6ad;
   font-size: var(--t-sm);
   margin-bottom: 16px;
 }
@@ -438,11 +431,7 @@
 }
 
 @media (max-width: 640px) {
-  .wrap { padding: 20px 14px 70px; }
+  .wrap { padding: 22px 14px 70px; }
   .bar-row { grid-template-columns: 96px minmax(0, 1fr) auto; }
-  .panel { padding: 15px; }
-  .tiles { grid-template-columns: 1fr 1fr; }
-  .tile { border-top: 1px solid var(--grat-edge); }
-  .tile:nth-child(odd) { border-left: 0; }
-  .tile:nth-child(-n + 2) { border-top: 0; }
+  .panel { padding: 16px; }
 }

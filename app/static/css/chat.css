@@ -1,9 +1,4 @@
-/* The chat column: the brief, the thread, and the contact band.
- *
- * The centre column is transparent so the plate reads through it. Every block
- * that carries text sits on an opaque cut plate instead, so no prose is ever
- * rendered over the graticule or the track — the field is visible in the
- * gutters and between turns, never underneath a sentence. */
+/* Chat column, message cards, composer, and the metrics HUD. */
 
 .stream-wrap {
   flex: 1;
@@ -17,86 +12,60 @@
   width: 100%;
   max-width: var(--col-max);
   margin: 0 auto;
-  padding: 24px 22px 8px;
+  padding: 26px 22px 8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
-/* ------------------------------------------------------- the first view -- */
+/* ------------------------------------------------------------ empty state */
 
-/* Left-aligned, because an instrument annotates from the edge of the plate,
-   and because a centred column is the exact thing this redesign replaced. */
-.brief {
+.hero {
   max-width: var(--col-max);
   margin: 0 auto;
-  padding: min(7vh, 64px) 22px 30px;
-  transition: opacity 160ms var(--ease-mech), transform 200ms var(--ease-mech);
+  padding: min(9vh, 84px) 22px 30px;
+  text-align: center;
+  transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-out);
 }
-.brief[data-leaving="true"] {
+/* The empty state gives way to the first exchange. Exits are quicker than
+   entrances — the answer is what matters now. */
+.hero[data-leaving="true"] {
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-10px) scale(0.99);
   pointer-events: none;
 }
 
-.brief-kicker {
+.hero h1 {
   margin: 0 0 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--grat-edge);
-}
-
-.brief-name {
-  margin: 0 0 12px;
-  font-family: var(--font-mono);
-  font-size: clamp(26px, 5.4vw, 46px);
-  line-height: 1.02;
-  letter-spacing: -0.035em;
-  font-weight: 400;
+  font-size: clamp(30px, 5.2vw, var(--t-3xl));
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  /* Solid, and the weight carries it. A gradient across a headline is
+     decoration standing in for hierarchy. */
+  font-weight: 650;
   color: var(--ink-0);
-  overflow-wrap: anywhere;
 }
 
-.brief-line {
-  margin: 0 0 22px;
-  max-width: 52ch;
+.hero p {
+  margin: 0 auto 22px;
+  max-width: 46ch;
   color: var(--ink-1);
   font-size: var(--t-lg);
-  line-height: 1.5;
 }
 
-/* The spec block is a designed object, not a footnote: an engraved slab of
-   tabular figures, ruled like a plate legend. */
-.spec-slab {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  margin: 0 0 26px;
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-1);
+.spec-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 26px;
 }
-.spec-slab > div {
-  padding: 9px 12px;
-  border-left: 1px solid var(--grat-edge);
-}
-.spec-slab > div:first-child {
-  border-left: 0;
-}
-.spec-slab dt {
-  margin: 0 0 2px;
-}
-/* Wraps rather than truncates: the hardware label is the one spec a stranger
-   is actually weighing the numbers against, and "2 vCPU · 4 GB …" tells them
-   nothing. */
-.spec-slab dd {
-  margin: 0;
+
+.hero-lead {
+  margin: 0 0 14px;
   font-size: var(--t-sm);
-  color: var(--ink-0);
-  overflow-wrap: anywhere;
-}
-
-.brief-ops {
-  margin: 0 0 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--grat-edge);
+  /* Directly on the aurora, so it cannot use --ink-3. */
+  color: var(--ink-2);
 }
 
 /* the armed-skill chip above the composer */
@@ -105,88 +74,88 @@
   align-items: center;
   gap: 8px;
   margin: 10px 12px 0;
-  padding: 4px 4px 4px 10px;
+  padding: 5px 6px 5px 10px;
+  border-radius: 99px;
   align-self: flex-start;
   width: fit-content;
-  font-family: var(--font-mono);
   font-size: var(--t-xs);
-  color: var(--ink-0);
-  border: 1px solid var(--signal-deep);
-  background: var(--signal-wash);
+  color: #ede9fe;
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22));
 }
 .skill-active[hidden] { display: none; }
 .skill-active .g { font-size: 12px; }
 .skill-active .x {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border: 0;
-  background: transparent;
-  color: var(--ink-2);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
   font-size: 10px;
   cursor: pointer;
 }
-.skill-active .x:hover { color: var(--ink-0); background: var(--plate-3); }
+.skill-active .x:hover { background: rgba(255, 255, 255, 0.24); }
 
-/* -------------------------------------------------------------- traffic -- */
+/* ---------------------------------------------------------------- messages */
 
 .msg {
   display: flex;
-  gap: 10px;
-  animation: rise var(--dur-3) var(--ease-draw) both;
+  gap: 12px;
+  animation: rise var(--dur-3) var(--ease-out) both;
 }
 
 .msg.user {
   justify-content: flex-end;
 }
 
-/* The uplink: what was sent. A pressed plate, no accent — the accent ink is
-   reserved for the pass itself, and spending it here would make every message
-   look live. */
 .msg.user .body {
   max-width: 78%;
-  padding: 9px 14px;
-  border: 1px solid var(--grat-edge);
-  border-right: 2px solid var(--ink-3);
-  background: var(--plate-3);
+  padding: 11px 16px;
+  border-radius: var(--r-lg) var(--r-lg) 5px var(--r-lg);
+  border: 1px solid var(--glass-brd);
+  background: rgba(99, 102, 241, 0.16);
   color: var(--ink-0);
   /* A pasted URL is one unbroken word; without this it pushes the column
      wider than the viewport instead of wrapping. */
   overflow-wrap: anywhere;
 }
+
+/* dir="auto" flips the bubble's own corner for right-to-left text. */
 .msg.user .body[dir="auto"]:dir(rtl) {
-  border-right: 1px solid var(--grat-edge);
-  border-left: 2px solid var(--ink-3);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-lg) 5px;
 }
 
 .avatar {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  margin-top: 2px;
+  width: 28px;
+  height: 28px;
+  margin-top: 3px;
+  border-radius: 9px;
   display: grid;
   place-items: center;
-  font-size: 12px;
-  color: var(--signal);
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-2);
+  font-size: 13px;
+  color: #fff;
+  background: linear-gradient(140deg, var(--aur-indigo), var(--aur-violet) 60%, var(--aur-cyan));
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
 }
 
 .msg.bot .body {
   flex: 1;
   min-width: 0;
-  padding: 13px 16px 9px;
-  border: 1px solid var(--grat-edge);
-  /* Opaque: the plate must never show through a sentence. */
-  background: var(--plate-1);
-  border-left: 2px solid var(--signal-deep);
-}
-/* A pass in progress is a different material from a pass that has closed. The
-   caret only exists while tokens are arriving, so it is the honest signal for
-   this — no extra state to keep in sync from JS. */
-.msg.bot:has(.caret) .body {
-  border-left-color: var(--signal);
+  padding: 14px 18px 10px;
+  border-radius: 5px var(--r-lg) var(--r-lg) var(--r-lg);
+  /* Translucent fill, not backdrop-filter: hundreds of blurred cards is the
+     fastest way to make a scrolling thread stutter on a weak client. Alpha is
+     high enough that the answer's ground is bounded whatever the shader does. */
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, rgba(23, 27, 52, 0.93), rgba(11, 13, 26, 0.92)) padding-box,
+    linear-gradient(140deg, rgba(99, 102, 241, 0.5), rgba(34, 211, 238, 0.22) 50%,
+      rgba(168, 85, 247, 0.4)) border-box;
+  box-shadow: var(--sh-sm);
 }
 
 .prose { overflow-wrap: anywhere; }
@@ -199,72 +168,63 @@
 .prose p { margin: 0 0 0.85em; }
 .prose h1, .prose h2, .prose h3 {
   margin: 1.1em 0 0.5em;
-  line-height: 1.25;
+  line-height: 1.28;
   letter-spacing: -0.01em;
-  font-weight: 600;
-  color: var(--ink-0);
 }
 .prose h1 { font-size: var(--t-xl); }
 .prose h2 { font-size: var(--t-lg); }
-.prose h3 { font-size: var(--t-md); }
+.prose h3 { font-size: var(--t-md); color: var(--ink-1); }
 .prose ul, .prose ol { margin: 0 0 0.85em; padding-left: 1.35em; }
 .prose li { margin: 0.22em 0; }
 .prose blockquote {
   margin: 0 0 0.85em;
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--grat-edge);
-  color: var(--ink-2);
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid rgba(99, 102, 241, 0.5);
+  color: var(--ink-1);
 }
 .prose hr {
   border: 0;
-  border-top: 1px solid var(--grat-edge);
+  border-top: 1px solid var(--glass-brd);
   margin: 1.2em 0;
 }
-.prose a { color: var(--elev); }
+.prose a { color: #a5b4fc; }
 .prose code {
   font-family: var(--font-mono);
   font-size: 0.88em;
-  padding: 1px 5px;
-  background: var(--plate-3);
-  border: 1px solid var(--grat-major);
+  padding: 1.5px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--glass-brd);
 }
 .prose table {
   width: 100%;
   border-collapse: collapse;
   margin: 0 0 0.85em;
   font-size: var(--t-sm);
-  font-variant-numeric: tabular-nums;
 }
 .prose th, .prose td {
-  border: 1px solid var(--grat-major);
-  padding: 5px 10px;
+  border: 1px solid var(--glass-brd);
+  padding: 6px 10px;
   text-align: left;
 }
-.prose th {
-  background: var(--plate-2);
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  font-weight: 400;
-}
+.prose th { background: var(--glass); }
 
 .codeblock {
   margin: 0 0 0.85em;
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-0);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--glass-brd);
+  background: rgba(4, 5, 12, 0.66);
+  overflow: hidden;
 }
 .codeblock header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 6px 4px 12px;
-  border-bottom: 1px solid var(--grat-edge);
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  color: var(--ink-3);
-  letter-spacing: 0.12em;
+  padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--glass-brd);
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .codeblock pre {
@@ -284,56 +244,48 @@
 .copy-btn {
   border: 1px solid transparent;
   background: transparent;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font-size: var(--t-xs);
   padding: 3px 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
-.copy-btn:hover { border-color: var(--grat-edge); color: var(--ink-0); }
-.copy-btn.ok { color: var(--elev); }
+.copy-btn:hover { background: var(--glass); color: var(--ink-0); }
+.copy-btn.ok { color: var(--aur-green); }
 
-/* The write head. A square of signal ink — no halo, because on this plate a
-   glow would be the only light source on the page. */
+/* streaming caret */
 .caret {
   display: inline-block;
   width: 7px;
   height: 1.05em;
   margin-left: 2px;
   vertical-align: -0.18em;
-  background: var(--signal);
+  border-radius: 2px;
+  background: var(--aur-cyan);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.7);
   animation: caret 1s steps(2, start) infinite;
 }
-.caret.done { animation: none; opacity: 0; }
+.caret.done { animation: none; opacity: 0; transition: opacity 200ms; }
 @keyframes caret {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.18; }
+  50% { opacity: 0.15; }
 }
 
-/* per-message metrics: the pass's own telemetry line */
-/* `hidden` loses to any `display` declaration, so an empty foot was drawing
-   its own top rule across every answer that had not finished yet. */
-.msg-foot[hidden] { display: none; }
+/* per-message metrics footer */
 .msg-foot {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
   flex-wrap: wrap;
   margin-top: 9px;
-  padding-top: 7px;
-  border-top: 1px solid var(--grat-major);
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-3);
+  font-size: var(--t-xs);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
-/* Measured at 1.7:1 when set to the rule ink. A separator is still text, so
-   it takes the foot's own colour and earns its quietness from spacing. */
-.msg-foot .sep { color: inherit; }
+.msg-foot .sep { color: var(--ink-3); }
 .msg-foot .act {
   margin-left: auto;
   display: flex;
@@ -350,94 +302,95 @@
   .msg-foot .act { opacity: 1; }
 }
 
-/* ------------------------------------------------------------- notices --- */
-
+/* notices */
 .notice {
   align-self: center;
   max-width: 92%;
-  padding: 8px 14px;
+  padding: 9px 15px;
+  border-radius: 99px;
   font-size: var(--t-sm);
-  border: 1px solid var(--grat-edge);
-  border-left: 2px solid var(--ink-3);
-  background: var(--plate-2);
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
   color: var(--ink-1);
   display: flex;
   align-items: center;
   gap: 9px;
 }
 .notice.queue {
-  border-left-color: var(--caution);
-  color: #ffe9c2;
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.1);
+  color: #ffe6ad;
 }
 .notice.err {
-  border-left-color: var(--fault);
-  color: #ffd9de;
+  border-color: rgba(244, 114, 182, 0.45);
+  background: rgba(244, 114, 182, 0.1);
+  color: #ffd9ec;
 }
 /* The queue card is answering "when do I start?", so when the answer arrives
    it should resolve rather than vanish. */
 .notice[data-leaving="true"] {
   opacity: 0;
-  transform: translateY(-4px);
-  transition: opacity 140ms var(--ease-mech), transform 140ms var(--ease-mech);
+  transform: scale(0.96);
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
 }
 .notice-retry {
   margin-left: 4px;
   padding: 3px 12px;
+  border-radius: 99px;
   border: 1px solid currentColor;
   background: transparent;
   color: inherit;
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: var(--t-xs);
   cursor: pointer;
 }
-.notice-retry:hover { background: var(--plate-3); }
+.notice-retry:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
 
-#char-count.warn { color: var(--fault); }
+#char-count.warn {
+  color: var(--aur-rose);
+}
 
-/* Waiting reads as a swept sector, not a spinner disc. */
 .notice .spin {
   width: 12px;
   height: 12px;
-  border: 1px solid var(--grat-edge);
+  border-radius: 99px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
   border-top-color: currentColor;
-  border-radius: 50%;
-  animation: spin 1.1s var(--ease-mech) infinite;
+  animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* -------------------------------------------------- the contact band ----- */
+/* --------------------------------------------------------------- composer */
 
 .composer-wrap {
   flex: 0 0 auto;
-  padding: 10px 22px max(16px, env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, rgba(4, 6, 11, 0), var(--plate-0) 55%);
+  padding: 10px 22px max(18px, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(6, 7, 15, 0), rgba(6, 7, 15, 0.55) 45%);
 }
 
-/* The open contact window, rendered as a band: heavy rules top and bottom,
-   square ends, and a signal edge that lights up — with pigment, not glow —
-   the moment it has focus. */
 .composer {
   position: relative; /* anchors the "/" palette */
   max-width: var(--col-max);
   margin: 0 auto;
-  border: 1px solid var(--grat-edge);
-  border-top-width: 2px;
-  background: var(--plate-2);
-  transition: border-color var(--dur-2);
+  border-radius: var(--r-xl);
+  border: 1px solid var(--glass-brd);
+  background: rgba(11, 13, 26, 0.6);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  box-shadow: var(--sh-md);
+  transition: border-color var(--dur-2), box-shadow var(--dur-2);
 }
 .composer:focus-within {
-  border-color: var(--grat-edge);
-  border-top-color: var(--signal);
+  border-color: rgba(99, 102, 241, 0.55);
+  box-shadow: var(--sh-glow);
 }
 
 .persona-row {
   display: flex;
   align-items: center;
-  gap: 0;
-  padding: 0;
-  border-bottom: 1px solid var(--grat-edge);
+  gap: 6px;
+  padding: 9px 12px 3px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -447,31 +400,28 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border: 0;
-  border-right: 1px solid var(--grat-edge);
+  padding: 4px 11px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-brd);
   background: transparent;
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  color: var(--ink-2);
+  font-size: var(--t-xs);
   cursor: pointer;
   white-space: nowrap;
-  transition: color var(--dur-1), background var(--dur-1);
+  transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
 }
-.persona:hover { color: var(--ink-0); background: var(--plate-3); }
+.persona:hover { color: var(--ink-0); background: var(--glass); }
 .persona[aria-pressed="true"] {
-  color: var(--ink-0);
-  background: var(--plate-3);
-  box-shadow: inset 0 -2px 0 var(--signal);
+  color: #fff;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.5), rgba(168, 85, 247, 0.4));
+  border-color: rgba(168, 85, 247, 0.5);
 }
 
 .input-row {
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  padding: 4px 8px 8px 14px;
+  padding: 4px 10px 10px 16px;
 }
 
 #input {
@@ -498,33 +448,31 @@
   height: 40px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--signal);
+  border-radius: 50%;
+  border: 0;
   cursor: pointer;
-  color: #150703;
-  background: var(--signal);
-  transition: background var(--dur-1), border-color var(--dur-1);
+  color: #fff;
+  background: linear-gradient(135deg, var(--aur-indigo), var(--aur-violet));
+  box-shadow: 0 6px 22px rgba(99, 102, 241, 0.4);
+  transition: transform var(--dur-1) var(--ease-out), filter var(--dur-1),
+    background var(--dur-2);
 }
-.send:hover { background: #ff7d4d; border-color: #ff7d4d; }
-.send[disabled] {
-  background: transparent;
-  border-color: var(--grat-edge);
-  color: var(--ink-3);
-  cursor: not-allowed;
-}
+.send:hover { filter: brightness(1.1); }
+.send:active { transform: scale(0.94); }
+.send[disabled] { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .send[data-mode="stop"] {
-  background: var(--fault);
-  border-color: var(--fault);
-  color: #1a0409;
+  background: linear-gradient(135deg, var(--aur-rose), #fb7185);
+  box-shadow: 0 6px 22px rgba(244, 114, 182, 0.4);
 }
 .send svg { display: block; overflow: visible; }
 .send .glyph {
   transform-origin: 12px 12px;
-  transition: opacity 120ms var(--ease-mech), transform 200ms var(--ease-mech);
+  transition: opacity 140ms var(--ease-out), transform 240ms var(--ease-out);
 }
 .send[data-mode="send"] .stop,
 .send[data-mode="stop"] .go {
   opacity: 0;
-  transform: translateX(6px);
+  transform: rotate(-90deg) scale(0.6);
 }
 .send[data-mode="send"] .go,
 .send[data-mode="stop"] .stop {
@@ -536,40 +484,53 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 14px 8px;
-  font-family: var(--font-mono);
-  font-size: var(--t-legend);
-  letter-spacing: 0.06em;
+  padding: 0 16px 10px;
+  font-size: var(--t-xs);
   color: var(--ink-3);
 }
 .kbd {
   font-family: var(--font-mono);
   font-size: 10px;
   padding: 1px 5px;
-  border: 1px solid var(--grat-edge);
-  background: var(--plate-3);
+  border-radius: 4px;
+  border: 1px solid var(--glass-brd);
+  background: var(--glass);
   color: var(--ink-2);
 }
 
-/* ---------------------------------------------------------------- touch -- */
-
 @media (pointer: coarse) {
-  .persona { min-height: 44px; padding: 0 14px; }
-  .copy-btn { min-height: 44px; padding: 0 14px; }
-  .send { width: 48px; height: 48px; }
-  .skill-active { min-height: 40px; }
-  .skill-active .x { width: 32px; height: 32px; }
+  .persona {
+    min-height: 44px;
+    padding: 0 16px;
+  }
+  .persona-row {
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+  .copy-btn {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+  .send {
+    width: 48px;
+    height: 48px;
+  }
+  .skill-active {
+    min-height: 40px;
+  }
+  .skill-active .x {
+    width: 32px;
+    height: 32px;
+  }
   /* The composer is in the thumb zone; give the row a little more room. */
-  .input-row { padding-bottom: 12px; }
+  .input-row {
+    padding-bottom: 12px;
+  }
 }
 
 @media (max-width: 620px) {
-  .thread { padding: 16px 12px 6px; }
-  .brief { padding: 26px 12px 24px; }
-  .composer-wrap { padding: 8px 10px 12px; }
+  .suggestions { grid-template-columns: 1fr; }
+  .thread { padding: 18px 14px 6px; }
+  .composer-wrap { padding: 8px 12px 12px; }
   .msg.user .body { max-width: 88%; }
-  .spec-slab { grid-template-columns: 1fr 1fr; }
-  .spec-slab > div { border-left: 1px solid var(--grat-edge); border-top: 1px solid var(--grat-edge); }
-  .spec-slab > div:nth-child(odd) { border-left: 0; }
-  .spec-slab > div:nth-child(-n + 2) { border-top: 0; }
 }

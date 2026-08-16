@@ -123,7 +123,7 @@
                 title="{{ b.name }} — {{ b.mb }} MB"></span>
           {% endfor %}
         </div>
-        <div class="chart-key">
+        <div class="legend">
           {% for b in budget %}
           <span class="item">
             <span class="sw" style="background:var(--c{{ loop.index }})"></span>
@@ -146,6 +146,12 @@
       <div class="panel">
         <svg class="linechart" id="history-chart" viewBox="0 0 720 190"
              role="img" aria-label="Generation speed across past benchmark runs">
+          <defs>
+            <linearGradient id="histfill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>
+              <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
         </svg>
         <div class="empty" id="history-empty">No benchmark runs recorded yet.</div>
       </div>

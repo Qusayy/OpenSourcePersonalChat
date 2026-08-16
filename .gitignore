@@ -27,9 +27,6 @@ models/*
 bench.json
 *.log
 
-# design tooling state: hook cache, review screenshots
-.impeccable/
-
 # editors / OS
 .vscode/
 .idea/

@@ -29,21 +29,12 @@ let latest = null;
 
 /* ------------------------------------------------------------- rendering */
 
-/* An em dash at 30px is indistinguishable from a rule, and four of them in a
-   row read as a broken table rather than as four absent readings. The empty
-   state is flagged so the plate can set it at label size. */
-function readout(sel, value) {
-  const el = $(sel);
-  el.textContent = value ?? "—";
-  el.dataset.empty = String(value == null);
-}
-
 function tiles(s) {
-  readout("#t-gen", s ? fmt(s.gen_tps, 1) : null);
-  readout("#t-prefill", s ? fmt(s.prefill_tps, 0) : null);
+  $("#t-gen").textContent = s ? fmt(s.gen_tps, 1) : "—";
+  $("#t-prefill").textContent = s ? fmt(s.prefill_tps, 0) : "—";
   const short = s?.cases?.find((c) => c.id === "short") || s?.cases?.[0];
-  readout("#t-ttft", short ? fmtMs(short.ttft_p50) : null);
-  readout("#t-rss", s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : null);
+  $("#t-ttft").textContent = short ? fmtMs(short.ttft_p50) : "—";
+  $("#t-rss").textContent = s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : "—";
 }
 
 function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
@@ -59,7 +50,7 @@ function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
         <span class="lab">${escapeHtml(r.label)}${
         r.sub ? `<small>${escapeHtml(r.sub)}</small>` : ""
       }</span>
-        <span class="bar-track" title="${escapeHtml(r.label)}: ${fmt(r.value, digits)} ${unit}">
+        <span class="track" title="${escapeHtml(r.label)}: ${fmt(r.value, digits)} ${unit}">
           <i class="${alt ? "alt" : ""}" style="transform:scaleX(${Math.max(0.015, r.value / top).toFixed(4)})"></i>
         </span>
         <span class="val">${fmt(r.value, digits)}<small> ${unit}</small>${
@@ -161,9 +152,11 @@ function historyChart(runs) {
   svg += `<text class="lbl" x="${pad.l}" y="${H - 6}">oldest</text>`;
   svg += `<text class="lbl" x="${W - pad.r}" y="${H - 6}" text-anchor="end">newest</text>`;
 
-  // No gradient defs: the area is a flat wash from the token set. A vertical
-  // fade would be the only luminance effect on a plate that has none.
-  els.history.innerHTML = svg;
+  els.history.innerHTML =
+    `<defs><linearGradient id="histfill" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>` +
+    `<stop offset="1" stop-color="#6366f1" stop-opacity="0"/></linearGradient></defs>` +
+    svg;
 }
 
 function caseTable(summary) {

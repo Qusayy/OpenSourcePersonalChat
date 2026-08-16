@@ -6,13 +6,13 @@
 {% endblock %}
 
 {% block rail %}
-<button class="plate-btn plate-btn-primary" id="new-chat">
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-  Open contact
+<button class="btn btn-primary" id="new-chat" style="width:100%">
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  New conversation
 </button>
 
 <div class="rail-scroll">
-  <div class="rail-label legend" id="history-label">Pass log</div>
+  <div class="rail-label" id="history-label">History</div>
   {# Two sibling buttons, never a button inside a button: the old nested
      span[role=button] was invalid markup and unreachable by keyboard. #}
   <ul class="convo-list" id="convo-list" aria-labelledby="history-label">
@@ -24,11 +24,11 @@
       </button>
       <button class="convo-del" type="button" data-del="{{ c.id }}"
               aria-label="Delete conversation: {{ c.title }}">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </li>
     {% else %}
-    <li class="convo-empty">No passes logged yet.</li>
+    <li class="convo-empty muted">No conversations yet.</li>
     {% endfor %}
   </ul>
 </div>
@@ -36,26 +36,20 @@
 
 {% block main %}
 <div class="stream-wrap" id="stream-wrap">
-  {# The first viewport. No hero paragraph: the plate behind this block is
-     already showing the predicted pass, and the job here is to identify the
-     craft and state what it costs — in the plate's own tabular vocabulary. #}
-  <section class="brief" id="hero">
-    <p class="legend brief-kicker">Station AURORA · craft under observation</p>
-    <h1 class="brief-name">{{ info.model }}</h1>
-    <p class="brief-line">
-      Runs on this server alone — no API, no upstream provider. Every answer is
-      a tracked pass, plotted and timed while it happens.
+  <section class="hero" id="hero">
+    <h1>A small model,<br>hosted honestly.</h1>
+    <p>
+      {{ info.model }} runs entirely on this server — no API, no upstream provider.
+      Every answer shows what it actually cost to produce.
     </p>
-
-    <dl class="spec-slab">
-      <div><dt class="legend">params</dt><dd class="num">{{ info.params }}</dd></div>
-      <div><dt class="legend">quant</dt><dd class="num">{{ info.quant }}</dd></div>
-      <div><dt class="legend">context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
-      <div><dt class="legend">threads</dt><dd class="num">{{ info.n_threads }}</dd></div>
-      <div><dt class="legend">hardware</dt><dd class="num">{{ info.hardware }}</dd></div>
-    </dl>
-
-    <p class="legend brief-ops">Planned operations</p>
+    <div class="spec-row">
+      <span class="pill mono">{{ info.params }} params</span>
+      <span class="pill mono">{{ info.quant }}</span>
+      <span class="pill mono">{{ info.n_ctx }} ctx</span>
+      <span class="pill mono">{{ info.hardware }}</span>
+      <span class="pill mono">{{ info.n_threads }} threads</span>
+    </div>
+    <p class="hero-lead">Pick a skill, or just type. Press <span class="kbd">/</span> for tools.</p>
     <div class="skill-grid" id="skill-grid"></div>
   </section>
 
@@ -86,15 +80,15 @@
         {# Both marks are present and crossfade; swapping one path's `d` gives
            an instant snap, which reads as a glitch rather than a state change. #}
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.2" stroke-linecap="square" stroke-linejoin="miter"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true">
-          <path class="glyph go" d="M4 12h14M12 6l6 6-6 6"/>
+          <path class="glyph go" d="M5 12h13M12 5l7 7-7 7"/>
           <path class="glyph stop" d="M8 8h8v8H8z"/>
         </svg>
       </button>
     </div>
     <div class="composer-foot">
-      <span id="input-hint"><span class="kbd">Enter</span> send · <span class="kbd">/</span> tools</span>
+      <span id="input-hint"><span class="kbd">Enter</span> send · <span class="kbd">Shift ↵</span> newline</span>
       <span class="spacer"></span>
       <span id="char-count" class="mono" hidden></span>
       <span id="ctx-hint" class="mono"></span>
@@ -105,22 +99,35 @@
 
 {% block hud %}
 <aside class="hud" aria-label="Live metrics">
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <linearGradient id="ringgrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient>
+      <linearGradient id="sparkgrad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient>
+      <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#22d3ee" stop-opacity=".28"/>
+        <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
   <h2>Throughput</h2>
   <div class="hud-card">
     <div class="big-stat">
       <span class="v num" id="tps-value" data-empty="true">—</span>
-      <span class="u">tok/s</span>
+      <span class="u">tokens per second</span>
     </div>
-    {# Flat signal ink and a flat wash. A gradient here would be the first
-       luminance effect on the plate, and the world does not have those. #}
     <svg class="spark" id="spark" viewBox="0 0 120 38" preserveAspectRatio="none" aria-hidden="true">
-      <path id="spark-fill" fill="var(--signal-wash)" d=""></path>
-      <path id="spark-line" fill="none" stroke="var(--signal)" stroke-width="1.6"
-            stroke-linejoin="round" stroke-linecap="butt" d=""></path>
+      <path id="spark-fill" fill="url(#sparkfill)" d=""></path>
+      <path id="spark-line" fill="none" stroke="url(#sparkgrad)" stroke-width="1.6"
+            stroke-linejoin="round" stroke-linecap="round" d=""></path>
     </svg>
-    <div class="stat-grid">
-      <div class="stat"><span class="k">First token</span><span class="v" id="ttft-value">—</span></div>
-      <div class="stat"><span class="k">Tokens out</span><span class="v" id="out-value">—</span></div>
+    <div class="stat-grid" style="margin-top:10px">
+      <div class="stat"><div class="k">First token</div><div class="v" id="ttft-value">—</div></div>
+      <div class="stat"><div class="k">Tokens out</div><div class="v" id="out-value">—</div></div>
     </div>
   </div>
 
@@ -128,18 +135,20 @@
   <div class="hud-card">
     <div class="ring-row">
       <svg class="ring" viewBox="0 0 54 54" aria-hidden="true">
-        <circle class="ring-bg" cx="27" cy="27" r="22"></circle>
+        <circle class="track" cx="27" cy="27" r="22"></circle>
         <circle class="val" id="ctx-ring" cx="27" cy="27" r="22"
                 stroke-dasharray="138.2" stroke-dashoffset="138.2"></circle>
       </svg>
       <div>
-        <div class="v num" id="ctx-value">0</div>
-        <div class="legend">of {{ info.n_ctx }} tokens</div>
+        <div class="v num" id="ctx-value" style="font-size:var(--t-lg)">0</div>
+        <div class="k" style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)">
+          of {{ info.n_ctx }} tokens
+        </div>
       </div>
     </div>
   </div>
 
-  <h2>Station log</h2>
+  <h2>Server</h2>
   <div class="hud-card" id="boot-panel">
     <div class="boot-line"><span>model</span><b id="b-model">{{ info.model }}</b></div>
     <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
@@ -148,12 +157,10 @@
     <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
   </div>
 
-  <div class="hud-card">
-    <a class="plate-btn" href="/bench" style="justify-content:space-between;width:100%">
-      Run the benchmark
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M4 12h14M12 6l6 6-6 6"/></svg>
-    </a>
-  </div>
+  <a class="btn" href="/bench" style="justify-content:space-between">
+    Run the benchmark
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h13M12 5l7 7-7 7"/></svg>
+  </a>
 </aside>
 {% endblock %}
 

@@ -1,6 +1,6 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth, canvas } from "./app.js";
+import { $, $$, toast, setRail, onHealth, plate } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
@@ -222,8 +222,15 @@ function proseRenderer(host) {
       }
       const last = blocks[blocks.length - 1];
       tail.innerHTML = last === undefined ? "" : renderMarkdown(last);
-      if (caretOn) tail.appendChild(caret);
-      else caret.remove();
+      if (caretOn) {
+        // Inside the last rendered block, not after it. Appended to the tail
+        // container it lands below a finished <p> as a lone block of signal
+        // ink on its own line, which reads as a rendering fault rather than as
+        // a write head sitting after the newest word.
+        (tail.lastElementChild || tail).appendChild(caret);
+      } else {
+        caret.remove();
+      }
     },
     finish(raw) {
       // One clean pass at the end so the finished answer is a single tree.
@@ -337,6 +344,8 @@ const meter = new Meter({
     els.sparkFill.setAttribute("d", fill);
     const strip = document.querySelector('[data-strip="tps"]');
     if (strip) strip.textContent = fmt(rate, 1);
+    // The same reading the HUD shows, plotted on the plate behind the page.
+    plate?.sample(rate);
   },
 });
 
@@ -356,7 +365,7 @@ function setMode(streaming) {
   state.streaming = streaming;
   els.send.dataset.mode = streaming ? "stop" : "send";
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
-  canvas?.setGenerating(streaming);
+  document.documentElement.dataset.pass = streaming ? "open" : "closed";
 }
 
 async function stopGeneration() {
@@ -448,26 +457,25 @@ async function send(text) {
           }</span>`);
         } else if (event === "start") {
           state.requestId = data.request_id;
-          canvas?.setWaiting(true); // holds until the first token lands
+          // The contact window opens here, not at submit: the plate's x axis is
+          // time since generation began, so folding queue wait into it would
+          // make every axis reading a lie about the model's speed.
+          plate?.open();
           dismiss(queueCard);
           queueCard = null;
           setContext(data.prompt_tokens);
         } else if (event === "token") {
           // No layout reads here — the tick below batches one read and one
           // write per frame instead of a pair per token.
-          if (!raw) {
-            // The release: prefill is over, the model is talking.
-            canvas?.setWaiting(false);
-            canvas?.pulse(0.4);
-          } else {
-            canvas?.pulse();
-          }
+          // Acquisition of signal: prefill is over, the model is talking.
+          if (!raw) plate?.acquire();
           raw += data.t;
           dirty = true;
           meter.token(1);
         } else if (event === "done") {
           caretOn = false;
           dirty = false;
+          plate?.close(); // loss of signal — the band closes on the real window
           prose.finish(raw);
           bot.dataset.raw = raw;
           footer(bot, data);
@@ -487,6 +495,7 @@ async function send(text) {
           refreshList();
         } else if (event === "error") {
           caretOn = false;
+          plate?.fail();
           prose.finish(raw);
           errorNotice(data.message || "The model could not answer that.", text);
         }
@@ -495,6 +504,7 @@ async function send(text) {
   } catch (err) {
     caretOn = false;
     dirty = false;
+    plate?.fail();
     prose.finish(raw);
     if (err.name !== "AbortError") {
       errorNotice(
@@ -507,6 +517,7 @@ async function send(text) {
   } finally {
     clearInterval(painter);
     caretOn = false;
+    plate?.close(); // a cancel ends the pass too; a no-op if `done` already did
     if (raw) prose.finish(raw);
     dismiss(queueCard);
     meter.stop();
@@ -579,6 +590,9 @@ async function loadConversation(cid) {
     paintPersonas();
     hideHero();
     els.thread.innerHTML = "";
+    // The plate shows the pass that is happening, not one that happened in a
+    // conversation you just switched away from.
+    plate?.reset();
 
     let ctx = 0;
     for (const m of convo.messages) {
@@ -622,6 +636,7 @@ function newChat() {
   els.out.textContent = "—";
   els.sparkLine.setAttribute("d", "");
   els.sparkFill.setAttribute("d", "");
+  plate?.reset(); // clean plate: prediction only, nothing measured yet
   setRail(false);
   refreshList();
   els.input.focus();
@@ -634,8 +649,11 @@ onHealth((info) => {
   const ready = info.status === "ready";
   els.send.disabled = !ready;
   if (!state.skill) {
+    // No tools hint here: at 390px the two-clause placeholder wrapped to a
+    // second line the one-row textarea then clipped. The hint lives in the
+    // composer foot, which has room for it at every width.
     els.input.placeholder = ready
-      ? `Ask ${info.model} something…  (press / for tools)`
+      ? `Ask ${info.model} something…`
       : info.status === "error"
       ? "The model could not be loaded — nothing can be sent right now"
       : "The model is still loading…";

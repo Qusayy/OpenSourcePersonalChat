@@ -1,4 +1,8 @@
-/* The answer timeline and the tool cards it contains. */
+/* The answer timeline and the tool cards it contains.
+ *
+ * Same plate vocabulary as the rest of the world: cut squares, engraved rules,
+ * flat pigment. Every card is a readout slab, so its numbers are tabular mono
+ * and its labels are engraved legends. Nothing here glows. */
 
 /* Inline SVG icons (icons.js) sit on the text baseline by default, which
    nudges every badge they live in. Blocks them instead. */
@@ -9,25 +13,27 @@
 
 /* ------------------------------------------------------------- timeline -- */
 
+/* The steps that produced the answer, read as a station log rather than as a
+   row of pills. */
+/* `hidden` loses to any `display` declaration — without this an answer with no
+   tool steps still drew the timeline's rule. */
+.timeline[hidden] { display: none; }
 .timeline {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
   margin-bottom: 12px;
+  border-left: 1px solid var(--grat-edge);
 }
 
 .tl-step {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px 6px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  /* the timings inside are --ink-3, so this must darken, not lighten */
-  background: var(--surface);
+  padding: 5px 12px 5px 8px;
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
   color: var(--ink-2);
-  align-self: flex-start;
   max-width: 100%;
 }
 .tl-step .g {
@@ -36,9 +42,9 @@
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  background: rgba(99, 102, 241, 0.2);
-  color: #c7d2fe;
+  border: 1px solid var(--grat-edge);
+  background: var(--plate-2);
+  color: var(--ink-2);
   font-size: 11px;
 }
 .tl-step .label {
@@ -49,49 +55,44 @@
 }
 .tl-step .detail {
   color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  font-size: var(--t-legend);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .tl-step .ms {
   margin-left: auto;
-  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-3);
   padding-left: 8px;
 }
 .tl-step[data-status="running"] .g {
-  animation: tl-pulse 1.1s var(--ease-in-out) infinite;
+  border-color: var(--signal);
+  color: var(--signal);
+  animation: tl-pulse 1.1s var(--ease-mech) infinite;
 }
 .tl-step[data-status="ok"] .g {
-  background: rgba(52, 211, 153, 0.18);
-  color: #6ee7b7;
-}
-.tl-step[data-status="failed"] {
-  border-color: rgba(244, 114, 182, 0.4);
+  border-color: var(--elev);
+  color: var(--elev);
 }
 .tl-step[data-status="failed"] .g {
-  background: rgba(244, 114, 182, 0.2);
-  color: #f9a8d4;
+  border-color: var(--fault);
+  color: var(--fault);
+}
+.tl-step[data-status="failed"] .label {
+  color: #ffd9de;
 }
 @keyframes tl-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.92); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* ----------------------------------------------------------- card shell -- */
 
 .card-tool {
   margin: 0 0 12px;
-  padding: 14px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid transparent;
-  background:
-    linear-gradient(180deg, rgba(17, 20, 42, 0.93), rgba(9, 11, 24, 0.92)) padding-box,
-    linear-gradient(140deg, rgba(99, 102, 241, 0.5), rgba(34, 211, 238, 0.22) 55%,
-      rgba(168, 85, 247, 0.4)) border-box;
-  box-shadow: var(--sh-sm);
+  padding: 12px 14px;
+  border: 1px solid var(--grat-edge);
+  background: var(--plate-1);
 }
 
 .tool-head {
@@ -99,31 +100,32 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-size: var(--t-xs);
-  letter-spacing: 0.08em;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--grat-major);
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
 .tool-head .g {
-  color: #a5b4fc;
+  color: var(--signal);
   font-size: 13px;
 }
 .tool-head .badge {
   margin-left: auto;
-  padding: 2px 8px;
-  border-radius: 99px;
-  background: var(--surface-inset);
-  border: 1px solid var(--glass-brd);
+  padding: 1px 7px;
+  background: var(--plate-3);
+  border: 1px solid var(--grat-edge);
   color: var(--ink-2);
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   text-transform: none;
-  font-family: var(--font-mono);
   font-size: 10px;
 }
 .tool-head .badge.ok {
-  color: #6ee7b7;
-  border-color: rgba(52, 211, 153, 0.35);
-  background: rgba(52, 211, 153, 0.12);
+  color: var(--elev);
+  border-color: var(--elev);
+  background: var(--elev-wash);
 }
 
 /* ---------------------------------------------------------- calculator -- */
@@ -132,14 +134,15 @@
   font-family: var(--font-mono);
 }
 .card-calc .expr {
-  color: var(--ink-1);
+  color: var(--ink-2);
   font-size: var(--t-md);
   word-break: break-word;
 }
+/* A real tape rule: full width, one weight, no fade. */
 .card-calc .rule {
   height: 1px;
   margin: 9px 0;
-  background: linear-gradient(90deg, rgba(99, 102, 241, 0.6), rgba(34, 211, 238, 0.2), transparent);
+  background: var(--grat-edge);
 }
 .card-calc .result {
   display: flex;
@@ -151,9 +154,10 @@
   font-size: var(--t-lg);
 }
 .card-calc .val {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   color: var(--ink-0);
   word-break: break-all;
 }
@@ -165,13 +169,15 @@
 
 /* ------------------------------------------------------------- weather -- */
 
+/* Drawn, never fetched. Recoloured into the plate's own inks so a forecast
+   does not arrive as the one full-colour object on the page. */
 .w-art { width: 44px; height: 44px; flex: 0 0 auto; }
-.w-sun { fill: #fcd34d; }
-.w-rays line { stroke: #fcd34d; stroke-width: 2; stroke-linecap: round; }
-.w-cloud { fill: #cbd5f5; }
-.w-drop line { stroke: #67e8f9; stroke-width: 2; stroke-linecap: round; }
-.w-drop circle { fill: #e0f2fe; }
-.w-bolt { fill: #fbbf24; }
+.w-sun { fill: var(--caution); }
+.w-rays line { stroke: var(--caution); stroke-width: 2; stroke-linecap: butt; }
+.w-cloud { fill: var(--ink-2); }
+.w-drop line { stroke: var(--elev); stroke-width: 2; stroke-linecap: butt; }
+.w-drop circle { fill: var(--elev); }
+.w-bolt { fill: var(--caution); }
 
 .card-weather .now {
   display: flex;
@@ -187,58 +193,73 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 34px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
+  color: var(--ink-0);
 }
-.card-weather .temp .unit { color: var(--ink-2); font-size: var(--t-md); }
+.card-weather .temp .unit { color: var(--ink-3); font-size: var(--t-md); }
 .card-weather .cond { color: var(--ink-0); font-size: var(--t-md); }
 .card-weather .sub { color: var(--ink-3); font-size: var(--t-xs); }
-.card-weather .w-spark { width: 100%; height: 40px; margin-top: 10px; display: block; }
+.card-weather .w-spark {
+  width: 100%;
+  height: 40px;
+  margin-top: 10px;
+  display: block;
+  border-bottom: 1px solid var(--grat-major);
+}
 .card-weather .axis-mini {
   display: flex;
   justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--t-legend);
+  letter-spacing: 0.08em;
   color: var(--ink-3);
 }
 .card-weather .days {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 6px;
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--glass-brd);
+  border-top: 1px solid var(--grat-major);
 }
 .card-weather .day {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  padding: 10px 2px 0;
+  border-left: 1px solid var(--grat-minor);
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
 }
+.card-weather .day:first-child { border-left: 0; }
 .card-weather .day .w-art { width: 26px; height: 26px; }
-.card-weather .day .dow { color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.card-weather .day .dow {
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: var(--t-legend);
+}
 .card-weather .day .hi { color: var(--ink-0); }
 .card-weather .day .lo { color: var(--ink-3); }
 
 /* ----------------------------------------------------------- wikipedia -- */
 
 .card-wiki .wiki-body { display: flex; gap: 14px; }
+/* A cut plate carrying one engraved letter — no gradient, no shadow. */
 .mono-badge {
-  width: 46px;
-  height: 46px;
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 12px;
-  font-size: 22px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(140deg, var(--aur-indigo), var(--aur-violet) 60%, var(--aur-cyan));
-  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.35);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  color: var(--signal);
+  border: 1px solid var(--grat-edge);
+  background: var(--plate-2);
 }
-.card-wiki .title { font-size: var(--t-lg); font-weight: 600; }
-.card-wiki .desc { color: var(--ink-2); font-size: var(--t-sm); margin-bottom: 6px; }
+.card-wiki .title { font-size: var(--t-lg); font-weight: 600; color: var(--ink-0); }
+.card-wiki .desc { color: var(--ink-3); font-size: var(--t-sm); margin-bottom: 6px; }
 .card-wiki .extract {
   margin: 0 0 8px;
   color: var(--ink-1);
@@ -248,12 +269,19 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.src { font-size: var(--t-xs); color: #a5b4fc; text-decoration: none; }
+.src {
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--elev);
+  text-decoration: none;
+}
 .src:hover { text-decoration: underline; }
 
 /* ----------------------------------------------------------------- url -- */
 
-.card-url .title { font-size: var(--t-lg); font-weight: 600; margin-bottom: 4px; }
+.card-url .title { font-size: var(--t-lg); font-weight: 600; margin-bottom: 4px; color: var(--ink-0); }
 /* Page titles and domains arrive from the open web at any length. */
 .card-url .title,
 .card-url .lede,
@@ -269,7 +297,12 @@
   display: flex;
   gap: 10px;
   align-items: center;
-  font-size: var(--t-xs);
+  padding-top: 7px;
+  border-top: 1px solid var(--grat-major);
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
 .card-url .url-foot .src { margin-left: auto; }
@@ -283,32 +316,31 @@
   gap: 12px;
 }
 .card-exchange .side { text-align: center; }
-/* The converted amount is the answer; size and weight already say so. */
-.card-exchange .side.to .amount {
-  color: var(--ink-0);
-}
-.card-exchange .side:not(.to) .amount {
-  color: var(--ink-2);
-}
+/* The converted amount is the answer; size and ink already say so. */
+.card-exchange .side.to .amount { color: var(--ink-0); }
+.card-exchange .side:not(.to) .amount { color: var(--ink-3); }
 .card-exchange .amount {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 .card-exchange .code {
-  font-size: var(--t-xs);
-  letter-spacing: 0.1em;
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--ink-3);
 }
+/* The connecting line is a survey baseline: one weight, ticked at both ends. */
 .card-exchange .arrow {
   position: relative;
   min-width: 74px;
   text-align: center;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: var(--t-xs);
+  font-size: var(--t-legend);
+  letter-spacing: 0.08em;
 }
 .card-exchange .arrow::before {
   content: "";
@@ -317,56 +349,73 @@
   right: -6px;
   top: 50%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.7), transparent);
+  background: var(--grat-edge);
 }
 .card-exchange .rate {
   position: relative;
   padding: 2px 6px;
-  background: rgba(17, 20, 42, 0.95);
-  border-radius: 6px;
+  background: var(--plate-1);
 }
 
 /* --------------------------------------------------------------- clock -- */
 
 .card-clock .clock-body { display: flex; gap: 16px; align-items: center; }
 .card-clock .face { width: 78px; height: 78px; flex: 0 0 auto; }
-.card-clock .rim { fill: rgba(255, 255, 255, 0.03); stroke: var(--glass-brd); stroke-width: 1; }
-.card-clock .ticks line { stroke: rgba(255, 255, 255, 0.22); stroke-width: 1.5; stroke-linecap: round; }
-.card-clock .hand { stroke-linecap: round; }
-.card-clock .hour { stroke: #c7d2fe; stroke-width: 3.2; }
-.card-clock .minute { stroke: var(--aur-cyan); stroke-width: 2; }
-.card-clock .pin { fill: var(--aur-cyan); }
+.card-clock .rim { fill: var(--plate-2); stroke: var(--grat-edge); stroke-width: 1; }
+.card-clock .ticks line { stroke: var(--grat-edge); stroke-width: 1.5; stroke-linecap: butt; }
+.card-clock .hand { stroke-linecap: butt; }
+.card-clock .hour { stroke: var(--ink-1); stroke-width: 3; }
+.card-clock .minute { stroke: var(--signal); stroke-width: 2; }
+.card-clock .pin { fill: var(--signal); }
 .card-clock .big {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 26px;
-  font-weight: 600;
   letter-spacing: -0.02em;
+  color: var(--ink-0);
 }
 .card-clock .date { color: var(--ink-2); font-size: var(--t-sm); margin-bottom: 6px; }
 .card-clock .zones {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
+  font-family: var(--font-mono);
   font-size: var(--t-xs);
   color: var(--ink-3);
 }
-.card-clock .zrow b { color: var(--ink-1); margin-left: 5px; font-weight: 500; }
-.card-clock .note { margin-top: 6px; color: var(--aur-amber); font-size: var(--t-xs); }
+.card-clock .zrow b { color: var(--ink-1); margin-left: 5px; font-weight: 400; }
+.card-clock .note { margin-top: 6px; color: var(--caution); font-size: var(--t-xs); }
 
 /* --------------------------------------------------------------- stats -- */
 
 .card-stats .stat-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
   margin-bottom: 12px;
+  border-top: 1px solid var(--grat-major);
+  border-bottom: 1px solid var(--grat-major);
 }
-.card-stats .stat-row div { display: flex; flex-direction: column; }
+.card-stats .stat-row div {
+  display: flex;
+  flex-direction: column;
+  padding: 7px 10px;
+  border-left: 1px solid var(--grat-minor);
+}
+.card-stats .stat-row div:first-child { border-left: 0; }
 .card-stats .stat-row b {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: var(--t-lg);
-  font-weight: 600;
+  font-weight: 400;
+  color: var(--ink-0);
 }
-.card-stats .stat-row span { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.card-stats .stat-row span {
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+}
 .card-stats .term {
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) 28px;
@@ -376,29 +425,38 @@
   margin-bottom: 4px;
 }
 .card-stats .term .t { color: var(--ink-1); overflow: hidden; text-overflow: ellipsis; }
-.card-stats .term .bar { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, 0.06); }
+.card-stats .term .bar { height: 6px; background: var(--plate-3); }
 .card-stats .term .bar i {
   display: block;
   height: 100%;
-  border-radius: 99px;
-  background: linear-gradient(90deg, var(--aur-indigo), var(--aur-cyan));
+  background: var(--signal-deep);
 }
-.card-stats .term .c { text-align: right; color: var(--ink-3); font-family: var(--font-mono); }
+.card-stats .term .c {
+  text-align: right;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
 /* -------------------------------------------------------------- failure -- */
 
 .card-fail {
-  background: rgba(244, 114, 182, 0.08) padding-box;
-  border: 1px solid rgba(244, 114, 182, 0.35);
+  background: rgba(255, 93, 115, 0.08);
+  border: 1px solid var(--grat-edge);
+  border-left: 2px solid var(--fault);
 }
-.card-fail p { margin: 0; color: #ffd9ec; font-size: var(--t-sm); }
+.card-fail p { margin: 0; color: #ffd9de; font-size: var(--t-sm); }
 
 /* ------------------------------------------------------------- skills -- */
 
+/* Planned operations. Each tile is a cut plate; hovering seats it rather than
+   floating it, because nothing on this plate has elevation. */
 .skill-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 1px;
+  background: var(--grat-edge);
+  border: 1px solid var(--grat-edge);
   text-align: left;
 }
 
@@ -407,81 +465,81 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 14px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: var(--surface);
+  padding: 13px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: var(--plate-1);
   color: var(--ink-1);
   cursor: pointer;
   overflow: hidden;
-  transition: border-color var(--dur-1), transform var(--dur-2) var(--ease-out),
-    background var(--dur-1);
+  text-align: left;
+  transition: background var(--dur-1), border-color var(--dur-1);
 }
 .skill:hover {
-  transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, 0.55);
-  background: var(--surface-2);
+  border-left-color: var(--signal);
+  background: var(--plate-2);
 }
 .skill .top { display: flex; align-items: center; gap: 8px; }
 .skill .g {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(140deg, rgba(99, 102, 241, .55), rgba(168, 85, 247, .45));
-  color: #fff;
-  font-size: 13px;
+  border: 1px solid var(--grat-edge);
+  background: var(--plate-2);
+  color: var(--signal);
+  font-size: 12px;
 }
-.skill .name { color: var(--ink-0); font-weight: 550; font-size: var(--t-md); }
+.skill .name { color: var(--ink-0); font-weight: 600; font-size: var(--t-md); }
 .skill .blurb { font-size: var(--t-sm); color: var(--ink-2); }
 
 /* the little pipeline graph on each tile */
 .pipe {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   margin-top: 2px;
 }
 .pipe .node {
-  padding: 1px 7px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: var(--surface-inset);
+  padding: 1px 6px;
+  border: 1px solid var(--grat-major);
+  background: var(--plate-2);
   font-family: var(--font-mono);
   font-size: 9.5px;
+  letter-spacing: 0.06em;
   color: var(--ink-3);
   white-space: nowrap;
 }
 .pipe .link {
   flex: 0 0 10px;
   height: 1px;
-  background: linear-gradient(90deg, rgba(99, 102, 241, 0.7), rgba(34, 211, 238, 0.35));
+  background: var(--grat-edge);
 }
 
 /* --------------------------------------------------------- command palette */
 
 .palette {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% + 8px);
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 6px);
   z-index: 30;
   max-height: 320px;
   overflow-y: auto;
-  padding: 6px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: rgba(11, 13, 26, 0.96);
-  backdrop-filter: blur(var(--blur));
-  -webkit-backdrop-filter: blur(var(--blur));
-  box-shadow: var(--sh-lg);
+  padding: 4px;
+  border: 1px solid var(--grat-edge);
+  border-top: 2px solid var(--signal);
+  /* Opaque: this overlays the thread, and a translucent panel would put prose
+     behind prose. */
+  background: var(--plate-2);
 }
 .palette[hidden] { display: none; }
 .palette .group {
-  padding: 6px 10px 4px;
-  font-size: 10px;
-  letter-spacing: 0.09em;
+  padding: 7px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
@@ -490,9 +548,9 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: 0;
-  border-radius: var(--r-sm);
+  border-left: 2px solid transparent;
   background: transparent;
   color: var(--ink-1);
   cursor: pointer;
@@ -500,10 +558,11 @@
 }
 .palette .row:hover,
 .palette .row[aria-selected="true"] {
-  background: var(--accent-soft);
+  background: var(--plate-3);
+  border-left-color: var(--signal);
   color: var(--ink-0);
 }
-.palette .row .g { width: 18px; text-align: center; color: #a5b4fc; }
+.palette .row .g { width: 18px; text-align: center; color: var(--signal); }
 .palette .row .cmd { font-family: var(--font-mono); font-size: var(--t-sm); }
 .palette .row .desc {
   margin-left: auto;
@@ -516,17 +575,9 @@
 }
 
 @media (pointer: coarse) {
-  .palette .row {
-    min-height: 48px;
-    padding: 8px 12px;
-  }
-  .tl-step {
-    min-height: 36px;
-    padding: 6px 14px 6px 10px;
-  }
-  .skill {
-    min-height: 96px;
-  }
+  .palette .row { min-height: 48px; padding: 8px 12px; }
+  .tl-step { min-height: 36px; }
+  .skill { min-height: 96px; }
 }
 
 @media (max-width: 900px) {

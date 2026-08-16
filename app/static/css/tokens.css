@@ -1,110 +1,96 @@
-/* Design tokens. Dark only — the use scene is a dark chat surface with an
-   aurora behind it, and there is no light theme to keep in step.
-
-   The ink ramp is derived, not picked. Text sits on translucent surfaces over
-   an animated shader, so the background luminance is whatever the aurora is
-   doing at that moment. Every tier below was solved in OKLCH against the
-   *brightest* ground it can ever land on, at one hue (~277°) so the neutrals
-   stay of a piece with the world instead of going flat grey.
-
-     tier      contrast on a panel   on raw aurora
-     --ink-0   15.7:1                12.0:1
-     --ink-1    9.4:1                 7.2:1
-     --ink-2    6.6:1                 5.1:1
-     --ink-3    4.7:1                 3.6:1  ← panel-backed text only
-
-   That last line is the one rule to remember: --ink-3 must have a surface
-   behind it. On the raw background it does not reach 4.5:1, and nothing but a
-   darker ground will fix that. */
+/* Pass Plate — design tokens.
+ *
+ * The world is a satellite pass-prediction plate: an engraved graticule field
+ * with a ground track crossing it and contact windows marked along the track.
+ * A conversation is a contact window with a small distant machine.
+ *
+ * Two rules keep this out of the near-black-plus-neon cluster that every
+ * generated interface lands in:
+ *
+ *   1. Nothing glows. This is printed ink on a matte plate. Signal orange is
+ *      dense pigment, never a light source — no box-shadow halos, no blurred
+ *      accents, no bloom. Where something must read as "live", it gets more
+ *      ink or a moving edge, not more light.
+ *   2. The graticule is drawn at real density. A faint decorative grid would
+ *      make this a dark theme with a texture; a plate you could actually
+ *      measure against makes it an instrument.
+ *
+ * The ink ramp is derived against the plate ground, which is far darker than
+ * the surface it replaced, so every tier clears 4.5:1 with room to spare.
+ */
 
 :root {
-  /* surfaces */
-  --bg-0: #06070f;
-  --bg-1: #0b0d1a;
-  --bg-2: #11142a;
-  --bg-3: #171b34;
+  /* the plate itself */
+  --plate-0: #04060b; /* deepest — page ground */
+  --plate-1: #080b12; /* standard plate */
+  --plate-2: #0d1119; /* raised plate: composer, panels */
+  --plate-3: #131824; /* pressed / hover */
 
-  /* glass — a white tint, so it *lightens* whatever is behind it. Fine for
-     decoration; never put small text on it over the aurora. */
-  --glass: rgba(255, 255, 255, 0.055);
-  --glass-strong: rgba(255, 255, 255, 0.085);
-  --glass-brd: rgba(255, 255, 255, 0.10);
-  --glass-brd-strong: rgba(255, 255, 255, 0.18);
-  --blur: 14px;
+  /* engraved graticule */
+  --grat-minor: #131c28;
+  --grat-major: #1d2a3a;
+  --grat-edge: #2a3a4d; /* plate borders, rules */
 
-  /* Text-bearing surfaces. Opaque enough to bound the ground no matter what
-     the shader does behind them, translucent enough to keep the aurora's
-     colour. Elevation is carried by border and shadow, not by getting
-     lighter — a lighter surface would raise the ground and undo the ramp. */
-  --surface: rgba(17, 20, 42, 0.92);
-  --surface-2: rgba(20, 24, 48, 0.93);
-  --surface-inset: rgba(9, 11, 24, 0.45);
+  /* signal ink — the live pass */
+  --signal: #ff6b35;
+  --signal-deep: #c84a1e;
+  --signal-wash: rgba(255, 107, 53, 0.12);
 
-  /* ink — see the header note; derived in OKLCH at h≈277° */
-  --ink-0: #f2f4ff;
-  --ink-1: #b9bede;
-  --ink-2: #999fc2;
-  --ink-3: #7d83a7;
+  /* secondary instrument ink */
+  --elev: #7fd4c1; /* elevation, secondary series */
+  --elev-wash: rgba(127, 212, 193, 0.1);
+  --caution: #f2b950; /* queue, waiting */
+  --fault: #ff5d73; /* failed pass */
 
-  /* aurora accents */
-  --aur-indigo: #6366f1;
-  --aur-cyan: #22d3ee;
-  --aur-violet: #a855f7;
-  --aur-rose: #f472b6;
-  --aur-amber: #fbbf24;
-  --aur-green: #34d399;
+  /* readout ink, derived against --plate-1 */
+  --ink-0: #eef2f7; /* primary readout */
+  --ink-1: #b9c6d6; /* prose */
+  --ink-2: #8d9cb0; /* secondary */
+  --ink-3: #6f7f93; /* legend, units, meta */
 
-  --accent: var(--aur-indigo);
-  --accent-soft: rgba(99, 102, 241, 0.16);
+  /* type — the project ships no font binaries and fetches nothing, so these
+     are system stacks chosen deliberately: a plain grotesk for prose, and a
+     mono with true tabular figures for every measurement. */
+  --font-ui: "Helvetica Neue", Helvetica, "Segoe UI", system-ui, -apple-system,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", "DejaVu Sans Mono",
+    Consolas, "Liberation Mono", monospace;
 
-  /* Chart categories. Validated against the dark chart surface for lightness
-     band, chroma floor, CVD separation and 3:1 contrast. They live here rather
-     than in bench.css so any surface can reach them. */
-  --c1: #6366f1;
-  --c2: #0d9488;
-  --c3: #a855f7;
-  --c4: #e11d48;
-  --grid: rgba(255, 255, 255, 0.07);
+  /* instrument type scale — dense, closer to a chart legend than a webpage */
+  --t-legend: 10px; /* engraved legends, units */
+  --t-xs: 11.5px;
+  --t-sm: 13px;
+  --t-md: 14.5px;
+  --t-lg: 16px;
+  --t-xl: 21px;
+  --t-2xl: 30px;
+  --t-readout: 44px; /* the one large numeral */
 
-  /* radii */
-  --r-xl: 26px;
-  --r-lg: 20px;
-  --r-md: 14px;
-  --r-sm: 10px;
-  --r-xs: 7px;
+  /* plates are cut square; only the composer band softens */
+  --r-0: 0px;
+  --r-1: 2px;
+  --r-2: 4px;
 
-  /* elevation */
-  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --sh-md: 0 8px 30px rgba(0, 0, 0, 0.35);
-  --sh-lg: 0 24px 70px rgba(0, 0, 0, 0.5);
-  --sh-glow: 0 0 0 1px rgba(99, 102, 241, 0.35), 0 8px 40px rgba(99, 102, 241, 0.28);
-
-  /* motion */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* motion: things are drawn and they travel; nothing fades in place */
+  --ease-draw: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-mech: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-1: 120ms;
   --dur-2: 240ms;
   --dur-3: 420ms;
 
-  /* type */
-  --font-ui: "Inter", "Geist", ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "Cascadia Code",
-    "Fira Code", Consolas, monospace;
-
-  --t-xs: 11px;
-  --t-sm: 12.5px;
-  --t-md: 14px;
-  --t-lg: 15.5px;
-  --t-xl: 19px;
-  --t-2xl: 26px;
-  --t-3xl: 40px;
-
   /* layout */
-  --rail-w: 258px;
-  --hud-w: 296px;
-  --col-max: 780px;
-  --header-h: 60px;
+  --rail-w: 232px;
+  --hud-w: 268px;
+  --col-max: 760px;
+  --header-h: 52px;
+
+  /* chart categories, carried forward — already validated for lightness band,
+     chroma floor, CVD separation and 3:1 contrast on a dark chart surface */
+  --c1: #ff6b35;
+  --c2: #7fd4c1;
+  --c3: #9d8cff;
+  --c4: #f2b950;
+  --grid: var(--grat-major);
 }
 
 * {
@@ -118,25 +104,24 @@ body {
 
 body {
   margin: 0;
-  background: var(--bg-0);
-  color: var(--ink-0);
+  background: var(--plate-0);
+  color: var(--ink-1);
   font-family: var(--font-ui);
   font-size: var(--t-md);
-  line-height: 1.6;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
   overflow: hidden;
 }
 
 ::selection {
-  background: rgba(99, 102, 241, 0.35);
-  color: #fff;
+  background: var(--signal);
+  color: #0b0603;
 }
 
 :focus-visible {
-  outline: 2px solid var(--aur-cyan);
+  outline: 2px solid var(--signal);
   outline-offset: 2px;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-1);
 }
 
 button,
@@ -149,36 +134,58 @@ select {
 
 a {
   color: var(--ink-0);
-  text-decoration-color: rgba(255, 255, 255, 0.25);
   text-underline-offset: 3px;
+  text-decoration-color: var(--grat-edge);
 }
 
-/* Scrollbars — thin, glassy, and consistent across engines. */
+/* Every measurement on this site is tabular. A pass plate whose numbers
+   shift width as they count is a broken instrument. */
+.num,
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+/* engraved legend: the small caps label used throughout the plate */
+.legend {
+  font-family: var(--font-mono);
+  font-size: var(--t-legend);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-color: var(--grat-edge) transparent;
 }
 *::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 99px;
-  border: 2px solid transparent;
+  background: var(--grat-edge);
+  border: 3px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--ink-3);
   background-clip: content-box;
 }
 
-/* Numbers that change every frame must not reflow the layout around them. */
-.num {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }

@@ -1,23 +1,25 @@
-/* Shared shell behaviour: canvas, mobile rail, toasts, health polling, copy. */
+/* Shared shell behaviour: the plate, mobile rail, toasts, health polling, copy. */
 
-import { startCanvas } from "./canvas.js";
+import { startPlate } from "./plate.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-/* ------------------------------------------------------------- canvas --- */
+/* -------------------------------------------------------------- plate --- */
 
 /**
- * Null when WebGL2 is unavailable — every caller uses `canvas?.pulse()`, and
- * the CSS gradient layers stay visible as the fallback.
+ * The graticule and ground-track layers behind the page.
+ *
+ * Null if the layers are absent or construction throws; every caller uses
+ * `plate?.method()`. Nothing on the page depends on it — with no plate the
+ * ground is still a legible surface and all content still reads, which is why
+ * this needs no fallback rendering path.
  */
-export const canvas = (() => {
-  const el = $("#gl");
-  if (!el) return null;
+export const plate = (() => {
   try {
-    return startCanvas(el);
+    return startPlate($("#graticule"), $("#track"));
   } catch (err) {
-    console.warn("[aurora] canvas unavailable:", err);
+    console.warn("[aurora] plate unavailable:", err);
     return null;
   }
 })();

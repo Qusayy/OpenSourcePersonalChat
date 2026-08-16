@@ -190,10 +190,6 @@ def delete_conversation(cid: str) -> None:
     _write("DELETE FROM conversations WHERE id = ?", (cid,))
 
 
-def rename_conversation(cid: str, title: str) -> None:
-    _write("UPDATE conversations SET title = ? WHERE id = ?", (title.strip()[:120], cid))
-
-
 # ----------------------------------------------------------------- messages --
 
 

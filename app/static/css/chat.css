@@ -25,6 +25,14 @@
   margin: 0 auto;
   padding: min(9vh, 84px) 22px 30px;
   text-align: center;
+  transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-out);
+}
+/* The empty state gives way to the first exchange. Exits are quicker than
+   entrances — the answer is what matters now. */
+.hero[data-leaving="true"] {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.99);
+  pointer-events: none;
 }
 
 .hero h1 {
@@ -32,11 +40,10 @@
   font-size: clamp(30px, 5.2vw, var(--t-3xl));
   line-height: 1.12;
   letter-spacing: -0.03em;
-  font-weight: 600;
-  background: linear-gradient(120deg, #fff 18%, #c7c9ff 45%, #9ff0ff 72%, #f0abfc);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  /* Solid, and the weight carries it. A gradient across a headline is
+     decoration standing in for hierarchy. */
+  font-weight: 650;
+  color: var(--ink-0);
 }
 
 .hero p {
@@ -57,7 +64,8 @@
 .hero-lead {
   margin: 0 0 14px;
   font-size: var(--t-sm);
-  color: var(--ink-3);
+  /* Directly on the aurora, so it cannot use --ink-3. */
+  color: var(--ink-2);
 }
 
 /* the armed-skill chip above the composer */
@@ -91,48 +99,6 @@
 }
 .skill-active .x:hover { background: rgba(255, 255, 255, 0.24); }
 
-.suggestions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  text-align: left;
-}
-
-.suggest {
-  padding: 14px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  /* Darkened glass rather than a white tint: these cards sit directly over the
-     aurora, and a lightening fill would drop the secondary label under 4.5:1. */
-  background: rgba(11, 13, 26, 0.5);
-  color: var(--ink-1);
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(10px);
-  animation: rise var(--dur-3) var(--ease-out) forwards;
-  transition: background var(--dur-1), border-color var(--dur-1), transform var(--dur-1);
-}
-.suggest:hover {
-  background: rgba(23, 27, 52, 0.62);
-  border-color: var(--glass-brd-strong);
-  transform: translateY(-1px);
-}
-.suggest b {
-  display: block;
-  color: var(--ink-0);
-  font-weight: 550;
-  font-size: var(--t-md);
-  margin-bottom: 2px;
-}
-.suggest span {
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-}
-.suggest:nth-child(1) { animation-delay: 60ms; }
-.suggest:nth-child(2) { animation-delay: 100ms; }
-.suggest:nth-child(3) { animation-delay: 140ms; }
-.suggest:nth-child(4) { animation-delay: 180ms; }
-
 /* ---------------------------------------------------------------- messages */
 
 .msg {
@@ -152,6 +118,14 @@
   border: 1px solid var(--glass-brd);
   background: rgba(99, 102, 241, 0.16);
   color: var(--ink-0);
+  /* A pasted URL is one unbroken word; without this it pushes the column
+     wider than the viewport instead of wrapping. */
+  overflow-wrap: anywhere;
+}
+
+/* dir="auto" flips the bubble's own corner for right-to-left text. */
+.msg.user .body[dir="auto"]:dir(rtl) {
+  border-radius: var(--r-lg) var(--r-lg) var(--r-lg) 5px;
 }
 
 .avatar {
@@ -174,17 +148,23 @@
   padding: 14px 18px 10px;
   border-radius: 5px var(--r-lg) var(--r-lg) var(--r-lg);
   /* Translucent fill, not backdrop-filter: hundreds of blurred cards is the
-     fastest way to make a scrolling thread stutter on a weak client. */
+     fastest way to make a scrolling thread stutter on a weak client. Alpha is
+     high enough that the answer's ground is bounded whatever the shader does. */
   border: 1px solid transparent;
   background:
-    linear-gradient(180deg, rgba(23, 27, 52, 0.66), rgba(11, 13, 26, 0.6)) padding-box,
+    linear-gradient(180deg, rgba(23, 27, 52, 0.93), rgba(11, 13, 26, 0.92)) padding-box,
     linear-gradient(140deg, rgba(99, 102, 241, 0.5), rgba(34, 211, 238, 0.22) 50%,
       rgba(168, 85, 247, 0.4)) border-box;
   box-shadow: var(--sh-sm);
 }
 
+.prose { overflow-wrap: anywhere; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
+/* A streaming answer is rendered as two containers — settled blocks and the
+   one still being written — so the margin resets have to reach through them. */
+.prose > div > :first-child { margin-top: 0; }
+.prose > div:last-child > :last-child { margin-bottom: 0; }
 .prose p { margin: 0 0 0.85em; }
 .prose h1, .prose h2, .prose h3 {
   margin: 1.1em 0 0.5em;
@@ -316,6 +296,12 @@
 .msg.bot:hover .msg-foot .act,
 .msg-foot .act:focus-within { opacity: 1; }
 
+/* Copy and ask-again were reachable only by hovering, which touch cannot do.
+   Without this they simply do not exist on a phone. */
+@media (hover: none) {
+  .msg-foot .act { opacity: 1; }
+}
+
 /* notices */
 .notice {
   align-self: center;
@@ -340,6 +326,31 @@
   background: rgba(244, 114, 182, 0.1);
   color: #ffd9ec;
 }
+/* The queue card is answering "when do I start?", so when the answer arrives
+   it should resolve rather than vanish. */
+.notice[data-leaving="true"] {
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+.notice-retry {
+  margin-left: 4px;
+  padding: 3px 12px;
+  border-radius: 99px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: var(--t-xs);
+  cursor: pointer;
+}
+.notice-retry:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#char-count.warn {
+  color: var(--aur-rose);
+}
+
 .notice .spin {
   width: 12px;
   height: 12px;
@@ -354,7 +365,7 @@
 
 .composer-wrap {
   flex: 0 0 auto;
-  padding: 10px 22px 18px;
+  padding: 10px 22px max(18px, env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(6, 7, 15, 0), rgba(6, 7, 15, 0.55) 45%);
 }
 
@@ -415,6 +426,7 @@
 
 #input {
   flex: 1;
+  min-width: 0;
   min-height: 26px;
   max-height: 208px;
   padding: 8px 0;
@@ -422,8 +434,11 @@
   background: transparent;
   resize: none;
   outline: none;
-  font-size: var(--t-lg);
+  /* Never below 16px: iOS Safari force-zooms a focused input under that and
+     leaves the page scrolled sideways. */
+  font-size: max(16px, var(--t-lg));
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 #input::placeholder { color: var(--ink-3); }
 
@@ -449,8 +464,21 @@
   background: linear-gradient(135deg, var(--aur-rose), #fb7185);
   box-shadow: 0 6px 22px rgba(244, 114, 182, 0.4);
 }
-.send svg { display: block; }
-.send .glyph { transition: d var(--dur-2) var(--ease-out); }
+.send svg { display: block; overflow: visible; }
+.send .glyph {
+  transform-origin: 12px 12px;
+  transition: opacity 140ms var(--ease-out), transform 240ms var(--ease-out);
+}
+.send[data-mode="send"] .stop,
+.send[data-mode="stop"] .go {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.6);
+}
+.send[data-mode="send"] .go,
+.send[data-mode="stop"] .stop {
+  opacity: 1;
+  transform: none;
+}
 
 .composer-foot {
   display: flex;
@@ -468,6 +496,36 @@
   border: 1px solid var(--glass-brd);
   background: var(--glass);
   color: var(--ink-2);
+}
+
+@media (pointer: coarse) {
+  .persona {
+    min-height: 44px;
+    padding: 0 16px;
+  }
+  .persona-row {
+    gap: 8px;
+    padding-bottom: 6px;
+  }
+  .copy-btn {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+  .send {
+    width: 48px;
+    height: 48px;
+  }
+  .skill-active {
+    min-height: 40px;
+  }
+  .skill-active .x {
+    width: 32px;
+    height: 32px;
+  }
+  /* The composer is in the thumb zone; give the row a little more room. */
+  .input-row {
+    padding-bottom: 12px;
+  }
 }
 
 @media (max-width: 620px) {

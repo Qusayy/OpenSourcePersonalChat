@@ -12,6 +12,7 @@
 {% block styles %}{% endblock %}
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <canvas id="gl" class="gl" aria-hidden="true"></canvas>
 <div class="aurora" aria-hidden="true"></div>
 <div class="aurora-alt" aria-hidden="true"></div>
@@ -35,7 +36,7 @@
   </aside>
   <div class="rail-scrim" id="rail-scrim" hidden></div>
 
-  <main class="center">
+  <main class="center" id="main" tabindex="-1">
     <header class="topbar">
       <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open conversations">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
@@ -54,9 +55,9 @@
       </nav>
     </header>
 
-    <div class="hud-strip" id="hud-strip" aria-hidden="true">
+    <div class="hud-strip" id="hud-strip" role="group" aria-label="Live metrics">
       <span><b class="num" data-strip="tps">—</b> tok/s</span>
-      <span><b class="num" data-strip="ttft">—</b> ms ttft</span>
+      <span><b class="num" data-strip="ttft">—</b> ms to first token</span>
       <span><b class="num" data-strip="ctx">0</b> / {{ info.n_ctx }} ctx</span>
       <span><b class="num" data-strip="rss">—</b> MB rss</span>
     </div>
@@ -68,6 +69,12 @@
 </div>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
+
+{# One deliberate announcement channel. The answer itself is NOT a live region:
+   its markup is rebuilt ten times a second while streaming, which floods a
+   screen reader with partial sentences. Milestones are announced here instead,
+   and the finished answer is read normally by browsing the page. #}
+<p class="sr-only" id="sr-status" role="status" aria-live="polite"></p>
 
 <script>
   window.AURORA = {

@@ -6,13 +6,8 @@
  * required secondary encoding for the tritan pair.
  */
 
-:root {
-  --c1: #6366f1; /* indigo  */
-  --c2: #0d9488; /* teal    */
-  --c3: #a855f7; /* violet  */
-  --c4: #e11d48; /* rose    */
-  --grid: rgba(255, 255, 255, 0.07);
-}
+/* --c1..--c4 and --grid now live in tokens.css so every surface can reach
+   them, not just the two pages that load this file. */
 
 .page {
   flex: 1;
@@ -63,7 +58,7 @@
   padding: 20px 22px;
   border-radius: var(--r-lg);
   border: 1px solid var(--glass-brd);
-  background: linear-gradient(180deg, rgba(17, 20, 42, 0.66), rgba(11, 13, 26, 0.6));
+  background: linear-gradient(180deg, rgba(17, 20, 42, 0.93), rgba(11, 13, 26, 0.92));
   box-shadow: var(--sh-md);
 }
 
@@ -86,10 +81,14 @@
 .progress i {
   display: block;
   height: 100%;
-  width: 0%;
+  width: 100%;
   border-radius: 99px;
   background: linear-gradient(90deg, var(--c1), var(--aur-cyan));
-  transition: width var(--dur-3) var(--ease-out);
+  /* scaleX, not width: this bar advances on every benchmark rep, and animating
+     width relayouts the row each frame. */
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-3) var(--ease-out);
 }
 .run-status {
   font-size: var(--t-sm);
@@ -109,7 +108,8 @@
   padding: 16px 18px;
   border-radius: var(--r-md);
   border: 1px solid var(--glass-brd);
-  background: var(--glass);
+  /* the caption under each number is --ink-3 */
+  background: var(--surface);
 }
 .tile .k {
   font-size: var(--t-xs);
@@ -160,12 +160,13 @@
 }
 .track i {
   position: absolute;
-  inset: 0 auto 0 0;
+  inset: 0;
   /* 4px rounded data end, anchored square to the baseline */
   border-radius: 0 4px 4px 0;
   background: var(--c1);
-  width: 0;
-  transition: width 600ms var(--ease-out);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 600ms var(--ease-out);
 }
 .track i.alt { background: var(--c3); }
 .bar-row .val {
@@ -310,6 +311,90 @@
 .tbl td:first-child { font-family: var(--font-ui); color: var(--ink-0); }
 .tbl tr.self td { color: var(--ink-0); background: rgba(99, 102, 241, 0.1); }
 .tbl-scroll { overflow-x: auto; }
+.tbl-empty { text-align: center; color: var(--ink-3); }
+
+/* An eight-column table does not survive a phone by scrolling sideways. Below
+   this width each row becomes a small card and every cell carries its own
+   heading, so the data is read rather than dragged. */
+/* Three columns on one line leaves the bar with ~55px on a phone — the value
+   text wins and the chart stops being a chart. Stack instead: label and value
+   share a line, the bar gets the full width beneath them. */
+@media (max-width: 680px) {
+  .bar-row,
+  #chart-ref .bar-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "lab val"
+      "bar bar";
+    row-gap: 7px;
+    margin-bottom: 4px;
+  }
+  .bar-row .lab {
+    grid-area: lab;
+    white-space: normal;
+  }
+  .bar-row .track,
+  .bar-row .strip {
+    grid-area: bar;
+  }
+  .bar-row .val {
+    grid-area: val;
+    align-self: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .tbl thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .tbl,
+  .tbl tbody,
+  .tbl tr,
+  .tbl td {
+    display: block;
+    width: 100%;
+  }
+  .tbl tr {
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--glass-brd);
+    border-radius: var(--r-sm);
+    background: var(--surface-inset);
+  }
+  .tbl td {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 4px 0;
+    border: 0;
+    text-align: right;
+  }
+  .tbl td::before {
+    content: attr(data-label);
+    font-family: var(--font-ui);
+    color: var(--ink-3);
+    text-align: left;
+  }
+  .tbl td:first-child {
+    margin-bottom: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--glass-brd);
+    font-size: var(--t-md);
+  }
+  .tbl td:first-child::before,
+  .tbl td.tbl-empty::before {
+    content: none;
+  }
+  .tbl td.tbl-empty {
+    display: block;
+    text-align: center;
+  }
+}
 
 .explain {
   color: var(--ink-1);

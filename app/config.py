@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     db_path: str = str(BASE_DIR / "data" / "aurora.db")
     hardware_label: str = "2 vCPU · 4 GB VPS"
     mock: bool = False
+    # Seconds between fake tokens in mock mode. The default imitates this
+    # hardware; drop it to near zero to drive the UI quickly in tests.
+    mock_delay: float = 0.085
 
     @property
     def resolved_model_path(self) -> Path:

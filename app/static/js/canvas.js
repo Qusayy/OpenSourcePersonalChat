@@ -168,6 +168,23 @@ export function startCanvas(canvas) {
   let start = performance.now();
   let last = 0;
   let generating = false;
+  let waiting = false;
+  let painted = false;
+  let dead = false;
+
+  /* The fallback must be able to come back.
+   *
+   * `data-canvas="on"` hides the CSS gradient layers. If the GL context is
+   * then lost — software renderers, a driver reset, GPU switching, too many
+   * live contexts — the page is left with a dead canvas and no background at
+   * all, and since the rail, header and composer are translucent glass, the
+   * whole interface washes out and text contrast collapses. So the attribute
+   * goes on only after a frame has actually been painted, and comes straight
+   * back off if the context dies. */
+  function useShader(on) {
+    if (on) document.documentElement.dataset.canvas = "on";
+    else delete document.documentElement.dataset.canvas;
+  }
 
   function draw(now) {
     raf = requestAnimationFrame(draw);
@@ -176,17 +193,32 @@ export function startCanvas(canvas) {
     if (now - last < interval) return;
     last = now;
 
+    if (gl.isContextLost()) return fallback();
     if (!resize()) return;
+
+    if (waiting) {
+      // Prefill: the model is reading the prompt and has produced nothing yet.
+      // A slow swell says "working" without pretending to be progress, and
+      // leaves somewhere for the first token to land.
+      const t = (now - start) / 1000;
+      target = 0.34 + 0.1 * Math.sin(t * 1.7);
+    } else {
+      target += (IDLE - target) * 0.02; // pulses decay back toward idle
+    }
     energy += (target - energy) * 0.06;
-    target += (IDLE - target) * 0.02; // pulses decay back toward idle
 
     gl.uniform2f(uRes, width, height);
     gl.uniform1f(uTime, (now - start) / 1000);
     gl.uniform1f(uEnergy, energy);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (!painted) {
+      painted = true;
+      useShader(true);
+    }
   }
 
   function drawOnce() {
+    if (gl.isContextLost()) return fallback();
     if (!resize()) {
       requestAnimationFrame(drawOnce); // wait for layout, then paint
       return;
@@ -195,6 +227,8 @@ export function startCanvas(canvas) {
     gl.uniform1f(uTime, 12.0);
     gl.uniform1f(uEnergy, IDLE);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    painted = true;
+    useShader(true);
   }
 
   function stop() {
@@ -203,9 +237,35 @@ export function startCanvas(canvas) {
   }
 
   function play() {
-    if (reduced || raf !== null) return;
+    if (reduced || dead || raf !== null) return;
     last = 0;
     raf = requestAnimationFrame(draw);
+  }
+
+  function fallback() {
+    if (dead) return;
+    dead = true;
+    stop();
+    useShader(false); // CSS gradient layers take over again
+  }
+
+  canvas.addEventListener("webglcontextlost", (event) => {
+    // Without preventDefault the browser will not attempt a restore at all.
+    event.preventDefault();
+    fallback();
+  });
+
+  canvas.addEventListener("webglcontextrestored", () => {
+    // The program, shaders and VAO all died with the context. Rebuilding them
+    // correctly is more risk than the effect is worth mid-session, so the CSS
+    // background simply keeps the page.
+    console.info("[aurora] GL context restored; staying on the CSS background");
+  });
+
+  if (gl.isContextLost()) {
+    // Some software rasterisers hand back a context that is already gone.
+    fallback();
+    return null;
   }
 
   if (reduced) {
@@ -219,10 +279,8 @@ export function startCanvas(canvas) {
     else play();
   });
   window.addEventListener("resize", () => {
-    if (reduced) drawOnce();
+    if (reduced && !dead) drawOnce();
   });
-
-  document.documentElement.dataset.canvas = "on";
 
   return {
     /** Called per token: a spike that decays. */
@@ -231,7 +289,12 @@ export function startCanvas(canvas) {
     },
     setGenerating(value) {
       generating = !!value;
+      if (!value) waiting = false;
       target = value ? Math.max(target, 0.55) : IDLE;
+    },
+    /** Prefill has begun: hold a slow swell until the first token arrives. */
+    setWaiting(value) {
+      waiting = !!value;
     },
     stop,
   };

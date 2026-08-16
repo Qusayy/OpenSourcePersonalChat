@@ -36,18 +36,24 @@ async def _wikipedia(query: str) -> ToolResult:
             params={"q": q, "limit": 1},
         )
         if search.status_code == 403:
-            # Wikimedia blocks anonymous-looking clients. Set AURORA_USER_AGENT
-            # to something with a contact URL or email.
+            # Wikimedia blocks anonymous-looking clients. The visitor cannot
+            # act on that; the operator can, so the fix lives in the step label
+            # and the logs rather than in the sentence they read.
             return ToolResult(
                 False,
-                "Wikipedia refused the request — set AURORA_USER_AGENT to include "
-                "a contact URL.",
-                error="wikipedia_403",
+                "Wikipedia turned this server away. Lookups are unavailable "
+                "until the server operator sets a contact address.",
+                error="wikipedia 403 — set AURORA_USER_AGENT with a contact URL",
             )
         search.raise_for_status()
         pages = (search.json() or {}).get("pages") or []
         if not pages:
-            return ToolResult(False, f"Wikipedia has no article for {q!r}.", error="not_found")
+            return ToolResult(
+                False,
+                f"Wikipedia has no article for {q!r}. Try a different spelling "
+                "or a broader term.",
+                error="no article",
+            )
 
         key = pages[0].get("key") or pages[0].get("title", "").replace(" ", "_")
         summary = await client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{key}")
@@ -121,8 +127,12 @@ async def _weather(location: str) -> ToolResult:
         geo.raise_for_status()
         results = (geo.json() or {}).get("results") or []
         if not results:
-            return ToolResult(False, f"Could not find a place called {place!r}.",
-                              error="not_found")
+            return ToolResult(
+                False,
+                f"No place called {place!r} was found. Try adding a country, "
+                "like “Amman, Jordan”.",
+                error="no such place",
+            )
         spot = results[0]
 
         forecast = await client.get(
@@ -206,9 +216,13 @@ async def _currency(amount: float, from_currency: str, to_currency: str) -> Tool
     try:
         amount = float(amount)
     except (TypeError, ValueError):
-        return ToolResult(False, "That is not an amount.", error="bad_amount")
+        return ToolResult(False, "That amount is not a number.", error="bad amount")
     if not src or not dst:
-        return ToolResult(False, "Need both currencies.", error="missing")
+        return ToolResult(
+            False,
+            "Give both currencies, like “100 EUR to USD”.",
+            error="missing currency",
+        )
 
     async with _client() as client:
         res = await client.get(
@@ -216,13 +230,22 @@ async def _currency(amount: float, from_currency: str, to_currency: str) -> Tool
             params={"amount": amount, "from": src, "to": dst},
         )
         if res.status_code == 404:
-            return ToolResult(False, f"Unknown currency pair {src}/{dst}.", error="not_found")
+            return ToolResult(
+                False,
+                f"No rate available for {src} to {dst}. Use three-letter codes, "
+                "like EUR, USD or GBP.",
+                error="unknown pair",
+            )
         res.raise_for_status()
         payload = res.json()
 
     rates = payload.get("rates") or {}
     if dst not in rates:
-        return ToolResult(False, f"No rate for {src} → {dst}.", error="no_rate")
+        return ToolResult(
+            False,
+            f"No rate available for {src} to {dst} today.",
+            error="no rate",
+        )
 
     converted = rates[dst]
     rate = converted / amount if amount else 0

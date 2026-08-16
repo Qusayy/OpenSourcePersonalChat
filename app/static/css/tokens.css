@@ -1,5 +1,21 @@
-/* Design tokens. Dark-first; the light block at the bottom only has to
-   override colour tokens, so a light theme stays a one-file change. */
+/* Design tokens. Dark only — the use scene is a dark chat surface with an
+   aurora behind it, and there is no light theme to keep in step.
+
+   The ink ramp is derived, not picked. Text sits on translucent surfaces over
+   an animated shader, so the background luminance is whatever the aurora is
+   doing at that moment. Every tier below was solved in OKLCH against the
+   *brightest* ground it can ever land on, at one hue (~277°) so the neutrals
+   stay of a piece with the world instead of going flat grey.
+
+     tier      contrast on a panel   on raw aurora
+     --ink-0   15.7:1                12.0:1
+     --ink-1    9.4:1                 7.2:1
+     --ink-2    6.6:1                 5.1:1
+     --ink-3    4.7:1                 3.6:1  ← panel-backed text only
+
+   That last line is the one rule to remember: --ink-3 must have a surface
+   behind it. On the raw background it does not reach 4.5:1, and nothing but a
+   darker ground will fix that. */
 
 :root {
   /* surfaces */
@@ -8,18 +24,27 @@
   --bg-2: #11142a;
   --bg-3: #171b34;
 
-  /* glass */
+  /* glass — a white tint, so it *lightens* whatever is behind it. Fine for
+     decoration; never put small text on it over the aurora. */
   --glass: rgba(255, 255, 255, 0.055);
   --glass-strong: rgba(255, 255, 255, 0.085);
   --glass-brd: rgba(255, 255, 255, 0.10);
   --glass-brd-strong: rgba(255, 255, 255, 0.18);
   --blur: 14px;
 
-  /* ink */
+  /* Text-bearing surfaces. Opaque enough to bound the ground no matter what
+     the shader does behind them, translucent enough to keep the aurora's
+     colour. Elevation is carried by border and shadow, not by getting
+     lighter — a lighter surface would raise the ground and undo the ramp. */
+  --surface: rgba(17, 20, 42, 0.92);
+  --surface-2: rgba(20, 24, 48, 0.93);
+  --surface-inset: rgba(9, 11, 24, 0.45);
+
+  /* ink — see the header note; derived in OKLCH at h≈277° */
   --ink-0: #f2f4ff;
   --ink-1: #b9bede;
-  --ink-2: #7a80a6;
-  --ink-3: #565b7d;
+  --ink-2: #999fc2;
+  --ink-3: #7d83a7;
 
   /* aurora accents */
   --aur-indigo: #6366f1;
@@ -31,6 +56,15 @@
 
   --accent: var(--aur-indigo);
   --accent-soft: rgba(99, 102, 241, 0.16);
+
+  /* Chart categories. Validated against the dark chart surface for lightness
+     band, chroma floor, CVD separation and 3:1 contrast. They live here rather
+     than in bench.css so any surface can reach them. */
+  --c1: #6366f1;
+  --c2: #0d9488;
+  --c3: #a855f7;
+  --c4: #e11d48;
+  --grid: rgba(255, 255, 255, 0.07);
 
   /* radii */
   --r-xl: 26px;

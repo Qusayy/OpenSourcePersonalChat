@@ -154,9 +154,14 @@ def _format(frac: Fraction) -> tuple[str, bool]:
 async def _calculator(expression: str) -> ToolResult:
     expr = (expression or "").strip().rstrip("=").strip()
     if not expr:
-        return ToolResult(False, "Nothing to calculate.", error="empty")
+        return ToolResult(False, "There is no expression to calculate.", error="empty")
     if len(expr) > MAX_EXPR:
-        return ToolResult(False, "That expression is too long.", error="too_long")
+        return ToolResult(
+            False,
+            f"That expression is longer than {MAX_EXPR} characters. Try it in "
+            "smaller parts.",
+            error="too long",
+        )
 
     # Accept the way people actually type maths.
     normalised = (
@@ -167,9 +172,20 @@ async def _calculator(expression: str) -> ToolResult:
         tree = ast.parse(normalised, mode="eval")
         value = _eval(tree)
     except CalcError as exc:
-        return ToolResult(False, f"Cannot evaluate that: {exc}", error=str(exc))
+        return ToolResult(
+            False,
+            "That is not something this calculator handles. It does numbers, "
+            "the usual operators, and functions like sqrt, round, log and "
+            "factorial.",
+            error=str(exc),
+        )
     except SyntaxError:
-        return ToolResult(False, "That is not a valid expression.", error="syntax")
+        return ToolResult(
+            False,
+            "That expression is incomplete — check for a missing bracket or "
+            "operator.",
+            error="syntax",
+        )
 
     text, exact = _format(value)
     return ToolResult(
@@ -254,7 +270,12 @@ async def _clock(timezone_name: str = "UTC") -> ToolResult:
     try:
         from zoneinfo import ZoneInfo  # noqa: F401 — probe for the stdlib module
     except ImportError:  # pragma: no cover - stdlib since 3.9
-        return ToolResult(False, "Timezone support unavailable.", error="no_zoneinfo")
+        return ToolResult(
+            False,
+            "This server has no timezone database installed, so only UTC is "
+            "available.",
+            error="no timezone data",
+        )
 
     tz, name, note = _resolve_zone(timezone_name)
 
@@ -372,23 +393,32 @@ async def _convert(value: float, from_unit: str, to_unit: str) -> ToolResult:
     try:
         value = float(value)
     except (TypeError, ValueError):
-        return ToolResult(False, "That is not a number.", error="bad_value")
+        return ToolResult(False, "That value is not a number.", error="bad value")
 
     if src in TEMPS or dst in TEMPS:
         if src not in TEMPS or dst not in TEMPS:
-            return ToolResult(False, "Cannot convert temperature to anything else.",
-                              error="dimension_mismatch")
+            return ToolResult(
+            False,
+            "Temperatures convert only to other temperatures — C, F or K.",
+            error="mismatched units",
+        )
         out = _from_celsius(_to_celsius(value, src), dst)
         dimension = "temperature"
     else:
         if src not in UNITS or dst not in UNITS:
             unknown = src if src not in UNITS else dst
-            return ToolResult(False, f"Unknown unit: {unknown}", error="unknown_unit")
+            return ToolResult(
+                False,
+                f"{unknown!r} is not a unit this converter knows. It handles "
+                "length, mass, time, data, speed, volume and temperature.",
+                error="unknown unit",
+            )
         if UNITS[src][0] != UNITS[dst][0]:
             return ToolResult(
                 False,
-                f"Cannot convert {UNITS[src][0]} to {UNITS[dst][0]}.",
-                error="dimension_mismatch",
+                f"Those measure different things — {UNITS[src][0]} cannot "
+                f"convert to {UNITS[dst][0]}.",
+                error="mismatched units",
             )
         dimension = UNITS[src][0]
         out = value * UNITS[src][1] / UNITS[dst][1]
@@ -434,7 +464,7 @@ STOPWORDS = set(
 async def _text_stats(text: str) -> ToolResult:
     body = (text or "").strip()
     if not body:
-        return ToolResult(False, "No text given.", error="empty")
+        return ToolResult(False, "There is no text to measure.", error="empty")
 
     words = re.findall(r"[A-Za-z0-9']+", body)
     sentences = [s for s in re.split(r"[.!?]+(?:\s|$)", body) if s.strip()]

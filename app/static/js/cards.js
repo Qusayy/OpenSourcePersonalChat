@@ -168,7 +168,7 @@ const RENDERERS = {
       d.truncated ? " · truncated" : ""
     }
           <a class="src" href="${escapeHtml(d.url || "#")}" target="_blank"
-             rel="noopener noreferrer">open ↗</a>
+             rel="noopener noreferrer">Open the page ↗</a>
         </div>
       </div>`);
   },

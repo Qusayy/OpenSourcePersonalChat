@@ -12,20 +12,25 @@
 </button>
 
 <div class="rail-scroll">
-  <div class="rail-label">History</div>
-  <div id="convo-list">
+  <div class="rail-label" id="history-label">History</div>
+  {# Two sibling buttons, never a button inside a button: the old nested
+     span[role=button] was invalid markup and unreachable by keyboard. #}
+  <ul class="convo-list" id="convo-list" aria-labelledby="history-label">
     {% for c in conversations %}
-    <button class="convo" data-id="{{ c.id }}">
-      <span class="t">{{ c.title }}</span>
-      <span class="m">{{ c.n }} messages</span>
-      <span class="x" role="button" tabindex="0" aria-label="Delete conversation" data-del="{{ c.id }}">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </span>
-    </button>
+    <li class="convo">
+      <button class="convo-open" type="button" data-id="{{ c.id }}">
+        <span class="t">{{ c.title }}</span>
+        <span class="m">{{ c.n }} messages</span>
+      </button>
+      <button class="convo-del" type="button" data-del="{{ c.id }}"
+              aria-label="Delete conversation: {{ c.title }}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </li>
     {% else %}
-    <p class="muted" style="padding:6px 10px;font-size:var(--t-sm)">Nothing yet.</p>
+    <li class="convo-empty muted">No conversations yet.</li>
     {% endfor %}
-  </div>
+  </ul>
 </div>
 {% endblock %}
 
@@ -48,7 +53,8 @@
     <div class="skill-grid" id="skill-grid"></div>
   </section>
 
-  <div class="thread" id="thread" aria-live="polite" aria-relevant="additions"></div>
+  {# Not a live region — see #sr-status in base.html for why. #}
+  <div class="thread" id="thread"></div>
 </div>
 
 <div class="composer-wrap">
@@ -65,18 +71,26 @@
       {% endfor %}
     </div>
     <div class="input-row">
+      <label class="sr-only" for="input">Message {{ info.model }}</label>
       <textarea id="input" rows="1" placeholder="Ask {{ info.model }} something…"
-                autocomplete="off" spellcheck="true"></textarea>
+                autocomplete="off" spellcheck="true"
+                maxlength="8000" aria-describedby="input-hint"
+                aria-controls="palette" aria-expanded="false"></textarea>
       <button class="send" id="send" type="submit" data-mode="send" aria-label="Send message">
+        {# Both marks are present and crossfade; swapping one path's `d` gives
+           an instant snap, which reads as a glitch rather than a state change. #}
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path class="glyph" id="send-glyph" d="M5 12h13M12 5l7 7-7 7"/>
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true">
+          <path class="glyph go" d="M5 12h13M12 5l7 7-7 7"/>
+          <path class="glyph stop" d="M8 8h8v8H8z"/>
         </svg>
       </button>
     </div>
     <div class="composer-foot">
-      <span><span class="kbd">Enter</span> send · <span class="kbd">Shift ↵</span> newline</span>
+      <span id="input-hint"><span class="kbd">Enter</span> send · <span class="kbd">Shift ↵</span> newline</span>
       <span class="spacer"></span>
+      <span id="char-count" class="mono" hidden></span>
       <span id="ctx-hint" class="mono"></span>
     </div>
   </form>
@@ -104,7 +118,7 @@
   <div class="hud-card">
     <div class="big-stat">
       <span class="v num" id="tps-value" data-empty="true">—</span>
-      <span class="u">tokens / sec</span>
+      <span class="u">tokens per second</span>
     </div>
     <svg class="spark" id="spark" viewBox="0 0 120 38" preserveAspectRatio="none" aria-hidden="true">
       <path id="spark-fill" fill="url(#sparkfill)" d=""></path>
@@ -112,7 +126,7 @@
             stroke-linejoin="round" stroke-linecap="round" d=""></path>
     </svg>
     <div class="stat-grid" style="margin-top:10px">
-      <div class="stat"><div class="k">TTFT</div><div class="v" id="ttft-value">—</div></div>
+      <div class="stat"><div class="k">First token</div><div class="v" id="ttft-value">—</div></div>
       <div class="stat"><div class="k">Tokens out</div><div class="v" id="out-value">—</div></div>
     </div>
   </div>

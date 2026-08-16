@@ -228,7 +228,7 @@ class Engine:
         """Yield text deltas from llama.cpp (or the mock generator)."""
         if self.cfg.mock:
             for i, word in enumerate(MOCK_VOCAB):
-                time.sleep(0.085)  # ~11 tok/s, the shape of the real thing
+                time.sleep(self.cfg.mock_delay)  # ~11 tok/s by default
                 yield ("" if i == 0 else " ") + word
             return
 
@@ -323,7 +323,10 @@ class Engine:
 
         if not self.ready:
             self._cancels.pop(request_id, None)
-            yield "error", {"message": self.state.error or "Model is not ready yet."}
+            yield "error", {
+                "message": self.state.error
+                or "The model is still loading. Give it a moment, then send again."
+            }
             return
 
         loop = asyncio.get_running_loop()

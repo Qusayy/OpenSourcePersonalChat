@@ -189,8 +189,8 @@ async def _read_url(url: str) -> ToolResult:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:
-                            return ToolResult(False, "Redirect without a destination.",
-                                              error="bad_redirect")
+                            return ToolResult(False, "That link redirected to nowhere.",
+                                              error="bad redirect")
                         final = urljoin(final, location)
                         continue
 
@@ -199,9 +199,9 @@ async def _read_url(url: str) -> ToolResult:
                     if not any(t in content_type for t in ALLOWED_TYPES):
                         return ToolResult(
                             False,
-                            f"That link is {content_type.split(';')[0] or 'an unknown type'}, "
-                            "not a readable page.",
-                            error="unsupported_type",
+                            f"That link returns {content_type.split(';')[0] or 'a file'}, "
+                            "not a web page I can read.",
+                            error="not a page",
                         )
                     async for chunk in response.aiter_bytes():
                         body += chunk
@@ -209,16 +209,37 @@ async def _read_url(url: str) -> ToolResult:
                             break
                     break
             else:
-                return ToolResult(False, "Too many redirects.", error="too_many_redirects")
+                return ToolResult(
+                    False,
+                    "That link kept redirecting and never arrived at a page.",
+                    error="too many redirects",
+                )
 
     except BlockedURL as exc:
-        return ToolResult(False, f"Refused to fetch that URL: {exc}", error=f"blocked: {exc}")
+        reason = str(exc)
+        if "scheme" in reason:
+            message = "That is not a web link. Give an http:// or https:// address."
+        elif "resolve" in reason:
+            message = ("That address does not resolve. Check the spelling of the "
+                       "domain.")
+        else:
+            message = ("That address is on a private network, so this server will "
+                       "not open it. Use a public link.")
+        return ToolResult(False, message, error="blocked")
     except httpx.HTTPStatusError as exc:
-        return ToolResult(False, f"The site returned {exc.response.status_code}.",
-                          error="http_error")
+        return ToolResult(
+            False,
+            f"That page returned {exc.response.status_code} — the link may be "
+            "wrong, or the page may have moved.",
+            error=f"http {exc.response.status_code}",
+        )
     except httpx.HTTPError as exc:
-        return ToolResult(False, f"Could not reach that URL: {type(exc).__name__}",
-                          error=str(exc))
+        return ToolResult(
+            False,
+            "Could not reach that site. It may be down, or the address may be "
+            "mistyped.",
+            error="unreachable",
+        )
 
     html = body.decode("utf-8", errors="replace")
     if "text/plain" in content_type:
@@ -232,7 +253,12 @@ async def _read_url(url: str) -> ToolResult:
         title, text = parser.title, parser.text()
 
     if not text:
-        return ToolResult(False, "That page had no readable text.", error="empty_page")
+        return ToolResult(
+            False,
+            "That page had no readable text — it may build its content with "
+            "JavaScript, which this reader does not run.",
+            error="no text",
+        )
 
     truncated = len(text) > MAX_TEXT
     text = text[:MAX_TEXT]

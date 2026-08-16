@@ -77,36 +77,17 @@ export function countUp(el, to, { decimals = 0, duration = 700 } = {}) {
   const from = 0;
   const start = performance.now();
   const tick = (now) => {
-    const t = Math.min((now - start) / duration, 1);
+    // Clamp the low end too: a requestAnimationFrame timestamp can precede the
+    // performance.now() taken moments earlier, and a negative t runs
+    // easeOutExpo backwards — which briefly renders a negative figure where a
+    // measurement should be.
+    const t = Math.min(Math.max((now - start) / duration, 0), 1);
     // easeOutExpo — fast then settling, matches the spring elsewhere
     const eased = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
     el.textContent = format(from + (target - from) * eased);
     if (t < 1) requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
-}
-
-/**
- * FLIP: capture positions, mutate the DOM, then animate the delta so elements
- * slide to their new places instead of jumping.
- */
-export function flip(elements) {
-  const first = new Map();
-  [...elements].forEach((el) => first.set(el, el.getBoundingClientRect()));
-
-  return function play() {
-    if (REDUCED) return;
-    first.forEach((box, el) => {
-      const now = el.getBoundingClientRect();
-      const dx = box.left - now.left;
-      const dy = box.top - now.top;
-      if (!dx && !dy) return;
-      el.animate(
-        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }],
-        { duration: 320, easing: "cubic-bezier(.16,1,.3,1)" }
-      );
-    });
-  };
 }
 
 /** A one-shot attention pulse, used when a tool result lands. */

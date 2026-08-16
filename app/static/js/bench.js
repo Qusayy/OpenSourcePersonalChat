@@ -51,7 +51,7 @@ function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
         r.sub ? `<small>${escapeHtml(r.sub)}</small>` : ""
       }</span>
         <span class="track" title="${escapeHtml(r.label)}: ${fmt(r.value, digits)} ${unit}">
-          <i class="${alt ? "alt" : ""}" style="width:${Math.max(1.5, (100 * r.value) / top).toFixed(2)}%"></i>
+          <i class="${alt ? "alt" : ""}" style="transform:scaleX(${Math.max(0.015, r.value / top).toFixed(4)})"></i>
         </span>
         <span class="val">${fmt(r.value, digits)}<small> ${unit}</small>${
         r.extra ? `<small> · ${escapeHtml(r.extra)}</small>` : ""
@@ -165,14 +165,14 @@ function caseTable(summary) {
     .map(
       (c) => `
       <tr>
-        <td>${escapeHtml(c.label)}</td>
-        <td>${fmtInt(c.prompt_tokens)}</td>
-        <td>${fmtInt(c.gen_tokens)}</td>
-        <td>${c.reps}</td>
-        <td>${fmt(c.prefill_tps, 1)}</td>
-        <td>${fmt(c.gen_tps, 2)}</td>
-        <td>${fmtMs(c.ttft_p50)}</td>
-        <td>${fmtMs(c.ttft_p95)}</td>
+        <td data-label="Case">${escapeHtml(c.label)}</td>
+        <td data-label="Prompt tokens">${fmtInt(c.prompt_tokens)}</td>
+        <td data-label="Generated tokens">${fmtInt(c.gen_tokens)}</td>
+        <td data-label="Runs">${c.reps}</td>
+        <td data-label="Prefill tok/s">${fmt(c.prefill_tps, 1)}</td>
+        <td data-label="Gen tok/s">${fmt(c.gen_tps, 2)}</td>
+        <td data-label="TTFT p50">${fmtMs(c.ttft_p50)}</td>
+        <td data-label="TTFT p95">${fmtMs(c.ttft_p95)}</td>
       </tr>`
     )
     .join("");
@@ -232,7 +232,7 @@ els.run.addEventListener("click", async () => {
   if (running) return;
   running = true;
   els.run.disabled = true;
-  els.progress.style.width = "0%";
+  els.progress.style.transform = "scaleX(0)";
   els.status.textContent = "Starting…";
 
   const live = [];
@@ -241,10 +241,10 @@ els.run.addEventListener("click", async () => {
       onEvent: (event, data) => {
         if (event === "stage") {
           els.status.textContent = data.text;
-          if (data.pct != null) els.progress.style.width = `${data.pct}%`;
+          if (data.pct != null) els.progress.style.transform = `scaleX(${data.pct / 100})`;
         } else if (event === "rep") {
           live.push(data);
-          els.progress.style.width = `${data.pct}%`;
+          els.progress.style.transform = `scaleX(${data.pct / 100})`;
           els.status.textContent = `${data.case} run ${data.rep}: ${fmt(
             data.gen_tps,
             2
@@ -252,7 +252,7 @@ els.run.addEventListener("click", async () => {
         } else if (event === "case") {
           els.status.textContent = `${data.label} done — median ${fmt(data.gen_tps, 2)} tok/s`;
         } else if (event === "summary") {
-          els.progress.style.width = "100%";
+          els.progress.style.transform = "scaleX(1)";
           els.status.textContent = `Finished in ${fmt(data.elapsed_s, 0)}s — median ${fmt(
             data.gen_tps,
             2

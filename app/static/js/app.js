@@ -44,19 +44,44 @@ export function toast(message, kind = "") {
 const rail = $("#rail");
 const scrim = $("#rail-scrim");
 
+const menuBtn = $("#menu-btn");
+
 export function setRail(open) {
   if (!rail) return;
+  const was = rail.dataset.open === "true";
   rail.dataset.open = String(open);
+  rail.setAttribute("aria-hidden", String(!open && isDrawer()));
+  menuBtn?.setAttribute("aria-expanded", String(open));
   if (scrim) {
     scrim.hidden = !open;
     scrim.dataset.open = String(open);
   }
+  // A drawer that opens without moving focus leaves a keyboard or screen-reader
+  // user still outside it, and closing without returning focus strands them at
+  // the top of the page.
+  if (!isDrawer() || open === was) return;
+  if (open) rail.querySelector("button, a")?.focus();
+  else menuBtn?.focus();
 }
 
-$("#menu-btn")?.addEventListener("click", () => setRail(rail?.dataset.open !== "true"));
+/** True only while the rail is actually behaving as an overlay drawer. */
+function isDrawer() {
+  return window.matchMedia("(max-width: 860px)").matches;
+}
+
+menuBtn?.addEventListener("click", () => setRail(rail?.dataset.open !== "true"));
 scrim?.addEventListener("click", () => setRail(false));
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") setRail(false);
+});
+
+// Leaving drawer width must not leave the rail marked hidden.
+window.matchMedia("(max-width: 860px)").addEventListener("change", (e) => {
+  if (!e.matches) {
+    rail?.removeAttribute("aria-hidden");
+    rail?.removeAttribute("data-open");
+    if (scrim) scrim.hidden = true;
+  }
 });
 
 /* ------------------------------------------------------- copy code block -- */

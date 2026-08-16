@@ -79,6 +79,23 @@ class Tool:
         }
 
 
+# Argument names are internal; a person being told what is missing should get
+# a noun phrase, not a parameter.
+MISSING_HINT = {
+    "expression": "an expression",
+    "url": "a link",
+    "location": "a place",
+    "query": "something to look up",
+    "text": "some text",
+    "value": "a value",
+    "from_unit": "a unit to convert from",
+    "to_unit": "a unit to convert to",
+    "amount": "an amount",
+    "from_currency": "a currency to convert from",
+    "to_currency": "a currency to convert to",
+    "timezone_name": "a timezone",
+}
+
 REGISTRY: dict[str, Tool] = {}
 
 # Outbound calls are capped globally. A public URL should not become somebody
@@ -89,13 +106,6 @@ _net_semaphore = asyncio.Semaphore(2)
 def register(tool: Tool) -> Tool:
     REGISTRY[tool.name] = tool
     return tool
-
-
-def tool_list(include_network: bool | None = None) -> list[dict]:
-    tools = REGISTRY.values()
-    if include_network is False:
-        tools = [t for t in tools if not t.network]
-    return [t.as_dict() for t in tools]
 
 
 def available() -> list[Tool]:
@@ -114,10 +124,13 @@ def available() -> list[Tool]:
 async def call_tool(name: str, args: dict) -> ToolResult:
     tool = REGISTRY.get(name)
     if tool is None:
-        return ToolResult(False, f"No such tool: {name}", error="unknown_tool")
+        return ToolResult(False, f"There is no tool called {name!r}.", error="unknown tool")
     if tool.network and not settings.allow_outbound:
         return ToolResult(
-            False, "Network tools are disabled on this server.", error="outbound_disabled"
+            False,
+            "This server has outgoing requests switched off, so Wikipedia, "
+            "weather, currency and page reading are unavailable.",
+            error="offline mode",
         )
 
     # Drop anything the tool did not declare — the model invents arguments.
@@ -129,7 +142,10 @@ async def call_tool(name: str, args: dict) -> ToolResult:
     missing = [a.name for a in tool.required_args() if a.name not in clean]
     if missing:
         return ToolResult(
-            False, f"{tool.label} needs: {', '.join(missing)}", error="missing_args"
+            False,
+            f"{tool.label} needs "
+            f"{' and '.join(MISSING_HINT.get(m, m) for m in missing)}.",
+            error="missing input",
         )
 
     t0 = time.perf_counter()
@@ -144,14 +160,15 @@ async def call_tool(name: str, args: dict) -> ToolResult:
     except asyncio.TimeoutError:
         return ToolResult(
             False,
-            f"{tool.label} timed out after {settings.tool_timeout}s.",
+            f"{tool.label} gave up after {settings.tool_timeout} seconds. "
+            "The source may be slow or unreachable — try again.",
             ms=(time.perf_counter() - t0) * 1000,
             error="timeout",
         )
     except Exception as exc:  # noqa: BLE001 — surfaced as a failed step in the UI
         return ToolResult(
             False,
-            f"{tool.label} failed: {type(exc).__name__}",
+            f"{tool.label} could not finish. Try again, or ask without it.",
             ms=(time.perf_counter() - t0) * 1000,
             error=f"{type(exc).__name__}: {exc}",
         )

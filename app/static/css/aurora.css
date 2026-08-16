@@ -47,7 +47,21 @@
   inset: -35%;
   z-index: -2;
   pointer-events: none;
+}
+
+/* Two full-viewport compositor layers are not free. Promote them only while
+   they are the background actually in use — with the shader running these are
+   display:none, and the hint would reserve memory for nothing. */
+:root:not([data-canvas="on"]) .aurora,
+:root:not([data-canvas="on"]) .aurora-alt {
   will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora,
+  .aurora-alt {
+    will-change: auto;
+  }
 }
 
 /* Positions are in the layer's own coordinates, and the layer is inset -35%
@@ -111,15 +125,70 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
+/* Reduced motion is not "no motion".
+ *
+ * The old blanket `* { animation-duration: 0.001ms }` also flattened every
+ * transition, so hover, focus, disabled and loading states all changed with a
+ * hard cut and the interface stopped acknowledging input. What actually needs
+ * removing is looping decoration and travel across the screen; colour and
+ * opacity still carry meaning and stay. */
 @media (prefers-reduced-motion: reduce) {
+  /* 1. Stop the ambient loops. `!important` because this block cannot win on
+        source order — chat.css and cards.css load after it, and .dot.ready is
+        defined further down this very file. A targeted override, not a
+        blanket one. */
   .aurora,
-  .aurora-alt {
+  .aurora-alt,
+  .dot.ready,
+  .dot.loading,
+  .tl-step[data-status="running"] .g,
+  .msg-foot .act,
+  .mono-badge {
     animation: none !important;
   }
-  * {
-    animation-duration: 0.001ms !important;
+
+  /* 2. The spinner becomes a static mark rather than disappearing: it still
+        says "working", it just stops turning. */
+  .notice .spin {
+    animation: none !important;
+    border-top-color: currentColor;
+    opacity: 0.7;
+  }
+
+  /* 3. The caret stops blinking but stays visible, so the writing position is
+        still obvious. */
+  .caret {
+    animation: none !important;
+  }
+
+  /* 4. No travel: entrances resolve in place, and press/hover offsets go. */
+  /* Anything whose entrance animation is cancelled here must be forced
+     visible: several of these start at opacity 0 and rely on that animation
+     to appear at all. Removing the motion must never remove the content. */
+  .toast,
+  .skill,
+  .msg,
+  .tl-step,
+  .card-tool,
+  .boot-line,
+  .hero {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .btn:active,
+  .send:active,
+  .skill:hover {
+    transform: none !important;
+  }
+
+  /* 5. Everything else keeps its transition — shortened, not removed, so
+        feedback is immediate but still legible as a change. */
+  *,
+  *::before,
+  *::after {
+    transition-duration: 120ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
   }
 }
 
@@ -156,7 +225,11 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 16px 12px;
+  /* viewport-fit=cover means the page runs under the notch and the home
+     indicator; these reclaim it without adding padding on hardware that has
+     no inset. */
+  padding: 16px 12px max(16px, env(safe-area-inset-bottom));
+  padding-left: max(12px, env(safe-area-inset-left));
   gap: 14px;
   background: linear-gradient(180deg, rgba(11, 13, 26, 0.72), rgba(6, 7, 15, 0.62));
   backdrop-filter: blur(var(--blur));
@@ -213,18 +286,29 @@
   padding: 2px 8px 8px;
 }
 
+.convo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.convo-empty {
+  padding: 6px 10px;
+  font-size: var(--t-sm);
+}
+
+/* Two sibling buttons, not one nested inside the other: a control inside a
+   control is invalid and leaves the inner one unreachable by keyboard. */
 .convo {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
-  text-align: left;
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink-1);
   border-radius: var(--r-md);
-  padding: 9px 30px 9px 11px;
   text-decoration: none;
-  cursor: pointer;
   transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
 }
 .convo:hover {
@@ -232,10 +316,23 @@
   border-color: var(--glass-brd);
   color: var(--ink-0);
 }
-.convo[aria-current="true"] {
+.convo:has(.convo-open[aria-current="true"]) {
   background: var(--accent-soft);
   border-color: rgba(99, 102, 241, 0.4);
   color: var(--ink-0);
+}
+
+.convo-open {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 9px 4px 9px 11px;
+  border-radius: inherit;
+  cursor: pointer;
+  font: inherit;
 }
 .convo .t {
   display: block;
@@ -249,29 +346,34 @@
   font-size: var(--t-xs);
   color: var(--ink-3);
 }
-.convo .x {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
+.convo-del {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-right: 5px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   color: var(--ink-3);
   opacity: 0;
   cursor: pointer;
+  transition: opacity var(--dur-1), background var(--dur-1), color var(--dur-1);
 }
-.convo:hover .x,
-.convo .x:focus-visible {
+.convo:hover .convo-del,
+.convo-del:focus-visible {
   opacity: 1;
 }
-.convo .x:hover {
+.convo-del:hover {
   background: rgba(244, 114, 182, 0.18);
   color: var(--aur-rose);
+}
+/* Touch has no hover to reveal it, so it is always visible there. */
+@media (hover: none) {
+  .convo-del {
+    opacity: 1;
+  }
 }
 
 .rail-foot {
@@ -290,7 +392,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 22px;
+  padding-left: max(22px, env(safe-area-inset-left));
+  padding-right: max(22px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--glass-brd);
   background: rgba(6, 7, 15, 0.42);
   backdrop-filter: blur(var(--blur));
@@ -446,16 +549,6 @@
   box-shadow: var(--sh-md);
 }
 
-/* A 1px aurora edge. Two backgrounds — one clipped to the padding box, one to
-   the border box — do what border-color alone cannot. */
-.card-edge {
-  border: 1px solid transparent;
-  background:
-    linear-gradient(180deg, rgba(23, 27, 52, 0.62), rgba(11, 13, 26, 0.58)) padding-box,
-    linear-gradient(135deg, rgba(99, 102, 241, 0.55), rgba(34, 211, 238, 0.28) 45%,
-      rgba(168, 85, 247, 0.45)) border-box;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -490,6 +583,30 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Hidden until focused, then a real, visible target — a keyboard user should
+   not have to tab the whole conversation rail to reach the composer. */
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 200;
+  padding: 10px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-brd-strong);
+  background: var(--bg-2);
+  color: var(--ink-0);
+  font-size: var(--t-sm);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+/* :focus, not :focus-visible — the link is only reachable by keyboard or AT in
+   the first place, and :focus-visible does not match programmatic focus, which
+   is exactly how assistive technology moves to it. */
+.skip-link:focus {
+  transform: none;
 }
 
 .toasts {
@@ -548,7 +665,9 @@
   padding: 13px 14px;
   border-radius: var(--r-md);
   border: 1px solid var(--glass-brd);
-  background: var(--glass);
+  /* was var(--glass): a white tint that lightened the aurora behind it and
+     pushed the boot lines under 3:1 */
+  background: var(--surface);
 }
 
 .big-stat {
@@ -564,10 +683,7 @@
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1;
-  background: linear-gradient(120deg, #fff, #a5f3fc);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--ink-0);
 }
 /* A gradient-clipped em dash reads as a stray bar, so the empty state opts out
    of the gradient entirely. */
@@ -600,7 +716,8 @@
   padding: 9px 11px;
   border-radius: var(--r-sm);
   border: 1px solid var(--glass-brd);
-  background: rgba(255, 255, 255, 0.03);
+  /* darkens rather than lightens, so nesting never raises the ground */
+  background: var(--surface-inset);
 }
 .stat .k {
   font-size: 10px;
@@ -744,4 +861,36 @@
 
 .menu-btn {
   display: none;
+}
+
+/* Touch, not width. A laptop with a touchscreen needs the same target size as
+   a phone, and a small window driven by a mouse does not. */
+@media (pointer: coarse) {
+  /* Explicit minimums rather than padding arithmetic: padding that happens to
+     add up to 44px on one font stack quietly falls short on another. */
+  .icon-btn,
+  .convo-del {
+    width: 44px;
+    height: 44px;
+  }
+  .convo-del {
+    margin-right: 2px;
+  }
+  .convo-open {
+    min-height: 52px;
+  }
+  .btn {
+    min-height: 44px;
+    padding: 10px 18px;
+  }
+  .navlinks a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 16px;
+  }
+  .pill {
+    min-height: 36px;
+    padding: 6px 14px;
+  }
 }

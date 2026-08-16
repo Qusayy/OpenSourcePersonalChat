@@ -60,7 +60,7 @@ export function getSkill(id) {
  * completes the command, picking a skill arms it. Either way the routing pass
  * is skipped entirely, which on 2 vCPU is worth several seconds.
  */
-export function setupPalette(input, host, { onSkill, onSubmit }) {
+export function setupPalette(input, host, { onSkill }) {
   let rows = [];
   let index = 0;
 
@@ -68,6 +68,8 @@ export function setupPalette(input, host, { onSkill, onSubmit }) {
     host.hidden = true;
     rows = [];
     index = 0;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
   };
 
   const build = (query) => {
@@ -102,14 +104,19 @@ export function setupPalette(input, host, { onSkill, onSubmit }) {
         lastKind = row.kind;
       }
       html += `
-        <button class="row" type="button" data-i="${i}" aria-selected="${i === index}">
+        <div class="row" role="option" id="pal-opt-${i}" data-i="${i}"
+             aria-selected="${i === index}">
           <span class="g">${glyphFor(row.id, row.glyph, 14)}</span>
           <span class="cmd">${escapeHtml(row.cmd)}</span>
           <span class="desc">${escapeHtml(row.desc)}</span>
-        </button>`;
+        </div>`;
     });
     host.innerHTML = html;
     host.hidden = rows.length === 0;
+    // A listbox needs its options announced through the input that owns it.
+    input.setAttribute("aria-expanded", String(!host.hidden));
+    if (host.hidden) input.removeAttribute("aria-activedescendant");
+    else input.setAttribute("aria-activedescendant", `pal-opt-${index}`);
     host.querySelectorAll(".row").forEach((btn) =>
       btn.addEventListener("mousedown", (e) => {
         e.preventDefault(); // keep focus in the textarea
@@ -165,5 +172,5 @@ export function setupPalette(input, host, { onSkill, onSubmit }) {
 
   input.addEventListener("blur", () => setTimeout(close, 120));
 
-  return { close, submit: onSubmit };
+  return { close };
 }

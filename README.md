@@ -130,6 +130,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
 | `AURORA_HARDWARE_LABEL` | `2 vCPU · 4 GB VPS` | shown throughout the UI |
 | `AURORA_MOCK` | `false` | run the site with no model present |
+| `AURORA_MOCK_DELAY` | `0.085` | seconds between fake tokens; `0` runs the mock at full speed |
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |

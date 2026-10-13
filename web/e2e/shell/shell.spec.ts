@@ -111,8 +111,11 @@ test.describe("moving between pages", () => {
 
   test("the skip link is the first stop and goes to the content", async ({ page }) => {
     await page.goto("/about");
-    await page.keyboard.press("Tab");
     const skip = page.getByRole("link", { name: "Skip to content" });
+    // The link is part of the app, not of the frame the HTML arrives with;
+    // under the dev server the app draws a request later than the page loads.
+    await expect(skip).toBeAttached();
+    await page.keyboard.press("Tab");
     await expect(skip).toBeFocused();
     await expect(skip).toBeInViewport();
     await page.keyboard.press("Enter");

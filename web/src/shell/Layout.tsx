@@ -163,15 +163,17 @@ function useHealthNotices(): void {
  */
 function usePageChange(): void {
   const { pathname, hash } = useLocation();
-  const first = useRef(true);
+  // The page last seen, not a "has run once" flag: a development build runs
+  // every effect twice on mount, and the second run of a flag would read as a
+  // change of page and take focus from wherever the visitor had put it.
+  const seen = useRef(pathname);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs for a new page, not for a new hash on the same one
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
-    } else if (!hash) {
-      const main = document.getElementById("main");
-      if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
-    }
+    if (seen.current === pathname) return;
+    seen.current = pathname;
+    if (hash) return;
+    const main = document.getElementById("main");
+    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
   }, [pathname]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the same #part on another page is a new place to scroll to
   useEffect(() => {

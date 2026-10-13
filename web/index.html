@@ -31,10 +31,12 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <!-- The frame, drawn with the HTML so the page is not a blank sheet while the
      script loads: the top bar with its name and an empty status line. React
      replaces all of it on its first render with the same frame, filled in.
-     The classes are the ones shell/TopBar.tsx gives its header and name. -->
+     The classes are the ones shell/TopBar.tsx gives its header and name. The
+     name is not a tab stop here: focus on it would be lost a moment later
+     when the real bar replaces it, and the first stop is the skip link. -->
 <div id="root">
   <header class="flex items-center gap-5 min-w-0 border-b border-rule pl-[max(var(--inset),env(safe-area-inset-left))] pr-[max(var(--inset),env(safe-area-inset-right))] le-620:gap-4">
-    <a class="text-3 font-bold tracking-[-0.01em] no-underline" href="/">Aurora</a>
+    <a class="text-3 font-bold tracking-[-0.01em] no-underline" href="/" tabindex="-1">Aurora</a>
   </header>
   <main></main>
   <footer class="status" aria-hidden="true"></footer>

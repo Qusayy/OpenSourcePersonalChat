@@ -233,17 +233,19 @@ font served from `static/fonts/` under the SIL Open Font License. Its `MONO`
 axis sets every figure fixed-width in the same letterforms as the prose.
 
 **The status line reports generation as it happens.** One line along the bottom
-of every page carries the model, the hardware and the server's state, each
-shown once. On the chat page it also carries what the current answer is
-costing: a rolling tokens-per-second figure sampled four times a second with
-its trace, tokens out, time to first token, and how much of the context window
-is in use. It names each phase of a request — queued, reading the prompt,
-writing — and counts the seconds through the waits. An answer that finishes
-while the tab is in the background stays marked until the tab is seen. The
-live figures are client-side arithmetic over the token stream; the ones left
-on the line afterwards are the server's own measurements. The page follows the
-visitor's light or dark setting, and under `prefers-reduced-motion` nothing
-loops or travels.
+of every page carries the server's state, the model and the hardware, each
+shown once, and on the chat page how much of the context window is in use.
+While a request is in flight it also carries what that answer is costing: a
+rolling tokens-per-second figure sampled four times a second with its trace,
+tokens out, and time to first token. It names each phase — queued, reading,
+writing — and counts the seconds through the waits. When the answer ends the
+figures leave the line and are printed under the reply they belong to, so the
+same number is never on screen twice. The rolling rate is client-side
+arithmetic over the token stream; time to first token is the server's own
+measurement, sent with the first token, and the figures under each reply are
+the server's too. An answer that finishes while the tab is in the background
+stays marked until the tab is seen. The page follows the visitor's light or
+dark setting, and under `prefers-reduced-motion` nothing loops or travels.
 
 ---
 

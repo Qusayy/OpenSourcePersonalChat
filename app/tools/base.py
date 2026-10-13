@@ -11,6 +11,8 @@ Two things a tool returns, and the difference matters:
 from __future__ import annotations
 
 import asyncio
+import math
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -118,6 +120,131 @@ def available() -> list[Tool]:
     return out
 
 
+# ---------------------------------------------------------------- checking ---
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """Why a call was not made.
+
+    Said twice, because it has two readers. ``reasons`` are for a model that
+    may be asked to try again: one plain fact per problem, naming the argument
+    as the model knows it. ``summary`` is the sentence a person reads on the
+    failed step. ``code`` is the short word the step is filed under.
+    """
+
+    reasons: tuple[str, ...]
+    summary: str
+    code: str  # "missing input" | "bad input"
+
+
+# A number written with thousands separators, the way amounts are typed.
+_GROUPED = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _coerce(arg: Arg, value: Any) -> tuple[Any, str | None]:
+    """One value against what its argument declares.
+
+    Returns the value to use and nothing, or anything and a complaint. The
+    complaint ends a sentence that begins with the argument's name.
+    """
+    if arg.type == "number":
+        # A bool is an int to Python and a mistake to everyone else.
+        if isinstance(value, bool):
+            return value, f"must be a number; got {value!r}"
+        if isinstance(value, (int, float)):
+            number = value
+        elif isinstance(value, str):
+            text = value.strip()
+            if _GROUPED.match(text):
+                text = text.replace(",", "")
+            try:
+                number = int(text)
+            except ValueError:
+                try:
+                    number = float(text)
+                except ValueError:
+                    return value, f"must be a number; got {value!r}"
+        else:
+            return value, f"must be a number; got {_kind(value)}"
+        if not math.isfinite(number):
+            return value, f"must be a finite number; got {value!r}"
+        return number, None
+
+    if isinstance(value, str):
+        return value, None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value), None
+    return value, f"must be text; got {_kind(value)}"
+
+
+def _kind(value: Any) -> str:
+    if isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, dict):
+        return "an object"
+    if isinstance(value, (list, tuple, set)):
+        return "a list"
+    return f"a {type(value).__name__}"
+
+
+def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:
+    """Turn what a call was given into what the tool can be run with.
+
+    Returns the arguments to run with and nothing, or a ``Rejection`` saying
+    why it should not be run. Every caller comes through here, so a tool never
+    has to wonder whether its number is a number:
+
+    * arguments the tool never declared are dropped — the model invents them;
+    * a number written as text becomes a number, and a number where text is
+      wanted becomes text;
+    * anything else of the wrong kind is refused, by name;
+    * an argument left out, or given as nothing, takes its default;
+    * a required one still missing after that is refused.
+    """
+    declared = {a.name: a for a in tool.args}
+    clean: dict[str, Any] = {}
+    refused: set[str] = set()
+    reasons: list[str] = []
+    said: list[str] = []
+
+    for name, value in (args or {}).items():
+        arg = declared.get(name)
+        if arg is None or value is None:
+            continue
+        value, complaint = _coerce(arg, value)
+        if complaint is None:
+            clean[name] = value
+            continue
+        refused.add(name)
+        reasons.append(f"{name} {complaint}")
+        hint = MISSING_HINT.get(name, name)
+        if arg.type == "number":
+            said.append(f"{tool.label} could not use {value!r} as {hint}: it is not a number.")
+        else:
+            said.append(f"{tool.label} could not use that as {hint}: it is not text.")
+
+    # A default stands in for an argument that was left out. It does not paper
+    # over one that was given and refused.
+    for arg in tool.args:
+        if arg.name not in clean and arg.name not in refused and arg.default is not None:
+            clean[arg.name] = arg.default
+
+    missing = [
+        a.name for a in tool.required_args() if a.name not in clean and a.name not in refused
+    ]
+    if missing:
+        reasons += [f"{name} is required and was not given" for name in missing]
+        said.append(
+            f"{tool.label} needs {' and '.join(MISSING_HINT.get(m, m) for m in missing)}."
+        )
+
+    if not reasons:
+        return clean, None
+    code = "bad input" if refused else "missing input"
+    return clean, Rejection(tuple(reasons), " ".join(said), code)
+
+
 # --------------------------------------------------------------- dispatch ---
 
 
@@ -133,20 +260,9 @@ async def call_tool(name: str, args: dict) -> ToolResult:
             error="offline mode",
         )
 
-    # Drop anything the tool did not declare — the model invents arguments.
-    known = {a.name for a in tool.args}
-    clean = {k: v for k, v in (args or {}).items() if k in known}
-    for a in tool.args:
-        if a.name not in clean and a.default is not None:
-            clean[a.name] = a.default
-    missing = [a.name for a in tool.required_args() if a.name not in clean]
-    if missing:
-        return ToolResult(
-            False,
-            f"{tool.label} needs "
-            f"{' and '.join(MISSING_HINT.get(m, m) for m in missing)}.",
-            error="missing input",
-        )
+    clean, rejection = check(tool, args)
+    if rejection is not None:
+        return ToolResult(False, rejection.summary, error=rejection.code)
 
     t0 = time.perf_counter()
     try:

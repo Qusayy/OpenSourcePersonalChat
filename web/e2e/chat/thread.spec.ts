@@ -130,7 +130,9 @@ test.describe("a long message", () => {
     expect(await body.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(folded);
     await less.click();
     await expect(q.getByRole("button", { name: "Show all" })).toBeVisible();
-    expect(await body.evaluate((el) => el.getBoundingClientRect().height)).toBe(folded);
+    // The same height to a tenth of a pixel: the box is measured in floating
+    // point, and the two readings can differ in the fifth decimal place.
+    expect(await body.evaluate((el) => el.getBoundingClientRect().height)).toBeCloseTo(folded, 1);
   });
 
   test("a short question is a heading and has nothing to unfold", async ({ page }) => {

@@ -340,9 +340,9 @@ A tool result is a `<figure>` between two hairlines: a 13px caption, then what t
 ### Charts
 - **Bars:** a 20px track in the sheet tint, the bar in ink, square at the baseline with a 4px data end; label at the left, fixed-width value at the right.
 - **Ordered pair:** p50 in ink, p95 in `bar-step`.
-- **Range strip:** a hairline axis with 8px bands; reference machines recede (second ink mixed 45% into the sheet), this server is full ink, and the measured value is an open ring.
+- **Range strip:** a hairline axis with 8px bands for the reference machines, which recede (second ink mixed 45% into the sheet). This server is a row of its own that holds only what was measured here, as an open ring; no reference row is claimed for it.
 - **Line:** a 2px ink series over a 7% ink area, hairline grid, 13px labels.
-- **Memory budget:** a 28px stacked bar with 2px gaps in `c1`..`c4`, and a legend that names every segment with its value.
+- **Memory budget:** a 28px stacked bar with 2px gaps in `c1`..`c4`, and a legend that names every segment with its value. It is an estimate and is introduced as one; the process's measured resident size is printed beneath it, and in mock mode a sentence says the two are not expected to agree.
 - **Tables:** right-aligned fixed-width figures, a proportional first column, hairlines under rows and a second-ink rule under the head.
 
 ### The status line (signature)
@@ -358,7 +358,7 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 
 **The Say It Once Rule.** What the machine is and what state it is in are here and only here. What a request is costing is here only while the request is in flight; when it ends, the figures leave the line and are printed under the reply they belong to. A figure with nothing to report is absent, not a dash and not a zero.
 
-**The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off.
+**The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off. The same holds for prose on the other pages: a sentence that names the machine's size prints the measured figure, a claim about what would or would not fit is worked out against it, and an estimate is called an estimate. In mock mode timings are of a fake stream: they are not stored, and the Benchmark page opens with a ruled note saying so.
 
 ### The aurora
 The page's one luminous thing: a strip of light in the live colour that rises from the top edge of the status line, across the full width of the window, while this visitor's request is being read or written. At no other time is it on the page.

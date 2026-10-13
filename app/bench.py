@@ -14,13 +14,15 @@ from typing import AsyncIterator
 from . import db
 from .llm import engine
 
+# Filler for the benchmark prompts. It describes no particular machine: the
+# suite runs wherever the site does.
 FILLER = (
-    "The model runs on a small virtual machine with two shared cores and four "
-    "gigabytes of memory. Weights are stored in four bit blocks, which keeps "
-    "the file near one gigabyte and keeps the working set inside the page "
-    "cache. Every generated token requires the whole set of weights to be read "
-    "once, so throughput follows memory bandwidth much more closely than it "
-    "follows clock speed. "
+    "The model runs on a small server with no graphics card, on a few shared "
+    "cores and a few gigabytes of memory. Weights are stored in four bit "
+    "blocks, which keeps the file near one gigabyte and keeps the working set "
+    "inside the page cache. Every generated token requires the whole set of "
+    "weights to be read once, so throughput follows memory bandwidth much more "
+    "closely than it follows clock speed. "
 )
 
 TASK = (
@@ -220,21 +222,67 @@ def latest_summary() -> dict | None:
 # Order-of-magnitude reference points for Qwen2.5-1.5B-Instruct Q4_K_M under
 # llama.cpp. Real figures swing widely with memory bandwidth, AVX support and
 # (on shared cloud) noisy neighbours — the page says so out loud.
+#
+# None of these rows is this server. The page draws this server as a row of
+# its own, from what the suite measured, rather than claiming a class for it.
 REFERENCE = [
-    {"hw": "2 vCPU shared cloud (this class)", "threads": 2, "prefill": "25–60", "gen": "6–12", "self": True},
+    {"hw": "2 vCPU shared cloud", "threads": 2, "prefill": "25–60", "gen": "6–12"},
     {"hw": "4 vCPU dedicated, AVX2", "threads": 4, "prefill": "60–120", "gen": "12–20"},
     {"hw": "Desktop 8-core, DDR5", "threads": 8, "prefill": "200–400", "gen": "30–55"},
     {"hw": "Apple M2 (Metal)", "threads": "—", "prefill": "500+", "gen": "45–70"},
 ]
 
 
+# Qwen2.5-1.5B-Instruct at Q4_K_M, for when there is no file to weigh.
+DEFAULT_WEIGHTS_MB = 990
+# A 7B model at the same quantisation, weights alone: the comparison the
+# memory section draws.
+LARGER_WEIGHTS_MB = 4400
+
+
+def weights_mb() -> int:
+    """The size of the model file, or a typical figure when it is not there."""
+    try:
+        return round(engine.cfg.resolved_model_path.stat().st_size / (1024 * 1024))
+    except OSError:
+        return DEFAULT_WEIGHTS_MB
+
+
 def memory_budget(n_ctx: int) -> list[dict]:
-    """The 'it fits' breakdown. KV maths for Qwen2.5-1.5B: 28 layers,
-    2 KV heads, 128 head dim, f16 => 28 KiB per token."""
+    """An estimate of what a loaded model takes, part by part.
+
+    Arithmetic, not a measurement: the weights are the file's size, the KV
+    cache follows from the model's shape (Qwen2.5-1.5B: 28 layers, 2 KV heads,
+    128 head dim, f16 => 28 KiB per token), and the last two are round figures.
+    The pages label it as an estimate and print the measured resident size of
+    the process beside it."""
     kv_mb = round(28 * 2 * 128 * 2 * 2 * n_ctx / (1024 * 1024))
     return [
-        {"name": "Weights (Q4_K_M, mmap)", "mb": 990, "note": "read once per token"},
+        {"name": f"Weights ({engine.cfg.model_quant}, mmap)", "mb": weights_mb(), "note": "read once per token"},
         {"name": f"KV cache @ {n_ctx} ctx (f16)", "mb": kv_mb, "note": "28 KiB per token"},
         {"name": "Compute buffers", "mb": 200, "note": "scales with n_batch"},
         {"name": "Python + FastAPI + uvicorn", "mb": 120, "note": "one worker"},
     ]
+
+
+def larger_model(budget: list[dict], system: dict) -> dict:
+    """Where a 7B model at the same quantisation would stand on this machine.
+
+    It needs its own weights plus everything else in the budget, which is at
+    least what this model needs. What it has to fit in is the machine's memory
+    as measured, or the limit on the service where that is tighter. `fits` is
+    None when neither can be read: the page then makes no claim either way.
+    """
+    need = LARGER_WEIGHTS_MB + sum(b["mb"] for b in budget[1:])
+    total = system.get("mem_total_mb")
+    limits = [v for v in (system.get("limit_mb"), system.get("limit_high_mb")) if v]
+    limit = min(limits) if limits else None
+    rooms = [v for v in (total, limit) if v]
+    room = min(rooms) if rooms else None
+    return {
+        "need_mb": need,
+        "room_mb": room,
+        "by_limit": limit is not None and (not total or limit < total),
+        "fits": None if room is None else need <= room,
+        "share": None if room is None else round(100 * need / room),
+    }

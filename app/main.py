@@ -75,6 +75,12 @@ def page_context(**extra) -> dict:
     return ctx
 
 
+def memory_context() -> dict:
+    """The memory estimate, and how a larger model would stand on this machine."""
+    budget = bench.memory_budget(settings.n_ctx)
+    return {"budget": budget, "larger": bench.larger_model(budget, telemetry.snapshot())}
+
+
 # ------------------------------------------------------------------ pages ---
 
 
@@ -94,8 +100,8 @@ async def page_bench(request: Request):
             page="bench",
             cases=bench.CASES,
             reference=bench.REFERENCE,
-            budget=bench.memory_budget(settings.n_ctx),
             latest=bench.latest_summary(),
+            **memory_context(),
         ),
     )
 
@@ -105,7 +111,7 @@ async def page_about(request: Request):
     return templates.TemplateResponse(
         request,
         "about.html",
-        page_context(page="about", budget=bench.memory_budget(settings.n_ctx)),
+        page_context(page="about", **memory_context()),
     )
 
 

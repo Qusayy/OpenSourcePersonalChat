@@ -117,11 +117,18 @@
 
     <section class="section" id="memory">
       <h2>Memory budget</h2>
-      <p class="sub">Why a 1.5B model at 4-bit fits on this box and a 7B one does not.</p>
+      {# An estimate, and labelled as one. The claim about a larger model is
+         worked out against this machine's measured memory (bench.larger_model),
+         so it is only made where it is true. #}
+      <p class="sub">
+        An estimate of what a loaded {{ info.params }} model at {{ info.quant }}
+        takes, worked out from the size of its file and the context length. It
+        is not a measurement; the measured figure is beneath it.
+      </p>
       {% set total = budget | sum(attribute='mb') %}
       <div class="panel">
         <div class="stack" role="img"
-             aria-label="Memory use: {% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
+             aria-label="Estimated memory use: {% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
           {% for b in budget %}
           <span style="width:{{ (100 * b.mb / total) | round(2) }}%;background:var(--c{{ loop.index }})"
                 title="{{ b.name }} — {{ b.mb }} MB"></span>
@@ -137,9 +144,33 @@
           {% endfor %}
         </div>
         <p class="explain after-chart">
-          <b class="num">{{ (total / 1024) | round(2) }} GB</b> peak of the 4 GB on this
-          machine. A 7B model at the same quantisation is roughly 4.4 GB of weights
-          alone — it would not load, and if it did, every token would come off disk.
+          Estimated with the model loaded:
+          <b class="num">{{ '%.2f' | format(total / 1024) }} GB</b>{% if system.mem_total_mb is not none %}
+          of the <b class="num">{{ '%.1f' | format(system.mem_total_mb / 1024) }} GB</b>
+          on this machine{% endif %}.
+          <span data-sys-row {% if system.rss_mb is none %}hidden{% endif %}>
+            Measured now: this process holds
+            <b class="num" data-sys="rss-exact">{% if system.rss_mb is not none %}{{ '%.2f' | format(system.rss_mb / 1024) }} GB{% endif %}</b>
+            resident.
+          </span>
+          {% if info.mock %}
+          This is mock mode: the weights are not loaded, so the two are not
+          expected to agree.
+          {% endif %}
+        </p>
+        <p class="explain after-chart">
+          A 7B model at the same quantisation is roughly 4.4 GB of weights
+          alone, about <b class="num">{{ '%.1f' | format(larger.need_mb / 1024) }} GB</b>
+          with the rest of this budget.
+          {% if larger.fits is false %}
+          It would not load here: {% if larger.by_limit %}this service is limited to{% else %}this machine has{% endif %}
+          <b class="num">{{ '%.1f' | format(larger.room_mb / 1024) }} GB</b>. If it
+          did load, every token would come off disk.
+          {% elif larger.fits %}
+          It would fit here, taking about <b class="num">{{ larger.share }}%</b> of
+          {% if larger.by_limit %}the memory this service is allowed{% else %}this machine's memory{% endif %},
+          and would write several times more slowly.
+          {% endif %}
         </p>
       </div>
     </section>
@@ -178,15 +209,17 @@
           Generating a token means reading <b>every weight in the model once</b>.
           At <code>Q4_K_M</code> that is about a gigabyte per token, so throughput
           tracks memory bandwidth far more closely than clock speed:
-          <b>tokens per second ≈ effective bandwidth ÷ model size</b>. Two shared
-          vCPUs reach single-digit gigabytes per second, which lands this model in
-          the region the charts above show.
+          <b>tokens per second ≈ effective bandwidth ÷ model size</b>. A pair of
+          shared cloud vCPUs reaches single-digit gigabytes per second, which
+          puts this model at around ten tokens per second there; a desktop's
+          faster memory is why its row above sits so much higher.
         </p>
         <p>
           That formula is also the whole argument for 4-bit. Dropping from 16-bit
           to 4-bit weights cuts the bytes moved per token by roughly four, and the
           speed rises by roughly the same factor — which is what makes a 1.5B model
-          usable here and a 7B model hopeless.
+          usable on a couple of shared cores, where a 7B model would manage a
+          token or two a second.
         </p>
         <p>
           Prefill behaves differently. Reading the prompt is a batched matrix
@@ -196,10 +229,11 @@
           the previous turn and only prefills what is new.
         </p>
         <p>
-          The last piece is the queue. With two cores, two generations running
-          together finish later than the same two run back to back, so this server
-          serialises them and tells you your position instead of pretending to be
-          parallel.
+          The last piece is the queue. Two generations running together fight
+          over the same memory bandwidth and the same
+          <span class="num">{{ info.n_threads }}</span> model threads, and finish
+          later than the same two run back to back, so this server serialises
+          them and tells you your position instead of pretending to be parallel.
         </p>
       </div>
     </section>

@@ -76,8 +76,9 @@ function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
 }
 
 function referenceChart(measured) {
-  // Reference rows are ranges ("6–12"); this machine gets its measured value
-  // marked on top of the range it is expected to fall in.
+  // Reference rows are published ranges ("6–12"). This server is a row of its
+  // own, holding only what the suite measured here: which class of machine it
+  // belongs to is not something the page can know, so it does not say.
   const parse = (s) => {
     const m = String(s).match(/(\d+(?:\.\d+)?)\s*[–-]?\s*(\d+(?:\.\d+)?)?/);
     if (!m) return [0, 0];
@@ -89,31 +90,44 @@ function referenceChart(measured) {
   const max = Math.max(...rows.map((r) => r.range[1]), measured || 0) * 1.08;
   els.refMax.textContent = Math.round(max);
 
-  els.ref.innerHTML = rows
-    .map((r) => {
-      const [lo, hi] = r.range;
-      const left = (100 * lo) / max;
-      const width = Math.max(1, (100 * (hi - lo)) / max);
-      const dot =
-        r.self && measured
-          ? `<b style="left:${((100 * measured) / max).toFixed(2)}%" title="measured here: ${fmt(
-              measured,
-              1
-            )} tok/s"></b>`
-          : "";
-      return `
+  const threads = window.AURORA?.info?.n_threads;
+  const here = measured
+    ? `
+      <div class="bar-row">
+        <span class="lab">This server<small>${threads ? `${threads} threads · ` : ""}measured</small></span>
+        <span class="strip self">
+          <b style="left:${((100 * measured) / max).toFixed(2)}%" title="measured here: ${fmt(
+        measured,
+        1
+      )} tok/s"></b>
+        </span>
+        <span class="val">${fmt(measured, 1)}</span>
+      </div>`
+    : `
+      <div class="bar-row">
+        <span class="lab">This server<small>not measured yet</small></span>
+        <span class="strip self"></span>
+        <span class="val"></span>
+      </div>`;
+
+  els.ref.innerHTML =
+    here +
+    rows
+      .map((r) => {
+        const [lo, hi] = r.range;
+        const left = (100 * lo) / max;
+        const width = Math.max(1, (100 * (hi - lo)) / max);
+        return `
       <div class="bar-row">
         <span class="lab">${escapeHtml(r.hw)}<small>${r.threads} threads</small></span>
-        <span class="strip ${r.self ? "self" : ""}">
+        <span class="strip">
           <i style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"
-             title="${escapeHtml(r.gen)} tok/s"></i>${dot}
+             title="${escapeHtml(r.gen)} tok/s"></i>
         </span>
-        <span class="val">${escapeHtml(r.gen)}${
-        r.self && measured ? `<small> · here ${fmt(measured, 1)}</small>` : ""
-      }</span>
+        <span class="val">${escapeHtml(r.gen)}</span>
       </div>`;
-    })
-    .join("");
+      })
+      .join("");
 }
 
 // Kept so the chart can be redrawn at a new width without refetching.

@@ -372,6 +372,8 @@ function paintSystem(s) {
       : `${gb(s.mem_used_mb)} / ${gb(s.mem_total_mb)} GB`
   );
   fact("rss", s.rss_mb === null ? null : `${gb(s.rss_mb)} GB`);
+  // Beside the memory estimate, which is printed to two places.
+  fact("rss-exact", s.rss_mb === null ? null : `${(s.rss_mb / 1024).toFixed(2)} GB`);
   // The ceiling that actually bites is the lower of the two the service has.
   const limit = [s.limit_high_mb, s.limit_mb].filter((v) => v !== null);
   fact("limit", limit.length ? `${gb(Math.min(...limit))} GB` : null);

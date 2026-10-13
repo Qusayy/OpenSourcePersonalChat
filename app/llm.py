@@ -57,7 +57,7 @@ MOCK_VOCAB = (
     "rather than raw arithmetic, halving the bytes very nearly doubles the "
     "speed. The trade is a small loss of precision, which a four bit K quant "
     "hides well at this size. That is the whole reason a one and a half "
-    "billion parameter model feels responsive on two shared cores.\n\n"
+    "billion parameter model feels responsive without a graphics card.\n\n"
     "In short: fewer bytes per weight, fewer bytes moved, more tokens per "
     "second.\n"
 ).split(" ")

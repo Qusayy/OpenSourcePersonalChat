@@ -67,9 +67,10 @@
       <h2>One request at a time — on purpose</h2>
       <div class="panel explain">
         <p>
-          With two cores, two generations running side by side finish
-          <em>later</em> than the same two run back to back: they fight over the
-          same memory bandwidth and the same threads. So this server takes one at
+          Two generations running side by side finish <em>later</em> than the
+          same two run back to back: they fight over the same memory bandwidth
+          and the same <span class="num">{{ info.n_threads }}</span> model
+          threads. So this server takes one at
           a time and shows you your place in the line. Honest queueing beats fake
           concurrency.
         </p>
@@ -104,10 +105,14 @@
 
     <section class="section">
       <h2>Memory</h2>
+      <p class="sub">
+        An estimate of what a loaded model takes, not a measurement. The
+        measured figure is beneath it.
+      </p>
       {% set total = budget | sum(attribute='mb') %}
       <div class="panel">
         <div class="stack" role="img"
-             aria-label="{% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
+             aria-label="Estimated memory use: {% for b in budget %}{{ b.name }} {{ b.mb }} megabytes{% if not loop.last %}, {% endif %}{% endfor %}">
           {% for b in budget %}
           <span style="width:{{ (100 * b.mb / total) | round(2) }}%;background:var(--c{{ loop.index }})"
                 title="{{ b.name }} — {{ b.mb }} MB"></span>
@@ -122,9 +127,20 @@
           {% endfor %}
         </div>
         <p class="explain after-chart">
-          About <b class="num">{{ (total / 1024) | round(2) }} GB</b> resident, leaving
-          room for nginx, the OS and a little headroom.
-          <a href="/bench">See the measured numbers</a>
+          Estimated with the model loaded:
+          <b class="num">{{ '%.2f' | format(total / 1024) }} GB</b>{% if system.mem_total_mb is not none %}
+          of the <b class="num">{{ '%.1f' | format(system.mem_total_mb / 1024) }} GB</b>
+          on this machine{% endif %}.
+          <span data-sys-row {% if system.rss_mb is none %}hidden{% endif %}>
+            Measured now: this process holds
+            <b class="num" data-sys="rss-exact">{% if system.rss_mb is not none %}{{ '%.2f' | format(system.rss_mb / 1024) }} GB{% endif %}</b>
+            resident.
+          </span>
+          {% if info.mock %}
+          This is mock mode: the weights are not loaded, so the two are not
+          expected to agree.
+          {% endif %}
+          <a href="/bench#memory">How that compares with a larger model</a>
         </p>
       </div>
     </section>

@@ -5,9 +5,11 @@
    line. There is no sidebar and no metrics column: history opens on demand,
    and every fact about the machine lives once, in the status line.
 
-   One left edge (--pad) is shared by the wordmark, the reading column, the
-   composer and the status line's state. Things on the right sit --edge in
-   from the window.
+   One left edge (--pad) is shared by the wordmark, the reading column and
+   the composer. The status line is the exception: it runs the full width of
+   the window, --edge in from each side, because what the machine is and what
+   a request is costing do not fit one row from the column's edge, and the
+   same line on every page should start in the same place.
    ========================================================================= */
 
 body {
@@ -348,15 +350,20 @@ body {
 
 /* ------------------------------------------------------------ status line */
 
+/* One row, edge to edge, like an editor's. What the machine is sits on the
+   left and does not move. What a request is costing sits on the right,
+   anchored to the right edge, each figure in a slot as wide as its largest
+   value — so a number that ticks changes in place and nothing beside it
+   shifts. A figure with nothing to report is absent, not a dash. */
 .status {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-1) var(--s-6);
   min-width: 0;
-  padding-top: var(--s-2);
-  padding-bottom: max(var(--s-2), env(safe-area-inset-bottom));
-  padding-left: max(var(--pad), env(safe-area-inset-left));
+  min-height: 2.5rem;
+  padding-top: var(--s-1);
+  padding-bottom: max(var(--s-1), env(safe-area-inset-bottom));
+  padding-left: max(var(--edge), env(safe-area-inset-left));
   padding-right: max(var(--edge), env(safe-area-inset-right));
   border-top: 1px solid var(--rule);
   background: var(--sheet-2);
@@ -368,10 +375,10 @@ body {
 .status-id,
 .status-figs {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--s-1) var(--s-5);
   min-width: 0;
+  white-space: nowrap;
 }
 .status-figs {
   margin-left: auto;
@@ -383,7 +390,12 @@ body {
   gap: var(--s-2);
   color: var(--ink);
   font-weight: 600;
-  white-space: nowrap;
+}
+/* Wide enough for every state a request passes through, so ready, working,
+   reading and writing swap in place and the model's name stays where it is. */
+.st-word {
+  display: inline-block;
+  min-width: 4.25rem;
 }
 
 .status .dot {
@@ -402,44 +414,67 @@ body {
   font-weight: 400;
 }
 
-.st-seg,
-.st-fig,
-.st-last {
-  white-space: nowrap;
-}
 .st-fig {
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
 }
 .st-fig b {
+  display: inline-block;
   color: var(--ink);
   font-weight: 600;
+  text-align: right;
 }
-.st-fig b[data-empty="true"] {
-  color: var(--ink-2);
-  font-weight: 400;
+#tps-value {
+  min-width: 4ch;
+}
+#out-value,
+#ctx-value {
+  min-width: 5ch;
+}
+#ttft-value {
+  min-width: 6ch;
+  text-align: left;
+}
+#st-wait-s {
+  min-width: 4ch;
 }
 
-/* A baseline under the trace, so a steady rate reads as a line on a chart and
-   not as a stray rule floating beside the number. */
-.spark {
-  width: 64px;
-  height: 18px;
+/* The trace of the rate over the last few seconds: wide enough to read as a
+   chart, on a baseline, with the newest sample marked. */
+.spark-wrap {
+  position: relative;
+  display: block;
+  width: 10.5rem;
+  height: 20px;
+  margin-left: var(--s-1);
   border-bottom: 1px solid var(--rule);
-  overflow: visible;
 }
-/* No trace yet means no gap held open for one. */
-.spark:has(path[d=""]) {
-  display: none;
+.spark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 .spark path {
   fill: none;
-  stroke: var(--ink-2);
+  stroke: var(--live);
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+/* --y is the newest sample as a share of the tallest, set from chat.js. The
+   plot keeps 3 of its 38 units clear top and bottom, which is 1.6px here. */
+.spark-dot {
+  position: absolute;
+  right: -3px;
+  bottom: calc(1.6px + var(--y, 0) * 16.8px - 3px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 2px var(--sheet-2);
 }
 
 .ctx-bar {
@@ -507,27 +542,37 @@ body {
   }
 }
 
-/* The line comes alive: while the model writes, the rate and its trace take
-   the live colour. This is the one place the page moves on its own. */
+/* The line comes alive: while the model writes, its rate takes the live
+   colour and the trace draws beside it. This is the one place the page moves
+   on its own. */
 .status[data-phase="writing"] .st-tps b {
   color: var(--live);
-}
-.status[data-phase="writing"] .spark path {
-  stroke: var(--live);
 }
 
 .status-more {
   display: none;
 }
 
-/* Below this width the identity and the figures cannot share one row once an
-   answer has filled the figures in. Rather than let the line wrap at that
-   moment and shove the composer up, the chat page gives the figures their own
-   row from the start. */
-@media (max-width: 1499px) {
+/* Narrower than this the trace gives up width before anything else does. */
+@media (max-width: 1439px) {
+  .spark-wrap {
+    width: 6rem;
+  }
+}
+/* Narrower still, the identity and a full set of figures cannot share a row.
+   The chat page gives the figures a row of their own from the start, rather
+   than wrapping at the moment an answer begins. Context use leads that row,
+   so it stays put when the others arrive beside it. */
+@media (max-width: 1339px) {
+  :root[data-page="chat"] .status {
+    flex-wrap: wrap;
+  }
   :root[data-page="chat"] .status-figs {
     flex-basis: 100%;
     margin-left: 0;
+  }
+  :root[data-page="chat"] .st-ctx {
+    order: -1;
   }
 }
 
@@ -592,10 +637,13 @@ body {
     display: flex;
   }
 
-  /* The corridor: state plus the one figure that matters now. Everything else
-     waits behind Details rather than being shrunk until none of it reads. */
-  .status {
-    gap: var(--s-1) var(--s-4);
+  /* The corridor: state plus the one figure that matters now — the rate while
+     the model writes, context use otherwise. Everything else waits behind
+     Details rather than being shrunk until none of it reads. */
+  .status,
+  :root[data-page="chat"] .status {
+    flex-wrap: nowrap;
+    gap: var(--s-4);
   }
   .status-id .st-seg,
   .status-figs > * {
@@ -606,23 +654,23 @@ body {
     flex-basis: auto;
     margin-left: 0;
   }
-  .status-figs > .st-ctx,
-  .status[data-phase="writing"] .status-figs > .st-tps {
+  .status-figs > .st-ctx:not([hidden]),
+  .status[data-phase="writing"] .status-figs > .st-tps:not([hidden]) {
     display: inline-flex;
   }
   .status[data-phase="writing"] .status-figs > .st-ctx {
     display: none;
   }
-  :root:not([data-page="chat"]) .status-figs > .st-rss {
-    display: inline-flex;
-  }
-  /* Collapsed, the number is enough; the bar would push Details onto a row
-     of its own. */
-  .ctx-bar {
+  .ctx-bar,
+  .spark-wrap {
     display: none;
+  }
+  .st-word {
+    min-width: 0;
   }
   .status-more {
     display: inline-flex;
+    align-items: center;
     margin-left: auto;
     padding: var(--s-1) var(--s-2);
     border: 0;
@@ -636,11 +684,13 @@ body {
     cursor: pointer;
   }
 
-  .status[data-open="true"] {
+  .status[data-open="true"],
+  :root[data-page="chat"] .status[data-open="true"] {
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: start;
-    row-gap: var(--s-3);
+    row-gap: var(--s-2);
+    padding-top: var(--s-2);
   }
   .status[data-open="true"] .status-id,
   .status[data-open="true"] .status-figs {
@@ -648,6 +698,7 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: var(--s-1);
+    white-space: normal;
   }
   .status[data-open="true"] .status-more {
     grid-column: 2;
@@ -657,12 +708,12 @@ body {
      flex container would drop the space between the two. */
   .status[data-open="true"] .status-id .st-seg {
     display: block;
-    white-space: normal;
   }
   .status[data-open="true"] .status-figs > *:not([hidden]) {
     display: inline-flex;
   }
-  .status[data-open="true"] .ctx-bar {
+  .status[data-open="true"] .ctx-bar,
+  .status[data-open="true"] .spark-wrap {
     display: block;
   }
 }

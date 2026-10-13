@@ -26,7 +26,7 @@
         <div><dt>Params</dt><dd class="num">{{ info.params }}</dd></div>
         <div><dt>Context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
         <div><dt>Threads</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
-        <div><dt>Load time</dt><dd class="num">{% if info.load_ms %}{{ info.load_ms }} ms{% else %}—{% endif %}</dd></div>
+        {% if info.load_ms %}<div><dt>Load time</dt><dd class="num">{{ info.load_ms }} ms</dd></div>{% endif %}
       </dl>
     </section>
 

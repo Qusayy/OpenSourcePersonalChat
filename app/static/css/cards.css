@@ -42,10 +42,6 @@
 .tl-step[data-status="running"] .st {
   color: var(--live);
 }
-.tl-step[data-status="failed"] .g,
-.tl-step[data-status="failed"] .st {
-  color: var(--fault);
-}
 
 /* ------------------------------------------------------------- figure -- */
 
@@ -79,6 +75,11 @@
 .tool-note {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* how long the tool took, at the end of its own caption */
+.tool-ms {
+  margin-left: auto;
+  padding-left: var(--s-3);
 }
 
 /* The figure that is the answer: one size, wherever it appears. */

@@ -72,7 +72,7 @@ const stateEl = $("#b-state");
 // same words so the first paint agrees with the first poll.
 const STATE_WORDS = {
   cold: "starting",
-  loading: "loading model",
+  loading: "loading",
   ready: "ready",
   error: "model unavailable",
 };
@@ -151,8 +151,13 @@ export async function pollHealth() {
     paintState();
     const mock = $("#b-mock");
     if (mock) mock.hidden = !info.mock;
-    const rss = $("#b-rss");
-    if (rss) rss.textContent = info.rss_mb ? `${info.rss_mb} MB` : "—";
+    // Resident memory is not measurable on every host. Where it is not, the
+    // figure is left off the line rather than shown as a dash.
+    const rss = $("#st-rss");
+    if (rss) {
+      rss.hidden = !info.rss_mb;
+      if (info.rss_mb) $("#b-rss").textContent = `${info.rss_mb} MB`;
+    }
 
     if (info.status !== lastStatus) {
       if (info.status === "ready" && lastStatus === "loading") toast("Model warm — ready to go");

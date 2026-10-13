@@ -28,11 +28,26 @@ const els = {
 /* ------------------------------------------------------------- rendering */
 
 function tiles(s) {
-  $("#t-gen").textContent = s ? fmt(s.gen_tps, 1) : "—";
-  $("#t-prefill").textContent = s ? fmt(s.prefill_tps, 0) : "—";
   const short = s?.cases?.find((c) => c.id === "short") || s?.cases?.[0];
-  $("#t-ttft").textContent = short ? fmtMs(short.ttft_p50) : "—";
-  $("#t-rss").textContent = s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : "—";
+  const has = (v) => v !== null && v !== undefined && !Number.isNaN(v);
+  const rows = {
+    gen: has(s?.gen_tps) ? fmt(s.gen_tps, 1) : null,
+    prefill: has(s?.prefill_tps) ? fmt(s.prefill_tps, 0) : null,
+    ttft: has(short?.ttft_p50) ? fmtMs(short.ttft_p50) : null,
+    rss: s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : null,
+  };
+  // A figure that was not measured is left out, not printed as a dash: an
+  // empty row under "Headline" reads as a result of nothing.
+  let any = false;
+  for (const [key, value] of Object.entries(rows)) {
+    $(`#row-${key}`).hidden = value === null;
+    if (value !== null) {
+      $(`#t-${key}`).textContent = value;
+      any = true;
+    }
+  }
+  $("#tiles").hidden = !any;
+  $("#tiles-empty").hidden = any;
 }
 
 function barChart(host, rows, { max, unit, digits = 1, alt = false }) {

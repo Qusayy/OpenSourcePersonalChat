@@ -1,15 +1,16 @@
 /* The benchmark and about pages: long-form, set on the same sheet as chat.
 
-   Chart colour does one job per chart. Single-series bars and the history line
-   wear --c1; the p50/p95 pair is the same hue at two steps, because the two
-   are ordered, not different things; the memory budget is the only place four
-   categories meet, and takes --c1..--c4 in that fixed order.
+   Charts are drawn in ink. A single series has no category for a colour to
+   name, so the bars, the history line and this server's range are --bar, and
+   the p50/p95 pair is that ink at two steps, the p95 the fainter, because the
+   two are ordered, not different things.
 
-   Validated against both sheets with the palette validator (adjacent pairs):
-   worst colour-blind separation ΔE 13.0 light / 15.9 dark, worst normal-vision
-   19.7. One slot, the light-scheme magenta, sits under 3:1 against the sheet,
-   which is why every stacked segment is also named with its value in the
-   legend beneath it. */
+   The memory budget is the one place four categories meet, and the only place
+   colour appears: --c1..--c4 in that fixed order. Validated against both
+   sheets with the palette validator (adjacent pairs): worst colour-blind
+   separation ΔE 13.0 light / 15.9 dark, worst normal-vision 19.7. One slot,
+   the light-scheme magenta, sits under 3:1 against the sheet, which is why
+   every segment is also named with its value in the legend beneath it. */
 
 .page {
   flex: 1;
@@ -79,9 +80,7 @@
 
 /* A short list of settings: term on the left, value on the right. */
 .facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-  column-gap: var(--s-7);
+  max-width: 34rem;
   margin: var(--s-3) 0 0;
   border-top: 1px solid var(--rule);
   font-size: var(--t-2);
@@ -99,6 +98,14 @@
 .facts dd {
   margin: 0;
   text-align: right;
+}
+/* The headline figures are the same list with the number given weight. */
+.facts.lead dd .num {
+  color: var(--ink);
+  font-weight: 600;
+}
+.facts.lead dd {
+  color: var(--ink-2);
 }
 
 /* ------------------------------------------------------------- run panel */
@@ -138,30 +145,7 @@
   margin-top: var(--s-2);
   color: var(--ink-2);
   font-size: var(--t-1);
-}
-
-/* ------------------------------------------------------- headline figures */
-
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: var(--s-5);
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--rule);
-}
-.tile .k {
-  color: var(--ink-2);
-  font-size: var(--t-2);
-}
-.tile .v {
-  font-size: var(--t-6);
-  font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: -0.02em;
-}
-.tile .n {
-  color: var(--ink-2);
-  font-size: var(--t-1);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------ bar chart */
@@ -201,14 +185,15 @@
   inset: 0;
   /* 4px rounded data end, anchored square to the baseline */
   border-radius: 0 4px 4px 0;
-  background: var(--c1);
+  background: var(--bar);
   transform: scaleX(0);
   transform-origin: left center;
   transition: transform var(--dur-2) var(--ease);
 }
-/* p95: the same hue, one step lighter — so "the lighter bar" is true. */
+/* p95: the same ink, one step fainter, so the median leads in both schemes
+   and the sentence above the chart holds in both. */
 .track i.alt {
-  background: var(--c1-step);
+  background: var(--bar-step);
 }
 .bar-row .val {
   font-family: var(--font-fixed);
@@ -245,7 +230,7 @@
   height: 1px;
   background: var(--rule);
 }
-/* Other machines are context and stay neutral; this one takes the series hue. */
+/* Other machines are context and recede; this one is drawn at full ink. */
 .strip i {
   position: absolute;
   top: 50%;
@@ -255,17 +240,19 @@
   transform: translateY(-50%);
 }
 .strip.self i {
-  background: var(--c1);
+  background: var(--bar);
 }
+/* The measured value: an open ring, so it reads against the solid band it
+   sits on, with a sheet-coloured gap to part it from that band. */
 .strip b {
   position: absolute;
   top: 50%;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border: 2px solid var(--ink);
   border-radius: 50%;
-  background: var(--ink);
-  /* 2px surface ring so the marker stays legible over the band */
+  background: var(--sheet);
   box-shadow: 0 0 0 2px var(--sheet);
   transform: translateY(-50%);
 }
@@ -335,24 +322,23 @@
 }
 .linechart .lbl {
   fill: var(--ink-2);
-  font-family: var(--font-fixed);
-  font-variation-settings: "MONO" 1, "CASL" 0;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .linechart .lbl.strong {
   fill: var(--ink);
 }
 .linechart .series {
   fill: none;
-  stroke: var(--c1);
+  stroke: var(--bar);
   stroke-width: 2;
   stroke-linejoin: round;
 }
 .linechart .area {
-  fill: color-mix(in oklch, var(--c1) 12%, transparent);
+  fill: color-mix(in oklch, var(--bar) 7%, transparent);
 }
 .linechart .pt {
-  fill: var(--c1);
+  fill: var(--bar);
   stroke: var(--sheet);
   stroke-width: 2;
 }
@@ -424,16 +410,15 @@
   font-size: var(--t-2);
 }
 
-/* A warning about the data, set where it applies. The mark carries the
-   colour; the words stay in ink so they are read. */
+/* A warning about the data, set where it applies: a ruled note, not a box.
+   The mark carries the colour; the words stay in ink so they are read. The
+   chart's own top rule closes it underneath. */
 .caveat {
   display: flex;
   gap: var(--s-3);
   max-width: 44rem;
-  margin-bottom: var(--s-4);
-  padding: var(--s-3) var(--s-4);
-  border-radius: var(--r-1);
-  background: color-mix(in oklch, var(--caution) 9%, var(--sheet));
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--rule);
   font-size: var(--t-2);
 }
 .caveat .icon {

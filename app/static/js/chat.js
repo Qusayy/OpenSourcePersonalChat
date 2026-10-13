@@ -35,7 +35,13 @@ const els = {
   sendLabel: $("#send-label"),
   list: $("#convo-list"),
   bar: $("#status"),
-  last: $("#st-last"),
+  wait: $("#st-wait"),
+  waitLead: $("#st-wait-lead"),
+  waitS: $("#st-wait-s"),
+  tpsFig: $(".st-tps"),
+  outFig: $(".st-out"),
+  ttftFig: $(".st-ttft"),
+  sparkDot: $("#spark-dot"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
   out: $("#out-value"),
@@ -276,51 +282,66 @@ function proseRenderer(host) {
   };
 }
 
-// How the server's routing tiers read on screen. Only "model" costs a pass
-// through the model; the other two are decided before it is touched.
+// How a tool came to be chosen, where that says something. A slash command
+// is not listed: the question above the answer already is one. Only "model"
+// costs a pass through the model; a pattern match is decided before the model
+// is touched.
 const ROUTE_WORDS = {
-  slash: "Slash command",
   heuristic: "Pattern match",
   model: "Model's choice",
 };
 
-/** Create or update one step of the answer's route line. */
+/**
+ * Create or update one step of the answer's route line.
+ *
+ * The line carries only what is said nowhere else. The answer step is the
+ * status line's job while it runs and the footer's once it has. A finished
+ * tool is named, timed and qualified by its own figure below. So a step is
+ * drawn here while it is running, and afterwards only if it was a routing
+ * decision worth knowing about.
+ */
 function upsertStep(host, data) {
-  host.hidden = false;
+  if (data.kind === "model") return;
+  const status = data.status || "running";
+  const over = status !== "running";
   let row = host.querySelector(`[data-id="${CSS.escape(data.id)}"]`);
+  if (over && (data.kind === "tool" || (data.kind === "route" && data.detail === "slash"))) {
+    row?.remove();
+    host.hidden = !host.children.length;
+    return;
+  }
   if (!row) {
     row = document.createElement("div");
     row.className = "tl-step";
     row.dataset.id = data.id;
     row.innerHTML =
       '<span class="g"></span><span class="label"></span>' +
-      '<span class="detail"></span><span class="st"></span><span class="ms num"></span>';
+      '<span class="st"></span><span class="ms num"></span>';
     host.appendChild(row);
     enter(row, { distance: 6 });
   }
-  const status = data.status || "running";
+  host.hidden = false;
   row.dataset.status = status;
-  let name = data.tool && hasIcon(data.tool) ? data.tool : hasIcon(data.kind) ? data.kind : "tool";
+  let name = data.tool && hasIcon(data.tool) ? data.tool : "tool";
   let label = data.label || "";
-  let detail = data.detail || "";
-  // The routing step says how the tool was picked, not which one: the next
-  // step names it, and the same word twice in a row reads as a stutter.
   if (data.kind === "route") {
     name = "route";
     if (data.detail === "skill") label = `Skill: ${data.label}`;
-    else if (ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
-    detail = "";
+    else if (data.tool && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
   }
   row.querySelector(".g").innerHTML = icon(name, 14);
   row.querySelector(".label").textContent = label;
-  row.querySelector(".detail").textContent = detail;
-  // Said in a word as well as a colour. A finished step needs neither: its
-  // timing is the evidence that it ran.
-  row.querySelector(".st").textContent =
-    status === "running" ? "running" : status === "failed" ? "failed" : "";
+  // Said in a word as well as a colour.
+  row.querySelector(".st").textContent = over ? "" : "running";
   row.querySelector(".ms").textContent = data.ms ? fmtMs(data.ms) : "";
   return row;
 }
+
+// What a tool is called on screen, for cards replayed from a stored
+// conversation, where only its registry name was kept.
+const TOOL_LABELS = Object.fromEntries(
+  (window.AURORA.tools || []).map((t) => [t.name, t.label || t.name])
+);
 
 function notice(kind, html) {
   const el = document.createElement("div");
@@ -354,15 +375,20 @@ function footer(el, m) {
   const foot = el.querySelector(".msg-foot");
   const bits = [];
   const has = (v) => v !== null && v !== undefined;
-  if (has(m.gen_tps)) bits.push(`${fmt(m.gen_tps, 1)} tok/s`);
-  if (has(m.ttft_ms)) bits.push(`${fmtMs(m.ttft_ms)} to first token`);
-  if (has(m.completion_tokens)) bits.push(`${fmtInt(m.completion_tokens)} tokens`);
-  if (m.tool_calls) bits.push(`${m.tool_calls} tool${m.tool_calls > 1 ? "s" : ""}`);
-  if (m.cancelled) bits.push("stopped");
+  // The numeral is fixed-width so a column of these lines up; the words
+  // around it are words and are set as words.
+  const fig = (value, words) => `<span><b class="num">${value}</b> ${words}</span>`;
+  if (has(m.gen_tps)) bits.push(fig(fmt(m.gen_tps, 1), "tok/s"));
+  if (has(m.ttft_ms)) bits.push(fig(fmtMs(m.ttft_ms), "to first token"));
+  if (has(m.completion_tokens)) bits.push(fig(fmtInt(m.completion_tokens), "tokens"));
+  if (has(m.total_ms)) bits.push(fig(fmtMs(m.total_ms), "to answer"));
+  if (m.cancelled) bits.push("<span>stopped</span>");
+  // The tools an answer used are the figures above it, so they are not
+  // counted again here.
   // Always there, in words: an action that only appears on hover does not
   // exist on a phone, and an unlabelled glyph has to be guessed at.
   foot.innerHTML =
-    bits.map((b) => `<span class="num">${b}</span>`).join("") +
+    `<span class="figs">${bits.join("")}</span>` +
     `<span class="act">
        <button class="text-btn small quiet" type="button" data-act="copy">Copy</button>
        <button class="text-btn small quiet" type="button" data-act="again">Ask again</button>
@@ -401,10 +427,13 @@ const meter = new Meter({
     // The meter ticks from the moment a request is sent. Until a token has
     // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
     if (!total) return;
-    els.tps.dataset.empty = "false";
     els.tps.textContent = fmt(rate, 1);
     els.out.textContent = fmtInt(total);
     els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
+    // The newest sample, marked on the trace: where the rate is now. Same
+    // scale as sparkPaths, which plots against the tallest sample or 1.
+    els.sparkDot.style.setProperty("--y", (history.at(-1) / Math.max(...history, 1)).toFixed(3));
+    els.sparkDot.hidden = history.length < 2;
   },
 });
 
@@ -417,29 +446,48 @@ function setContext(tokens) {
   els.bar.dataset.ctx = pct > 0.85 ? "high" : "ok";
 }
 
-/** Clear the figures that belong to one answer. */
+/**
+ * Take the cost figures off the line. They are there while a request is in
+ * flight; once it ends they are printed under the answer they belong to, and
+ * showing them here as well would say the same thing twice.
+ */
 function resetFigures() {
-  els.tps.dataset.empty = "true";
+  els.tpsFig.hidden = els.outFig.hidden = els.ttftFig.hidden = true;
   els.tps.textContent = "—";
-  els.ttft.textContent = "—";
   els.out.textContent = "—";
+  els.ttft.textContent = "—";
   els.sparkLine.setAttribute("d", "");
-  els.last.hidden = true;
+  els.sparkDot.hidden = true;
+}
+
+/** The first token has landed: the figures have something to report. */
+function showFigures(ttftMs) {
+  els.tpsFig.hidden = els.outFig.hidden = false;
+  if (ttftMs !== null && ttftMs !== undefined) {
+    els.ttft.textContent = fmtMs(ttftMs);
+    els.ttftFig.hidden = false;
+  }
 }
 
 // The status line's state while a request is in flight. Every phase but
 // "writing" is a wait, so it counts the seconds: on this hardware a wait is
-// long enough that a still label looks like a hang.
+// long enough that a still label looks like a hang. The count sits with the
+// figures on the right, where it can change width without moving anything.
+const PHASE_WORDS = { working: "working", queued: "queued", reading: "reading", writing: "writing" };
 let phaseClock = null;
-function livePhase(key, text) {
+function livePhase(key, lead = "") {
   clearInterval(phaseClock);
   phaseClock = null;
+  els.wait.hidden = true;
   if (!key) return setPhase(null);
-  if (key === "writing") return setPhase(key, text);
+  setPhase(key, PHASE_WORDS[key]);
+  if (key === "writing") return;
   const since = performance.now();
   const paint = () => {
     const s = Math.floor((performance.now() - since) / 1000);
-    setPhase(key, s >= 2 ? `${text} · ${s} s` : text);
+    els.waitLead.textContent = lead;
+    els.waitS.textContent = s >= 2 ? `${s} s` : "";
+    els.wait.hidden = !lead && s < 2;
   };
   paint();
   phaseClock = setInterval(paint, 1000);
@@ -452,7 +500,7 @@ function setMode(streaming) {
   els.send.dataset.mode = streaming ? "stop" : "send";
   els.sendLabel.textContent = streaming ? "Stop" : "Send";
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
-  livePhase(streaming ? "working" : null, "working");
+  livePhase(streaming ? "working" : null);
 }
 
 async function stopGeneration() {
@@ -478,6 +526,8 @@ async function send(text) {
   let queueCard = null;
   let queuedAs = null; // the queue wording currently on the status line
   let finishedUnseen = false;
+  // What each tool step reported, kept for the figure that follows it.
+  const stepMeta = new Map();
   let raw = "";
   let dirty = false;
   let caretOn = true;
@@ -528,20 +578,16 @@ async function send(text) {
               : "Next in line — starting shortly.";
           queueCard.lastElementChild.textContent = queueText;
           announce(queueText);
-          const ahead = data.position > 0 ? `queued, ${data.position} ahead` : "queued, next";
+          const ahead = data.position > 0 ? `${data.position} ahead` : "next in line";
           if (queuedAs !== ahead) livePhase("queued", (queuedAs = ahead));
         } else if (event === "step") {
           upsertStep(timeline, data);
-          // Routing and tools name themselves on the line. The answer step does
-          // not: "start" and the first token already say where that one is.
-          if (data.status === "running" && data.label && data.kind !== "model") {
-            livePhase("working", `working · ${data.label}`);
-          }
+          if (data.kind === "tool") stepMeta.set(data.id, { label: data.label, ms: data.ms });
           if (data.status === "failed") {
             announce(`${data.label} failed: ${data.detail || "unknown error"}`);
           }
         } else if (event === "card") {
-          mountCard(cardHost, data.card, data.data, cardIndex++);
+          mountCard(cardHost, data.card, data.data, cardIndex++, stepMeta.get(data.step_id));
           if (nearBottom()) els.wrap.scrollTop = els.wrap.scrollHeight;
         } else if (event === "trimmed") {
           notice("", `<span>${
@@ -551,7 +597,7 @@ async function send(text) {
           }</span>`);
         } else if (event === "start") {
           state.requestId = data.request_id;
-          livePhase("reading", "reading prompt"); // holds until the first token lands
+          livePhase("reading"); // holds until the first token lands
           dismiss(queueCard);
           queueCard = null;
           setContext(data.prompt_tokens);
@@ -559,7 +605,10 @@ async function send(text) {
           // No layout reads here — the tick below batches one read and one
           // write per frame instead of a pair per token.
           // The release: prefill is over, the model is talking.
-          if (!raw) livePhase("writing", "writing");
+          if (!raw) {
+            livePhase("writing");
+            showFigures(data.ttft_ms);
+          }
           raw += data.t;
           dirty = true;
           meter.token(1);
@@ -568,16 +617,13 @@ async function send(text) {
           dirty = false;
           prose.finish(raw);
           bot.dataset.raw = raw;
+          // The footer adds height below the last line of the answer. If the
+          // reader was at the bottom they stay there; without this the figures
+          // and the actions land just out of sight.
+          const stick = nearBottom();
           footer(bot, data);
-          els.ttft.textContent = fmtMs(data.ttft_ms);
-          els.out.textContent = fmtInt(data.completion_tokens);
+          if (stick) els.wrap.scrollTop = els.wrap.scrollHeight;
           setContext((data.prompt_tokens || 0) + (data.completion_tokens || 0));
-          // The server's own rate replaces the browser's rolling estimate.
-          if (data.gen_tps) {
-            els.tps.dataset.empty = "false";
-            els.tps.textContent = fmt(data.gen_tps, 1);
-          }
-          els.last.hidden = false;
           finishedUnseen = document.hidden;
           announce(
             data.cancelled
@@ -613,6 +659,7 @@ async function send(text) {
     dismiss(queueCard);
     meter.stop();
     setMode(false);
+    resetFigures();
     // Finished while the tab was in the background: say so until it is seen.
     if (finishedUnseen) holdPhase("answer ready");
     state.requestId = null;
@@ -623,6 +670,16 @@ async function send(text) {
 }
 
 /* -------------------------------------------------------- conversations -- */
+
+/** How long ago, in words short enough for a list row. `ts` is epoch seconds. */
+function ago(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
 
 async function refreshList() {
   try {
@@ -637,7 +694,7 @@ async function refreshList() {
           c.id === state.conversationId ? 'aria-current="true"' : ""
         }>
           <span class="t" dir="auto">${escapeHtml(c.title)}</span>
-          <span class="m">${c.n} ${c.n === 1 ? "message" : "messages"}</span>
+          <span class="m">${c.n} ${c.n === 1 ? "message" : "messages"} · ${ago(c.updated_at)}</span>
         </button>
         <button class="icon-btn convo-del" type="button" data-del="${c.id}"
                 aria-label="Delete conversation: ${escapeHtml(c.title)}">
@@ -693,20 +750,16 @@ async function loadConversation(cid) {
         // Replay stored tool cards, so reloading a conversation is not lossy.
         const cardHost = bot.querySelector(".cards");
         (m.tool_calls || []).forEach((call, i) => {
-          if (call.ok && call.card) mountCard(cardHost, call.card, call.data, i);
-          else mountCard(cardHost, "error", { message: call.summary }, i);
+          const meta = { label: TOOL_LABELS[call.tool] || call.tool, ms: call.ms };
+          if (call.ok && call.card) mountCard(cardHost, call.card, call.data, i, meta);
+          else mountCard(cardHost, "error", { message: call.summary }, i, meta);
         });
         bot.querySelector(".prose").innerHTML = renderMarkdown(m.content);
-        if (m.gen_tps != null || m.ttft_ms != null) {
-          footer(bot, { ...m, tool_calls: (m.tool_calls || []).length });
-        }
+        if (m.gen_tps != null || m.ttft_ms != null) footer(bot, m);
         ctx = (m.prompt_tokens || 0) + (m.completion_tokens || 0) || ctx;
       }
     }
     setContext(ctx);
-    // The figures on the line belong to an answer in the thread that was just
-    // replaced; leaving them up would attribute them to this one.
-    resetFigures();
     setRail(false);
     setView("thread");
     els.wrap.scrollTop = els.wrap.scrollHeight;
@@ -723,12 +776,14 @@ function newChat() {
   setView("empty");
   setSkill(null);
   setContext(0);
-  resetFigures();
   setRail(false);
   refreshList();
   els.input.focus();
 }
 $("#new-chat").addEventListener("click", newChat);
+// Fetched as the drawer opens, so the times are current and a conversation
+// started in another tab is listed.
+$("#menu-btn").addEventListener("click", refreshList);
 
 /* ------------------------------------------------------------- startup -- */
 

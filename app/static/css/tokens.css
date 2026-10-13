@@ -47,12 +47,19 @@
   --caution: oklch(47% 0.095 70);
   --scrim: oklch(22% 0.015 150 / 0.32);
 
-  /* Chart categories: blue, magenta, violet, orange. Fixed order, never
-     cycled, and none of them a hue the interface uses for state. Steps come
-     from a validated palette and were re-checked on these sheets; see
-     bench.css. */
+  /* Charts. A single series is drawn in ink: there is no category for a
+     colour to name, and a hue there would read as the page's second accent.
+     --bar-step is the same ink one step fainter, nearer the sheet, for the
+     second of an ordered pair such as p50 and p95. Fainter, not lighter: on
+     the dark sheet the receding step is the darker one. */
+  --bar: var(--ink);
+  --bar-step: oklch(64% 0.012 150);
+
+  /* The one chart with categories, the memory budget, takes these four in
+     this fixed order: blue, magenta, violet, orange. None is a hue the
+     interface uses for state. Steps come from a validated palette and were
+     re-checked on these sheets; see bench.css. */
   --c1: #2a78d6;
-  --c1-step: #86b6ef; /* the same hue one step lighter: an ordered pair */
   --c2: #e87ba4;
   --c3: #6250d6;
   --c4: #eb6834;
@@ -105,9 +112,10 @@
   --z-toast: 60;
   --z-skip: 200;
 
-  /* layout — one left edge shared by the wordmark, the column, the composer
-     and the status line. It sits a third of the spare width in from the left,
-     so the column is neither jammed against the edge nor centred like a card. */
+  /* layout — one left edge shared by the wordmark, the column and the
+     composer. It sits a third of the spare width in from the left, so the
+     column is neither jammed against the edge nor centred like a card. The
+     status line alone runs the full width, --edge in from each side. */
   --col: 42rem;
   --edge: 24px;
   --pad: max(var(--edge), calc((100vw - var(--col)) / 3));
@@ -126,8 +134,9 @@
     --caution: oklch(82% 0.13 82);
     --scrim: oklch(8% 0.01 150 / 0.6);
     --w-text: 360;
+    --bar: var(--ink);
+    --bar-step: oklch(58% 0.016 150);
     --c1: #3987e5;
-    --c1-step: #9ec5f4;
     --c2: #d55181;
     --c3: #9085e9;
     --c4: #d95926;
@@ -147,8 +156,9 @@
   --caution: oklch(82% 0.13 82);
   --scrim: oklch(8% 0.01 150 / 0.6);
   --w-text: 360;
+  --bar: var(--ink);
+  --bar-step: oklch(58% 0.016 150);
   --c1: #3987e5;
-  --c1-step: #9ec5f4;
   --c2: #d55181;
   --c3: #9085e9;
   --c4: #d95926;

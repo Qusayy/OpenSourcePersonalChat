@@ -28,7 +28,7 @@
       <button class="btn btn-primary" id="run-btn">Run the benchmark</button>
       <div class="grow">
         <div class="progress"><i id="progress"></i></div>
-        <div class="run-status num" id="run-status">
+        <div class="run-status" id="run-status">
           {% if latest %}Last run stored on this server.{% else %}No run recorded yet — takes about two minutes.{% endif %}
         </div>
       </div>
@@ -37,28 +37,15 @@
     <section class="section">
       <h2>Headline</h2>
       <p class="sub">Median across every case in the most recent suite.</p>
-      <div class="tiles" id="tiles">
-        <div class="tile">
-          <div class="k">Generation</div>
-          <div class="v num" id="t-gen">—</div>
-          <div class="n">tokens per second</div>
-        </div>
-        <div class="tile">
-          <div class="k">Prefill</div>
-          <div class="v num" id="t-prefill">—</div>
-          <div class="n">prompt tokens per second</div>
-        </div>
-        <div class="tile">
-          <div class="k">First token</div>
-          <div class="v num" id="t-ttft">—</div>
-          <div class="n">short prompt, p50</div>
-        </div>
-        <div class="tile">
-          <div class="k">Peak memory</div>
-          <div class="v num" id="t-rss">—</div>
-          <div class="n">resident, whole process</div>
-        </div>
-      </div>
+      {# A row that was not measured is left out rather than printed as a
+         dash; bench.js shows the list once there is a run to report. #}
+      <dl class="facts lead" id="tiles" hidden>
+        <div id="row-gen"><dt>Generation</dt><dd><span class="num" id="t-gen"></span> tokens per second</dd></div>
+        <div id="row-prefill"><dt>Prefill</dt><dd><span class="num" id="t-prefill"></span> prompt tokens per second</dd></div>
+        <div id="row-ttft"><dt>First token</dt><dd><span class="num" id="t-ttft"></span> short prompt, p50</dd></div>
+        <div id="row-rss"><dt>Peak memory</dt><dd><span class="num" id="t-rss"></span> resident, whole process</dd></div>
+      </dl>
+      <div class="empty" id="tiles-empty">Run the suite to fill this in.</div>
     </section>
 
     <section class="section" id="suite">
@@ -67,7 +54,7 @@
         {% for c in cases %}
         <div><dt>{{ c.label }}</dt><dd class="num">~{{ c.target }} tok × {{ c.reps }}</dd></div>
         {% endfor %}
-        <div><dt>Generated</dt><dd class="num">128 tok each</dd></div>
+        <div><dt>Generated</dt><dd><span class="num">128 tok</span> each</dd></div>
         <div><dt>Warm-up</dt><dd>discarded</dd></div>
         <div><dt>Context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
         <div><dt>Threads</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
@@ -91,7 +78,7 @@
       <h2>Time to first token</h2>
       <p class="sub">
         Prefill is compute-bound and batches, so a 1024-token prompt costs far
-        less than 32× a 32-token one. The lighter bar is the p95.
+        less than 32× a 32-token one. The fainter bar is the p95.
       </p>
       <div class="panel">
         <div class="chart" id="chart-ttft"><div class="empty">Run the suite to fill this in.</div></div>
@@ -112,7 +99,7 @@
       </div>
       <div class="panel">
         <div class="chart" id="chart-ref"></div>
-        <div class="axis num"><span>0</span><span>tokens per second</span><span id="ref-max">70</span></div>
+        <div class="axis"><span class="num">0</span><span>tokens per second</span><span class="num" id="ref-max">70</span></div>
       </div>
     </section>
 

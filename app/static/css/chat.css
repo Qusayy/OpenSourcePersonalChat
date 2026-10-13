@@ -277,13 +277,17 @@
 /* -------------------------------------------------------- command palette */
 
 .palette {
+  /* Every line in the list, heading or option, is this tall. The list is
+     capped at a whole number of them and snaps to them, so it never ends
+     partway through a row. */
+  --row: 36px;
   position: absolute;
   left: 0;
   right: 0;
   bottom: calc(100% + var(--s-2));
   z-index: var(--z-pop);
-  max-height: 320px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   padding: var(--s-1);
   border: 1px solid var(--rule);
   border-radius: var(--r-2);
@@ -297,16 +301,22 @@
   bottom: auto;
 }
 .palette .group {
-  padding: var(--s-2) var(--s-3) var(--s-1);
+  display: flex;
+  align-items: flex-end;
+  height: var(--row);
+  padding: 0 var(--s-3) var(--s-2);
   color: var(--ink-2);
   font-size: var(--t-1);
+  scroll-snap-align: start;
 }
 .palette .row {
   display: flex;
   align-items: center;
   gap: var(--s-3);
   width: 100%;
-  padding: var(--s-2) var(--s-3);
+  height: var(--row);
+  padding: 0 var(--s-3);
+  scroll-snap-align: start;
   border-radius: var(--r-1);
   color: var(--ink);
   font-size: var(--t-2);
@@ -319,14 +329,22 @@
 .palette .row .g {
   color: var(--ink-2);
 }
-.palette .row .desc {
-  margin-left: auto;
-  max-width: 52%;
-  overflow: hidden;
+.pal-list {
+  max-height: calc(var(--row) * 9);
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+}
+/* What the highlighted command does, in full, under the list. A description
+   squeezed into each row was cut off mid-sentence on every one of them. */
+.pal-desc {
+  min-height: calc(2 * 1.45em + var(--s-2) * 2);
+  margin-top: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--rule);
   color: var(--ink-2);
   font-size: var(--t-1);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 
 /* ---------------------------------------------------------------- messages */
@@ -519,10 +537,11 @@
    is the one thing in the thread that takes the live colour. */
 .caret {
   display: inline-block;
-  width: 0.5em;
-  height: 1.05em;
-  margin-left: 2px;
-  vertical-align: -0.18em;
+  /* the same thin bar as the caret in the input above it */
+  width: 2px;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: -0.2em;
   background: var(--live);
   animation: caret 1s steps(2, start) infinite;
 }
@@ -537,10 +556,21 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--s-1) var(--s-3);
+  gap: var(--s-1) var(--s-4);
   margin-top: var(--s-3);
   color: var(--ink-2);
   font-size: var(--t-1);
+}
+/* The figures wrap among themselves and the two actions stay together, so a
+   narrow screen never strands one figure on a line with the buttons. */
+.msg-foot .figs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+}
+.msg-foot .figs b {
+  color: var(--ink);
+  font-weight: 400;
 }
 .msg-foot .act {
   display: flex;
@@ -620,6 +650,15 @@
   .msg.user {
     margin-top: var(--s-6);
   }
+  /* Five words do not fit one row here, and a row that scrolls sideways hid
+     the last of them with nothing to say it was there. They wrap. */
+  .composer-foot {
+    align-items: flex-start;
+  }
+  .persona-row {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
 }
 
 @media (pointer: coarse) {
@@ -637,7 +676,28 @@
   .skill {
     min-height: 56px;
   }
-  .palette .row {
-    min-height: 48px;
+  .palette {
+    --row: 48px;
+  }
+}
+
+/* At phone width the five personas fit one row once the padding between them
+   is trimmed; a full-width word is still a 44px-tall target. Wrapping (set
+   above) remains for screens too narrow even for that. */
+@media (max-width: 620px) {
+  /* The foot's own gap would be spent on an empty spacer and leave the row
+     ten pixels short of fitting. */
+  .composer-foot {
+    column-gap: 0;
+  }
+  #char-count {
+    margin-left: var(--s-3);
+  }
+  .persona-row {
+    gap: 0;
+    margin-left: -5px;
+  }
+  .persona {
+    padding-inline: 5px;
   }
 }

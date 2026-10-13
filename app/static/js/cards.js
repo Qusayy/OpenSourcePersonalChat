@@ -9,7 +9,7 @@
 import { escapeHtml } from "./md.js";
 import { icon } from "./icons.js";
 import { enter } from "./motion.js";
-import { sparkPaths } from "./metrics.js";
+import { sparkPaths, fmtMs } from "./metrics.js";
 
 const el = (html) => {
   const wrap = document.createElement("div");
@@ -62,24 +62,36 @@ const weatherArt = (condition) =>
 /* ----------------------------------------------------------------- cards */
 
 /**
- * The shell every card shares: a figure with a caption that names the tool
- * and, where there is one, its source or a qualifier ("exact", a place, a
- * domain). How long the tool took is on the route line above, not here —
- * said once.
+ * The shell every card shares: a figure with a caption that names the tool,
+ * gives its source or a qualifier where there is one ("exact", a place, a
+ * domain), and says how long it took. This caption is the only place a
+ * finished tool is named and timed.
+ *
+ * `meta` is what the tool's step reported: { label, ms }. It is absent when a
+ * card is rendered with no step behind it.
  */
-const figure = (kind, name, note, body, tool = kind) =>
+// An offline tool finishes inside the timer's resolution. That is "under a
+// millisecond", not "0ms": nothing takes no time.
+const took = (ms) => (ms < 1 ? "<1ms" : fmtMs(ms));
+
+const figure = (kind, name, note, body, tool = kind, meta = null) =>
   el(`
     <figure class="card-tool card-${kind}">
       <figcaption class="tool-head">
         <span class="g">${icon(tool, 14)}</span>
         <span class="tool-name">${name}</span>
         ${note ? `<span class="tool-note">${note}</span>` : ""}
+        ${
+          meta && meta.ms !== null && meta.ms !== undefined
+            ? `<span class="tool-ms num">${took(meta.ms)}</span>`
+            : ""
+        }
       </figcaption>
       ${body}
     </figure>`);
 
 const RENDERERS = {
-  calculator(d) {
+  calculator(d, meta) {
     // The result is printed exactly as the tool returned it. It used to count
     // up from zero, which showed several wrong numbers on the way to an
     // answer whose whole point is that it is exact.
@@ -94,11 +106,12 @@ const RENDERERS = {
          )}</span></div>
          ${d.fraction ? `<div class="frac num">${escapeHtml(d.fraction)}</div>` : ""}
        </div>`,
-      "calculator"
+      "calculator",
+      meta
     );
   },
 
-  weather(d) {
+  weather(d, meta) {
     const hourly = (d.hourly || []).filter((v) => typeof v === "number");
     const [line, fill] = sparkPaths(hourly.length > 2 ? hourly : [0, 0], 120, 38, {
       autoMin: true,
@@ -126,9 +139,9 @@ const RENDERERS = {
          <div class="temp"><span class="val num">${num(d.temperature, 1)}</span><span class="unit">°C</span></div>
          <div class="meta">
            <div class="cond">${escapeHtml(d.condition || "")}</div>
-           <div class="sub num">feels ${num(d.feels_like, 1)}° · wind ${num(d.wind)} km/h · ${num(
-        d.humidity
-      )}%</div>
+           <div class="sub">feels <span class="num">${num(d.feels_like, 1)}°</span> · wind <span class="num">${num(
+        d.wind
+      )} km/h</span> · humidity <span class="num">${num(d.humidity)}%</span></div>
          </div>
        </div>
        ${
@@ -137,14 +150,16 @@ const RENDERERS = {
                 <path class="w-area" d="${fill}"></path>
                 <path class="w-line" d="${line}"></path>
               </svg>
-              <div class="axis-mini num"><span>now</span><span>next 24h</span></div>`
+              <div class="axis-mini"><span>now</span><span>next 24h</span></div>`
            : ""
        }
-       <div class="days">${days}</div>`
+       <div class="days">${days}</div>`,
+      "weather",
+      meta
     );
   },
 
-  wikipedia(d) {
+  wikipedia(d, meta) {
     return figure(
       "wiki",
       "Wikipedia",
@@ -154,11 +169,12 @@ const RENDERERS = {
        <p class="extract">${escapeHtml(d.extract || "")}</p>
        <a class="src" href="${escapeHtml(d.url || "#")}" target="_blank"
           rel="noopener noreferrer">en.wikipedia.org${icon("external", 12)}</a>`,
-      "wikipedia"
+      "wikipedia",
+      meta
     );
   },
 
-  url(d) {
+  url(d, meta) {
     return figure(
       "url",
       "Page read",
@@ -166,16 +182,19 @@ const RENDERERS = {
       `<div class="title">${escapeHtml(d.title || "")}</div>
        <p class="lede">${escapeHtml(d.lede || "")}</p>
        <div class="url-foot">
-         <span class="num">${num(d.words)} words · ~${num(d.reading_minutes, 1)} min read${
-        d.truncated ? " · truncated" : ""
-      }</span>
+         <span><span class="num">${num(d.words)}</span> words · about <span class="num">${num(
+        d.reading_minutes,
+        1
+      )}</span> min read${d.truncated ? " · truncated" : ""}</span>
          <a class="src" href="${escapeHtml(d.url || "#")}" target="_blank"
             rel="noopener noreferrer">Open the page${icon("external", 12)}</a>
-       </div>`
+       </div>`,
+      "url",
+      meta
     );
   },
 
-  currency(d) {
+  currency(d, meta) {
     return figure(
       "exchange",
       "Currency",
@@ -191,11 +210,12 @@ const RENDERERS = {
            <span class="code">${escapeHtml(d.to || "")}</span>
          </div>
        </div>`,
-      "currency"
+      "currency",
+      meta
     );
   },
 
-  convert(d) {
+  convert(d, meta) {
     return figure(
       "exchange",
       "Convert",
@@ -211,11 +231,12 @@ const RENDERERS = {
            <span class="code">${escapeHtml(d.to || "")}</span>
          </div>
        </div>`,
-      "convert"
+      "convert",
+      meta
     );
   },
 
-  clock(d) {
+  clock(d, meta) {
     const [hh, mm] = String(d.time || "00:00").split(":").map(Number);
     const minuteAngle = mm * 6;
     const hourAngle = ((hh % 12) + mm / 60) * 30;
@@ -249,11 +270,13 @@ const RENDERERS = {
            <div class="zones">${others}</div>
            ${d.note ? `<div class="note">${escapeHtml(d.note)}</div>` : ""}
          </div>
-       </div>`
+       </div>`,
+      "clock",
+      meta
     );
   },
 
-  textstats(d) {
+  textstats(d, meta) {
     const max = Math.max(...(d.top_terms || []).map((t) => t.count), 1);
     const terms = (d.top_terms || [])
       .map(
@@ -276,27 +299,31 @@ const RENDERERS = {
          <div><b class="num">${num(d.avg_sentence_words, 1)}</b><span>words per sentence</span></div>
        </div>
        <div class="terms">${terms}</div>`,
-      "textstats"
+      "textstats",
+      meta
     );
   },
 
-  error(d) {
+  error(d, meta) {
+    // Named for the tool that failed when that is known, so the line reads
+    // "Weather failed" rather than leaving the reader to work out which.
     return figure(
       "fail",
-      "Tool failed",
+      meta?.label ? `${escapeHtml(meta.label)} failed` : "Tool failed",
       "",
       `<p>${escapeHtml(d.message || "Something went wrong.")}</p>`,
-      "error"
+      "error",
+      meta
     );
   },
 };
 
 /** Build a card element, or null if the type is unknown. */
-export function renderCard(type, data) {
+export function renderCard(type, data, meta = null) {
   const make = RENDERERS[type];
   if (!make) return null;
   try {
-    const node = make(data || {});
+    const node = make(data || {}, meta);
     node.dataset.card = type;
     return node;
   } catch (err) {
@@ -306,8 +333,8 @@ export function renderCard(type, data) {
 }
 
 /** Insert a card with the shared entrance motion. */
-export function mountCard(host, type, data, index = 0) {
-  const node = renderCard(type, data);
+export function mountCard(host, type, data, index = 0, meta = null) {
+  const node = renderCard(type, data, meta);
   if (!node) return null;
   host.appendChild(node);
   enter(node, { delay: index * 40 });

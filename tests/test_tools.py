@@ -16,6 +16,7 @@ try:
     from app.tools import base
     from app.tools.base import (
         Arg, Tool, ToolResult, call_tool, check, decision_ceiling, tool_menu, tools_to_gbnf,
+        was_given,
     )
     from tests import support
     from tests.gbnf import Grammar
@@ -685,6 +686,50 @@ class AllowedValueTests(unittest.TestCase):
         clean, rejection = check(base.REGISTRY["weather"], {"location": "x" * 500})
         self.assertIsNone(rejection)
         self.assertEqual(len(clean["location"]), 500)
+
+class GivenAddressTests(unittest.TestCase):
+    """Whether an address is one the user wrote, or one that came from
+    somewhere else."""
+
+    SAID = ["Can you read https://Example.org/tides for me?", "and also www.rivers.test/a/b."]
+
+    def test_an_address_they_wrote_is_theirs_however_it_is_dressed(self) -> None:
+        for address in (
+            "https://example.org/tides", "http://example.org/tides", "example.org/tides",
+            "https://www.example.org/tides", "HTTPS://EXAMPLE.ORG/tides", "https://example.org/tides/",
+            "https://example.org", "rivers.test/a/b", "https://rivers.test/a/b", "www.rivers.test/a",
+        ):
+            with self.subTest(address=address):
+                self.assertTrue(was_given(address, self.SAID))
+
+    def test_an_address_they_did_not_write_is_not(self) -> None:
+        for address in (
+            "https://evil.example/collect",
+            "https://example.org/tides?leak=their+question",   # their address, with something added
+            "https://example.org/tides/secret",                 # their address, and further
+            "https://example.org/tide",                         # part of a word of it
+            "https://xample.org/tides",                         # the end of a name of theirs
+            "https://org/tides",
+            "https://example.org.evil.example/tides",
+            "", "   ", "https://", "www.",
+        ):
+            with self.subTest(address=address):
+                self.assertFalse(was_given(address, self.SAID))
+
+    def test_an_address_inside_a_longer_name_of_theirs_is_not_theirs(self) -> None:
+        said = ["see https://data.example.com/report"]
+        self.assertFalse(was_given("https://a.example.com/report", said))
+        self.assertFalse(was_given("https://example.com/report", said))
+        self.assertTrue(was_given("https://data.example.com/report", said))
+
+    def test_nothing_they_said_gives_no_address(self) -> None:
+        self.assertFalse(was_given("https://example.org", []))
+        self.assertFalse(was_given("https://example.org", ["tell me about tides"]))
+
+    def test_the_page_reader_is_the_tool_that_is_held_to_this(self) -> None:
+        held = [(t.name, a.name) for t in base.REGISTRY.values() for a in t.args if a.quoted]
+        self.assertEqual(held, [("read_url", "url")])
+
 
 if __name__ == "__main__":
     unittest.main()

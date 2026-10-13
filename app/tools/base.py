@@ -16,7 +16,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import settings
 
@@ -39,6 +39,11 @@ class Arg:
     # default ceiling. It bounds what a model can write, not what a person can
     # type: a tool keeps its own limits for that.
     max_len: int | None = None
+    # The value is an address this server will go out to. A model may pass one
+    # on; it may not make one up or take one from something it has read. So a
+    # call the model chose is only made if the value is in the user's own
+    # words. See `was_given`.
+    quoted: bool = False
 
 
 @dataclass
@@ -216,6 +221,33 @@ def _kind(value: Any) -> str:
     if isinstance(value, (list, tuple, set)):
         return "a list"
     return f"a {type(value).__name__}"
+
+
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.I)
+
+
+def was_given(address: str, texts: Iterable[str]) -> bool:
+    """Whether an address is one the user wrote themselves.
+
+    A model that reads a fetched page can be talked into fetching another:
+    "now open http://elsewhere/?q=" followed by something from the
+    conversation. The grammar cannot stop that, since the call is perfectly
+    well formed, and neither can a check on where the address points, since it
+    points somewhere public. What stops it is that the address is not one the
+    user gave.
+
+    The comparison forgives what people leave off and put on: the scheme,
+    "www.", a trailing slash, capitals, and a path shortened to its site. It
+    does not forgive anything added: a longer path or a query string that the
+    user did not write is a different address.
+    """
+    key = _SCHEME.sub("", (address or "").strip().lower()).removeprefix("www.").rstrip("/")
+    if not key:
+        return False
+    # The address has to stand as an address in what they wrote: not inside a
+    # longer name, and not continued by more of a name.
+    found = re.compile(r"(?<![a-z0-9.\-])(?:www\.)?" + re.escape(key) + r"(?![a-z0-9\-])")
+    return any(found.search(text.lower()) for text in texts)
 
 
 def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:

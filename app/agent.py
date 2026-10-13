@@ -40,7 +40,7 @@ from .router import (
 )
 from .skills import SAY_SO, Skill, build_prompt, did_not_work
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import Rejection, ToolResult, available, check
+from .tools.base import Rejection, ToolResult, available, check, was_given
 
 Event = tuple[str, dict]
 ToolCaller = Callable[[str, dict], Awaitable[ToolResult]]
@@ -398,8 +398,8 @@ class _Run:
         take, it is told why and asked once more, and whatever it says then is
         what the run goes on with: a call that can be made, no call at all, or
         a call that still cannot be made. That last one is not argued with a
-        second time. It is handed to the dispatcher, which refuses it where the
-        visitor can see.
+        second time, and it is not made: it is shown to the visitor as a call
+        that was refused, with the reason.
         """
         messages = decision_messages(self.message, tools, self._asked())
         action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
@@ -422,6 +422,8 @@ class _Run:
             if still is not None:
                 self.trace.steps[-1].ok = False
                 self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
+                # Carried with the call, so that it is refused and not run.
+                action.call.meta["refusal"] = still
         return action, [*passes, said]
 
     def _asked(self) -> tuple[str, str] | None:
@@ -435,8 +437,29 @@ class _Run:
         return sent["content"], question["content"]
 
     def _refusal(self, call: ToolCall) -> Rejection | None:
-        """Why a call the model chose cannot be made as it stands, if it cannot."""
-        return check(REGISTRY[call.name], call.args)[1]
+        """Why a call the model chose cannot be made as it stands, if it cannot.
+
+        Two things can be wrong with it. The tool cannot take what it was
+        given; or it was given an address to go out to that the user never
+        wrote. The second is not a mistake of form, and the dispatcher would
+        run it. It is refused here because of where the address came from:
+        the only other place the model could have got one is something it
+        read.
+        """
+        tool = REGISTRY[call.name]
+        clean, rejection = check(tool, call.args)
+        if rejection is not None:
+            return rejection
+        theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
+        for arg in tool.args:
+            value = clean.get(arg.name)
+            if arg.quoted and value is not None and not was_given(value, theirs):
+                return Rejection(
+                    (f"{arg.name} must be an address the user gave; got {value!r}",),
+                    f"{tool.label} only goes to an address you gave it yourself.",
+                    "not allowed",
+                )
+        return None
 
     async def _choose(
         self, kind: str, messages: list[dict], tools: list, given: dict
@@ -475,7 +498,13 @@ class _Run:
             "tool": call.name, "args": call.args,
         }
         began = time.perf_counter()
-        result = await self._call(call)
+        refusal: Rejection | None = call.meta.get("refusal")
+        if refusal is not None:
+            # A call the model chose that was refused and stayed refused. It
+            # is not made. What the visitor sees is the refusal.
+            result = ToolResult(False, refusal.summary, error=refusal.code)
+        else:
+            result = await self._call(call)
         if result is None:
             self.trace.steps.append(Step(
                 "tool", name=call.name, via=call.via, input=call.args,

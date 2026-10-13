@@ -211,8 +211,9 @@ export interface DoneEvent {
   tool_calls: number;
 }
 
-/** Every event of the chat stream, by name. */
-export interface ChatEvents {
+/** Every event of the chat stream, by name. A type, not an interface, so it
+ *  can be the event map `sseFetch` is generic over. */
+export type ChatEvents = {
   conversation: {
     id: string;
     title: string;
@@ -231,7 +232,7 @@ export interface ChatEvents {
   token: { t: string; ttft_ms?: number };
   done: DoneEvent;
   error: { message: string };
-}
+};
 
 /* -------------------------------------------------------------- benchmark -- */
 
@@ -325,7 +326,7 @@ export interface BenchResults extends BenchStatic {
 }
 
 /** Every event of the benchmark stream, by name. */
-export interface BenchEvents {
+export type BenchEvents = {
   stage: { text: string; pct: number };
   rep: { case: string; rep: number; gen_tps: number; ttft_ms: number; pct: number };
   case: BenchCaseSummary;
@@ -341,7 +342,7 @@ export interface BenchEvents {
     stored: boolean;
   };
   error: { message: string };
-}
+};
 
 /* -------------------------------------------------------------- bootstrap -- */
 

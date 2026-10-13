@@ -102,9 +102,13 @@
     0 12px 32px -8px oklch(22% 0.015 150 / 0.22);
 
   /* motion — state changes only */
+  /* Arrivals decelerate; exits leave faster than things arrive. */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-1: 120ms;
-  --dur-2: 200ms;
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --dur-1: 120ms; /* feedback: hover, press, colour */
+  --dur-2: 200ms; /* a routine change of state */
+  --dur-3: 320ms; /* something moving across part of the screen */
+  --dur-4: 480ms; /* an entrance, or a chart drawing itself */
 
   /* layers */
   --z-status: 10;
@@ -112,13 +116,15 @@
   --z-toast: 60;
   --z-skip: 200;
 
-  /* layout — one left edge shared by the wordmark, the column and the
-     composer. It sits a third of the spare width in from the left, so the
-     column is neither jammed against the edge nor centred like a card. The
-     status line alone runs the full width, --edge in from each side. */
+  /* layout — everything is centred. The top bar and the status line share
+     one container, --page wide, so both start and end on the same two lines
+     at any window width; --inset is the space either side of it. The reading
+     column, --col, is centred inside. --edge is the least space anything
+     keeps from the window. */
+  --page: 76rem;
   --col: 42rem;
   --edge: 24px;
-  --pad: max(var(--edge), calc((100vw - var(--col)) / 3));
+  --inset: max(var(--edge), calc((100vw - var(--page)) / 2));
   --bar-h: 56px;
 }
 

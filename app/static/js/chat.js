@@ -1,12 +1,13 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth, setPhase, holdPhase } from "./app.js";
+import { $, $$, toast, copyText, setRail, onHealth, setPhase, holdPhase } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
-import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
+import { Meter, fmt, fmtInt, fmtMs } from "./metrics.js";
 import { mountCard } from "./cards.js";
 import { mountSkills, setupPalette } from "./skills.js";
-import { enter, REDUCED } from "./motion.js";
+import { enter, onFrame, REDUCED, EASE } from "./motion.js";
+import { aurora } from "./aurora.js";
 import { icon, hasIcon } from "./icons.js";
 
 /** Fade a transient element out before removing it. */
@@ -39,15 +40,12 @@ const els = {
   waitLead: $("#st-wait-lead"),
   waitS: $("#st-wait-s"),
   tpsFig: $(".st-tps"),
-  outFig: $(".st-out"),
   ttftFig: $(".st-ttft"),
-  sparkDot: $("#spark-dot"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
-  out: $("#out-value"),
   ctxValue: $("#ctx-value"),
   ctxFill: $("#ctx-fill"),
-  sparkLine: $("#spark-line"),
+  spark: $("#spark"),
   skillGrid: $("#skill-grid"),
   skillChip: $("#skill-active"),
   palette: $("#palette"),
@@ -69,7 +67,31 @@ function paintPersonas() {
   $$(".persona").forEach((b) =>
     b.setAttribute("aria-pressed", String(b.dataset.persona === state.persona))
   );
+  placePersonaInk();
 }
+
+// One rule that slides under whichever persona is chosen. It is positioned
+// from the chosen button's own box, so it follows a wrap onto a second row and
+// a change of font; `moving` is added only after the first placement, so it
+// appears in place on load and travels thereafter.
+const personaRow = $("#persona-row");
+const personaInk = document.createElement("span");
+personaInk.className = "persona-ink";
+personaInk.setAttribute("aria-hidden", "true");
+personaRow?.appendChild(personaInk);
+
+function placePersonaInk() {
+  const chosen = personaRow?.querySelector('.persona[aria-pressed="true"]');
+  if (!chosen || !chosen.offsetWidth) return;
+  const pad = parseFloat(getComputedStyle(chosen).paddingLeft) || 0;
+  personaInk.style.setProperty("--x", `${chosen.offsetLeft + pad}px`);
+  personaInk.style.setProperty("--y", `${chosen.offsetTop + chosen.offsetHeight - 3}px`);
+  personaInk.style.setProperty("--w", String(Math.max(0, chosen.offsetWidth - pad * 2)));
+  personaRow.classList.add("inked");
+  if (!REDUCED) requestAnimationFrame(() => personaInk.classList.add("moving"));
+}
+window.addEventListener("resize", placePersonaInk);
+document.fonts?.ready.then(placePersonaInk);
 $$(".persona").forEach((b) =>
   b.addEventListener("click", () => {
     state.persona = b.dataset.persona;
@@ -250,6 +272,55 @@ function caretHost(root) {
   return el;
 }
 
+/* Ink-in.
+ *
+ * Text that has just arrived fades up from nothing, so an answer is seen being
+ * written rather than appearing in slabs ten times a second. The block being
+ * written is rebuilt on every tick, which would restart any animation inside
+ * it. So the renderer remembers which stretches of that block are new, as
+ * offsets into its rendered text with the time each arrived, and wraps them
+ * again after every rebuild with the animation already that far along.
+ */
+const INK_MS = 280; // matches `ink-in` in chat.css
+
+function inkIn(root, ranges, now) {
+  if (!ranges.length) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+  let offset = 0;
+  for (const node of nodes) {
+    const start = offset;
+    const end = start + node.nodeValue.length;
+    offset = end;
+    // White space between blocks is counted but never wrapped: a span there
+    // would be a stray child of a list or a table row.
+    if (!node.nodeValue.trim()) continue;
+    // Latest stretch first. Wrapping splits the text node and leaves its
+    // beginning in place, so the offsets of earlier stretches stay true.
+    for (let i = ranges.length - 1; i >= 0; i--) {
+      const from = Math.max(ranges[i].start, start);
+      const to = Math.min(ranges[i].end, end);
+      if (from >= to) continue;
+      const range = document.createRange();
+      range.setStart(node, from - start);
+      range.setEnd(node, to - start);
+      const span = document.createElement("span");
+      span.className = "fresh";
+      span.style.animationDelay = `${-Math.round(now - ranges[i].at)}ms`;
+      range.surroundContents(span);
+    }
+  }
+}
+
+/** Take the wrappers out again, leaving the text exactly where it was. */
+function inkDry(root) {
+  const spans = root.querySelectorAll(".fresh");
+  if (!spans.length) return;
+  for (const span of spans) span.replaceWith(...span.childNodes);
+  root.normalize();
+}
+
 function proseRenderer(host) {
   const stable = document.createElement("div");
   const tail = document.createElement("div");
@@ -257,27 +328,83 @@ function proseRenderer(host) {
   caret.className = "caret";
   host.append(stable, tail);
   let settled = 0; // blocks already committed to `stable`
+  let written = 0; // rendered length of the block being written, at the last tick
+  let fresh = []; // {start, end, at}: stretches of that block still fading up
+  let finished = null; // the text the finished answer was rendered from
+
+  /** Note what is new in a block `length` long, and return what is still fading. */
+  const mark = (length, now) => {
+    fresh = fresh.filter((r) => now - r.at < INK_MS);
+    // Shorter than it was: a closing mark arrived and markdown re-read what
+    // was there ("**bold" became bold). The offsets no longer mean what they
+    // did, so nothing is wrapped this time.
+    if (length < written) fresh = [];
+    else if (length > written) fresh.push({ start: written, end: length, at: now });
+    written = length;
+    return fresh;
+  };
 
   return {
     update(raw, caretOn) {
+      finished = null;
+      const now = performance.now();
       const blocks = splitBlocks(raw);
       // Commit every block that is now finished, appending rather than
       // rebuilding so existing nodes are left alone.
       while (settled < blocks.length - 1) {
-        stable.insertAdjacentHTML("beforeend", renderMarkdown(blocks[settled]));
+        const html = renderMarkdown(blocks[settled]);
+        if (REDUCED) {
+          stable.insertAdjacentHTML("beforeend", html);
+        } else {
+          // Its last words may still be fading up, and it will not be
+          // rendered again: wrap them once, here, on the way in.
+          const done = document.createElement("div");
+          done.innerHTML = html;
+          inkIn(done, mark(done.textContent.length, now), now);
+          stable.append(...done.childNodes);
+          written = 0;
+          fresh = [];
+        }
         settled++;
       }
       const last = blocks[blocks.length - 1];
       tail.innerHTML = last === undefined ? "" : renderMarkdown(last);
+      if (!REDUCED) inkIn(tail, mark(tail.textContent.length, now), now);
       if (caretOn) caretHost(tail).appendChild(caret);
       else caret.remove();
     },
     finish(raw) {
-      // One clean pass at the end so the finished answer is a single tree.
       caret.remove();
+      // Called when the answer ends and again as the request is torn down. The
+      // second call has nothing new to render, and rendering anyway would cut
+      // short the fade the first one left running.
+      if (finished === raw) return;
+      finished = raw;
+      const now = performance.now();
+      // What was on screen at the last tick, as offsets into the whole answer,
+      // and which of it was still fading up.
+      const before = stable.textContent.length;
+      const shown = before + written;
+      const drying = fresh
+        .filter((r) => now - r.at < INK_MS)
+        .map((r) => ({ start: before + r.start, end: before + r.end, at: r.at }));
+      // One clean pass at the end so the finished answer is a single tree.
       stable.innerHTML = "";
       tail.innerHTML = renderMarkdown(raw);
       settled = 0;
+      written = 0;
+      fresh = [];
+      if (REDUCED) return;
+      // The last words. Those that arrived since the last tick fade up like
+      // any others, and those already fading carry on from where they were,
+      // instead of the clean render snapping all of them to full.
+      const length = tail.textContent.length;
+      if (length < shown) return; // the whole-answer render read it differently; leave it be
+      if (length > shown) drying.push({ start: shown, end: length, at: now });
+      if (!drying.length) return;
+      inkIn(tail, drying, now);
+      // Then the wrappers come out, so the finished answer is clean markup.
+      setTimeout(() => inkDry(tail), INK_MS + 80);
     },
   };
 }
@@ -408,9 +535,8 @@ els.thread.addEventListener("click", (e) => {
   if (!btn) return;
   const msg = btn.closest(".msg");
   if (btn.dataset.act === "copy") {
-    navigator.clipboard.writeText(msg.dataset.raw || "").then(
-      () => toast("Answer copied"),
-      () => toast("Clipboard blocked by the browser", "err")
+    copyText(msg.dataset.raw || "").then((copied) =>
+      copied ? toast("Answer copied") : toast("Clipboard blocked by the browser", "err")
     );
   } else if (btn.dataset.act === "again") {
     if (state.streaming) return;
@@ -423,25 +549,138 @@ els.thread.addEventListener("click", (e) => {
 /* --------------------------------------------------------- status line --- */
 
 const meter = new Meter({
-  onSample: ({ rate, total, history }) => {
+  onSample: ({ rate, total, at }) => {
     // The meter ticks from the moment a request is sent. Until a token has
     // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
     if (!total) return;
-    els.tps.textContent = fmt(rate, 1);
-    els.out.textContent = fmtInt(total);
-    els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
-    // The newest sample, marked on the trace: where the rate is now. Same
-    // scale as sparkPaths, which plots against the tallest sample or 1.
-    els.sparkDot.style.setProperty("--y", (history.at(-1) / Math.max(...history, 1)).toFixed(3));
-    els.sparkDot.hidden = history.length < 2;
+    traceSample(rate, at);
   },
 });
+
+/* The rate, live.
+ *
+ * The meter measures four times a second. Shown raw, the number flips and the
+ * line jerks four times a second. So what is on screen moves every frame
+ * toward what was last measured: the figure eases to the new rate and the
+ * line is drawn a quarter of a second behind now, which is exactly enough for
+ * its head to glide from one sample to the next. Nothing is invented: every
+ * point on the line is a measured sample or lies on the straight line between
+ * two of them.
+ */
+const TRACE_SPAN = 12000; // ms of history across the full width
+const TRACE_LAG = 260; // drawn this far behind now; just over one sample interval
+const trace = { samples: [], shown: 0, target: 0, top: 1, ink: "", off: null, ctx: null, w: 0, h: 0 };
+
+function traceStart() {
+  trace.samples = [];
+  trace.shown = trace.target = 0;
+  trace.top = 1;
+  trace.ink = els.spark ? getComputedStyle(els.spark).color : "";
+  if (!REDUCED && !trace.off) trace.off = onFrame(traceFrame);
+}
+
+function traceStop() {
+  trace.off?.();
+  trace.off = null;
+  trace.samples = [];
+  if (trace.ctx) trace.ctx.clearRect(0, 0, trace.w, trace.h);
+}
+
+function traceSample(rate, at) {
+  trace.samples.push({ t: at, v: rate });
+  while (trace.samples.length > 2 && at - trace.samples[0].t > TRACE_SPAN + 1000) trace.samples.shift();
+  trace.target = rate;
+  aurora.rate(rate);
+  if (REDUCED) {
+    // No frame loop: the figure and the line step from sample to sample.
+    els.tps.textContent = fmt(rate, 1);
+    drawTrace(at + TRACE_LAG);
+  }
+}
+
+function traceFrame(now, dt) {
+  trace.shown += (trace.target - trace.shown) * (1 - Math.exp(-dt / 140));
+  const text = fmt(trace.shown, 1);
+  if (els.tps.textContent !== text) els.tps.textContent = text;
+  drawTrace(now);
+}
+
+/** Match the canvas's pixels to its box. False while it has no box (hidden). */
+function traceFit() {
+  const c = els.spark;
+  if (!c || !c.clientWidth || !c.clientHeight) return false;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(c.clientWidth * dpr);
+  const h = Math.round(c.clientHeight * dpr);
+  if (c.width !== w || c.height !== h) {
+    c.width = w;
+    c.height = h;
+  }
+  trace.ctx = c.getContext("2d");
+  trace.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  trace.w = c.clientWidth;
+  trace.h = c.clientHeight;
+  return true;
+}
+
+/** The measured rate at time `t`: a sample, or the line between two. */
+function rateAt(t) {
+  const s = trace.samples;
+  if (t <= s[0].t) return s[0].v;
+  for (let i = 1; i < s.length; i++) {
+    if (t <= s[i].t) {
+      const a = s[i - 1];
+      const b = s[i];
+      return a.v + (b.v - a.v) * ((t - a.t) / (b.t - a.t || 1));
+    }
+  }
+  return s[s.length - 1].v;
+}
+
+function drawTrace(now) {
+  if (!traceFit()) return;
+  const { ctx, w, h, samples } = trace;
+  ctx.clearRect(0, 0, w, h);
+  if (samples.length < 2) return;
+
+  const head = now - TRACE_LAG;
+  // Same scale as before: against the tallest sample, or 1 tok/s. The scale
+  // eases as well, so a new peak does not make the whole line jump.
+  const peak = Math.max(1, ...samples.map((s) => s.v));
+  trace.top += (peak - trace.top) * (REDUCED ? 1 : 0.1);
+  const pad = 3;
+  const right = w - 3;
+  const x = (t) => right - ((head - t) / TRACE_SPAN) * right;
+  const y = (v) => h - pad - (Math.min(v, trace.top) / trace.top) * (h - pad * 2);
+
+  ctx.beginPath();
+  let drawing = false;
+  for (const s of samples) {
+    if (s.t > head) break;
+    const px = x(s.t);
+    if (px < -6) continue;
+    if (drawing) ctx.lineTo(px, y(s.v));
+    else ctx.moveTo(px, y(s.v));
+    drawing = true;
+  }
+  const now_v = rateAt(head);
+  if (drawing) ctx.lineTo(right, y(now_v));
+  else ctx.moveTo(right, y(now_v));
+  ctx.strokeStyle = ctx.fillStyle = trace.ink;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = ctx.lineCap = "round";
+  ctx.stroke();
+  // where the rate is now
+  ctx.beginPath();
+  ctx.arc(right, y(now_v), 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
 
 function setContext(tokens) {
   const max = window.AURORA.info.n_ctx || 4096;
   const pct = Math.max(0, Math.min(1, tokens / max));
   els.ctxValue.textContent = fmtInt(tokens);
-  els.ctxFill.style.transform = `scaleX(${pct.toFixed(4)})`;
+  els.ctxFill.style.setProperty("--v", pct.toFixed(4));
   // Past this the next long answer is likely to push old turns out.
   els.bar.dataset.ctx = pct > 0.85 ? "high" : "ok";
 }
@@ -452,17 +691,16 @@ function setContext(tokens) {
  * showing them here as well would say the same thing twice.
  */
 function resetFigures() {
-  els.tpsFig.hidden = els.outFig.hidden = els.ttftFig.hidden = true;
+  els.tpsFig.hidden = els.ttftFig.hidden = true;
   els.tps.textContent = "—";
-  els.out.textContent = "—";
   els.ttft.textContent = "—";
-  els.sparkLine.setAttribute("d", "");
-  els.sparkDot.hidden = true;
+  traceStop();
 }
 
 /** The first token has landed: the figures have something to report. */
 function showFigures(ttftMs) {
-  els.tpsFig.hidden = els.outFig.hidden = false;
+  els.tpsFig.hidden = false;
+  traceStart();
   if (ttftMs !== null && ttftMs !== undefined) {
     els.ttft.textContent = fmtMs(ttftMs);
     els.ttftFig.hidden = false;
@@ -479,6 +717,9 @@ function livePhase(key, lead = "") {
   clearInterval(phaseClock);
   phaseClock = null;
   els.wait.hidden = true;
+  // The one place the aurora is driven from: it follows the same phase the
+  // status line shows, so the two cannot disagree.
+  aurora.phase(key);
   if (!key) return setPhase(null);
   setPhase(key, PHASE_WORDS[key]);
   if (key === "writing") return;
@@ -497,8 +738,21 @@ function livePhase(key, lead = "") {
 
 function setMode(streaming) {
   state.streaming = streaming;
-  els.send.dataset.mode = streaming ? "stop" : "send";
-  els.sendLabel.textContent = streaming ? "Stop" : "Send";
+  const label = streaming ? "Stop" : "Send";
+  if (els.sendLabel.textContent !== label) {
+    els.send.dataset.mode = streaming ? "stop" : "send";
+    els.sendLabel.textContent = label;
+    // The button changes what it does; the word is seen to change with it.
+    if (!REDUCED && els.sendLabel.animate) {
+      els.sendLabel.animate(
+        [
+          { opacity: 0, translate: "0 35%" },
+          { opacity: 1, translate: "0 0" },
+        ],
+        { duration: 200, easing: EASE }
+      );
+    }
+  }
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
   livePhase(streaming ? "working" : null);
 }
@@ -612,6 +866,7 @@ async function send(text) {
           raw += data.t;
           dirty = true;
           meter.token(1);
+          aurora.pulse();
         } else if (event === "done") {
           caretOn = false;
           dirty = false;
@@ -782,8 +1037,19 @@ function newChat() {
 }
 $("#new-chat").addEventListener("click", newChat);
 // Fetched as the drawer opens, so the times are current and a conversation
-// started in another tab is listed.
-$("#menu-btn").addEventListener("click", refreshList);
+// started in another tab is listed. The rows are held unseen for the moment
+// that takes (the drawer is still sliding in) and then arrive as a list, once:
+// showing the old rows, replacing them and animating the new ones would be the
+// same list entering twice.
+$("#menu-btn").addEventListener("click", async () => {
+  els.list.classList.remove("stagger");
+  els.list.classList.add("pending");
+  await Promise.race([refreshList(), new Promise((done) => setTimeout(done, 300))]);
+  els.list.classList.remove("pending");
+  if (REDUCED) return;
+  els.list.classList.add("stagger");
+  setTimeout(() => els.list.classList.remove("stagger"), 700);
+});
 
 /* ------------------------------------------------------------- startup -- */
 

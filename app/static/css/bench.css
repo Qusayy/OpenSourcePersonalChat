@@ -16,12 +16,17 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
+/* The same column as the chat page, by the same rule (see .col in chat.css),
+   so the left edge of the text does not move when the page changes. Text,
+   fact lists and bar charts all run its full width. */
 .wrap {
-  max-width: calc(56rem + var(--pad) + var(--edge));
+  max-width: calc(var(--col) + var(--edge) * 2);
+  margin-inline: auto;
   padding: var(--s-7) max(var(--edge), env(safe-area-inset-right)) var(--s-9)
-    max(var(--pad), env(safe-area-inset-left));
+    max(var(--edge), env(safe-area-inset-left));
 }
 
 .page-head h1 {
@@ -35,7 +40,6 @@
 }
 .page-head p {
   margin: 0;
-  max-width: 40rem;
   text-wrap: pretty;
 }
 
@@ -67,7 +71,6 @@
 }
 .section > .sub {
   margin: 0 0 var(--s-4);
-  max-width: 40rem;
   color: var(--ink-2);
   font-size: var(--t-2);
 }
@@ -78,9 +81,22 @@
   border-top: 1px solid var(--rule);
 }
 
+/* Two things need more room than a reading column: the eight-column table
+   and the history chart. They break out of it by the same amount on each
+   side, to at most 56rem across, and so stay centred on the page's axis.
+   --sbw is the scrollbar gutter the scroller keeps on each side (app.js);
+   in a window too narrow to give anything, the amount is nought. */
+.breakout {
+  --out: clamp(
+    0px,
+    (100vw - 2 * var(--sbw, 0px) - var(--col)) / 2 - var(--edge),
+    (56rem - var(--col)) / 2
+  );
+  margin-inline: calc(var(--out) * -1);
+}
+
 /* A short list of settings: term on the left, value on the right. */
 .facts {
-  max-width: 34rem;
   margin: var(--s-3) 0 0;
   border-top: 1px solid var(--rule);
   font-size: var(--t-2);
@@ -392,7 +408,6 @@
 
 .explain p {
   margin: 0 0 0.9em;
-  max-width: 40rem;
   text-wrap: pretty;
 }
 .explain p:last-child {
@@ -406,7 +421,6 @@
 }
 .explain.after-chart {
   margin: var(--s-4) 0 0;
-  max-width: 40rem;
   font-size: var(--t-2);
 }
 
@@ -416,7 +430,6 @@
 .caveat {
   display: flex;
   gap: var(--s-3);
-  max-width: 44rem;
   padding: var(--s-3) 0;
   border-top: 1px solid var(--rule);
   font-size: var(--t-2);
@@ -424,6 +437,13 @@
 .caveat .icon {
   margin-top: 2px;
   color: var(--caution);
+}
+/* At the head of the page, before the run bar, whose own top rule closes it. */
+.mock-note {
+  margin-top: var(--s-7);
+}
+.mock-note + .runbar {
+  margin-top: 0;
 }
 
 .empty {
@@ -530,4 +550,66 @@
     align-items: center;
     min-height: 44px;
   }
+}
+
+/* ------------------------------------------------------------------ motion */
+
+/* The arrival, once, when the page is come to from outside. */
+.intro .page-head > *,
+.intro .wrap > section {
+  animation: rise-in var(--dur-4) var(--ease) backwards;
+  animation-delay: calc(var(--i, 4) * 50ms);
+}
+.intro .page-head > :nth-child(1) { --i: 0; }
+.intro .page-head > :nth-child(2) { --i: 1; }
+.intro .page-head > :nth-child(3) { --i: 2; }
+.intro .wrap > section:nth-of-type(1) { --i: 3; }
+
+/* Charts draw themselves when they are scrolled to. `reveal-ready` is set by
+   app.js, which also adds `in-view`; without the script nothing is hidden and
+   the charts are simply there. */
+.reveal-ready .track i {
+  transition: transform var(--dur-4) var(--ease);
+}
+.reveal-ready .in-view .track i {
+  transform: scaleX(var(--v, 0));
+}
+.reveal-ready .in-view .bar-row:nth-child(2) .track i { transition-delay: 40ms; }
+.reveal-ready .in-view .bar-row:nth-child(3) .track i { transition-delay: 80ms; }
+.reveal-ready .in-view .bar-row:nth-child(4) .track i { transition-delay: 120ms; }
+.reveal-ready .in-view .bar-row:nth-child(5) .track i { transition-delay: 160ms; }
+.reveal-ready .in-view .bar-row:nth-child(6) .track i { transition-delay: 200ms; }
+:root:not(.reveal-ready) .track i {
+  transform: scaleX(var(--v, 0));
+}
+
+.reveal-ready .stack span {
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-4) var(--ease);
+}
+.reveal-ready .stack.in-view span {
+  transform: none;
+}
+.reveal-ready .stack.in-view span:nth-child(2) { transition-delay: 80ms; }
+.reveal-ready .stack.in-view span:nth-child(3) { transition-delay: 160ms; }
+.reveal-ready .stack.in-view span:nth-child(4) { transition-delay: 240ms; }
+
+/* The history line is drawn left to right, then its points and fill appear. */
+.reveal-ready .linechart .series {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dur-4) var(--ease);
+}
+.reveal-ready .linechart.in-view .series {
+  stroke-dashoffset: 0;
+}
+.reveal-ready .linechart .area,
+.reveal-ready .linechart .pt {
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease) 360ms;
+}
+.reveal-ready .linechart.in-view .area,
+.reveal-ready .linechart.in-view .pt {
+  opacity: 1;
 }

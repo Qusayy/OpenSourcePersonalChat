@@ -278,6 +278,12 @@ def add_run(
     gen_tps: float | None = None,
     rss_mb: float | None = None,
 ) -> None:
+    # Mock mode times a fake token stream paced by a sleep. Those figures
+    # measure nothing, so none of them is kept: stored, they would be drawn on
+    # the Benchmark page as this server's history. Rows already in a database
+    # are left as they are.
+    if settings.mock:
+        return
     _write(
         "INSERT INTO runs (id, kind, label, prompt_tokens, gen_tokens, ttft_ms,"
         " prefill_tps, gen_tps, rss_mb, created_at)"

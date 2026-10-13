@@ -5,7 +5,7 @@
  * fits in 4 GB.
  */
 
-import { $, toast } from "./app.js";
+import { $, toast, reveal } from "./app.js";
 import { escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { fmt, fmtInt, fmtMs } from "./metrics.js";
@@ -64,7 +64,7 @@ function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
         r.sub ? `<small>${escapeHtml(r.sub)}</small>` : ""
       }</span>
         <span class="track" title="${escapeHtml(r.label)}: ${fmt(r.value, digits)} ${unit}">
-          <i class="${alt ? "alt" : ""}" style="transform:scaleX(${Math.max(0.015, r.value / top).toFixed(4)})"></i>
+          <i class="${alt ? "alt" : ""}" style="--v:${Math.max(0.015, r.value / top).toFixed(4)}"></i>
         </span>
         <span class="val">${fmt(r.value, digits)}<small> ${unit}</small>${
         r.extra ? `<small> · ${escapeHtml(r.extra)}</small>` : ""
@@ -72,11 +72,13 @@ function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
       </div>`
     )
     .join("");
+  reveal(host); // new bars grow from the baseline when the chart is on screen
 }
 
 function referenceChart(measured) {
-  // Reference rows are ranges ("6–12"); this machine gets its measured value
-  // marked on top of the range it is expected to fall in.
+  // Reference rows are published ranges ("6–12"). This server is a row of its
+  // own, holding only what the suite measured here: which class of machine it
+  // belongs to is not something the page can know, so it does not say.
   const parse = (s) => {
     const m = String(s).match(/(\d+(?:\.\d+)?)\s*[–-]?\s*(\d+(?:\.\d+)?)?/);
     if (!m) return [0, 0];
@@ -88,31 +90,44 @@ function referenceChart(measured) {
   const max = Math.max(...rows.map((r) => r.range[1]), measured || 0) * 1.08;
   els.refMax.textContent = Math.round(max);
 
-  els.ref.innerHTML = rows
-    .map((r) => {
-      const [lo, hi] = r.range;
-      const left = (100 * lo) / max;
-      const width = Math.max(1, (100 * (hi - lo)) / max);
-      const dot =
-        r.self && measured
-          ? `<b style="left:${((100 * measured) / max).toFixed(2)}%" title="measured here: ${fmt(
-              measured,
-              1
-            )} tok/s"></b>`
-          : "";
-      return `
+  const threads = window.AURORA?.info?.n_threads;
+  const here = measured
+    ? `
+      <div class="bar-row">
+        <span class="lab">This server<small>${threads ? `${threads} threads · ` : ""}measured</small></span>
+        <span class="strip self">
+          <b style="left:${((100 * measured) / max).toFixed(2)}%" title="measured here: ${fmt(
+        measured,
+        1
+      )} tok/s"></b>
+        </span>
+        <span class="val">${fmt(measured, 1)}</span>
+      </div>`
+    : `
+      <div class="bar-row">
+        <span class="lab">This server<small>not measured yet</small></span>
+        <span class="strip self"></span>
+        <span class="val"></span>
+      </div>`;
+
+  els.ref.innerHTML =
+    here +
+    rows
+      .map((r) => {
+        const [lo, hi] = r.range;
+        const left = (100 * lo) / max;
+        const width = Math.max(1, (100 * (hi - lo)) / max);
+        return `
       <div class="bar-row">
         <span class="lab">${escapeHtml(r.hw)}<small>${r.threads} threads</small></span>
-        <span class="strip ${r.self ? "self" : ""}">
+        <span class="strip">
           <i style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"
-             title="${escapeHtml(r.gen)} tok/s"></i>${dot}
+             title="${escapeHtml(r.gen)} tok/s"></i>
         </span>
-        <span class="val">${escapeHtml(r.gen)}${
-        r.self && measured ? `<small> · here ${fmt(measured, 1)}</small>` : ""
-      }</span>
+        <span class="val">${escapeHtml(r.gen)}</span>
       </div>`;
-    })
-    .join("");
+      })
+      .join("");
 }
 
 // Kept so the chart can be redrawn at a new width without refetching.
@@ -152,7 +167,9 @@ function historyChart(runs) {
 
   const line = pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(p.gen_tps).toFixed(1)}`).join(" ");
   svg += `<path class="area" d="${line} L${x(pts.length - 1).toFixed(1)} ${H - pad.b} L${pad.l} ${H - pad.b} Z"/>`;
-  svg += `<path class="series" d="${line}"/>`;
+  // pathLength 1 lets the stylesheet draw the line in with a dash offset
+  // without knowing how long it is.
+  svg += `<path class="series" pathLength="1" d="${line}"/>`;
 
   pts.forEach((p, i) => {
     const when = new Date(p.created_at * 1000).toLocaleString();
@@ -170,6 +187,9 @@ function historyChart(runs) {
   svg += `<text class="lbl" x="${W - pad.r}" y="${H - 6}" text-anchor="end">newest</text>`;
 
   els.history.innerHTML = svg;
+  // Drawn in the first time it is seen. A redraw at a new width must not
+  // replay that, so the mark of having arrived is left on.
+  if (!els.history.classList.contains("in-view")) reveal(els.history);
 }
 
 if ("ResizeObserver" in window) {
@@ -276,8 +296,11 @@ els.run.addEventListener("click", async () => {
           els.status.textContent = `Finished in ${fmt(data.elapsed_s, 0)}s — median ${fmt(
             data.gen_tps,
             2
-          )} tok/s`;
-          load();
+          )} tok/s${data.stored === false ? ". Mock mode: not stored." : ""}`;
+          // A mock run is not kept on the server, so there is nothing to read
+          // back: draw what just arrived, over whatever history was there.
+          if (data.stored === false) paint(data, historyRuns);
+          else load();
         } else if (event === "error") {
           els.status.textContent = data.message;
           toast(data.message, "err");

@@ -10,17 +10,23 @@
    DOM order is the visual order in both, so nothing is reordered with CSS and
    the tab order never disagrees with what is on screen. */
 
-/* Every block on this page hangs from the same left edge and stops at the
-   same measure. */
+/* Every block on this page is the same measure, centred. Centred by auto
+   margins rather than viewport arithmetic: inside a scroller the available
+   width is not the window's. */
 .col {
   width: 100%;
-  max-width: calc(var(--col) + var(--pad) + var(--edge));
-  padding-left: max(var(--pad), env(safe-area-inset-left));
+  max-width: calc(var(--col) + var(--edge) * 2);
+  margin-inline: auto;
+  padding-left: max(var(--edge), env(safe-area-inset-left));
   padding-right: max(var(--edge), env(safe-area-inset-right));
 }
 
+/* A scrollbar that takes room on one side only would pull a centred column
+   off the axis the top bar and status line keep. Room is reserved on both
+   sides, whether or not anything scrolls. */
 .center[data-view="empty"] {
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
 }
 /* <main> is a flex column so the thread can take the spare height. On the
    empty sheet nothing should give: a flex item may shrink below its content,
@@ -42,6 +48,7 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
 }
 
 /* ------------------------------------------------------------ empty state */
@@ -138,9 +145,15 @@
 .center[data-view="thread"] .composer-wrap {
   max-width: none;
   border-top: 1px solid var(--rule);
+  /* The composer is beside the scroller here, not inside it, so it does not
+     get the scroller's gutters. --sbw is the measured scrollbar width
+     (app.js); adding it keeps the input exactly as wide as the thread. */
+  padding-left: calc(max(var(--edge), env(safe-area-inset-left)) + var(--sbw, 0px));
+  padding-right: calc(max(var(--edge), env(safe-area-inset-right)) + var(--sbw, 0px));
 }
 .center[data-view="thread"] .composer {
   max-width: var(--col);
+  margin-inline: auto;
 }
 
 .composer {
@@ -552,6 +565,20 @@
   }
 }
 
+/* Text that has just arrived (chat.js wraps it, and gives each stretch a
+   negative delay so a rebuild of the block does not restart it). Opacity
+   only: nothing here may move the line it is in. */
+.fresh {
+  /* A gentler curve than the entrances use: with theirs the fade would be all
+     but over in the first 100ms, and the text arrives in 100ms steps. */
+  animation: ink-in 280ms cubic-bezier(0.5, 1, 0.89, 1) both;
+}
+@keyframes ink-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* what this answer cost */
 .msg-foot {
   display: flex;
@@ -698,4 +725,61 @@
   .persona {
     padding-inline: 5px;
   }
+}
+
+/* ------------------------------------------------------------------ motion */
+
+/* The arrival. Once, when the page is come to from outside (the `intro` class
+   is set in the head before first paint and taken off again when this has
+   played, so New chat does not replay it). The sheet assembles in reading
+   order: headline, what it is, where to type, what to try. */
+.intro .hero h1,
+.intro .hero p,
+.intro .composer,
+.intro .skills h2,
+.intro .skill-list li {
+  animation: rise-in var(--dur-4) var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.intro .hero p { --i: 1; }
+.intro .composer { --i: 2; }
+.intro .skills h2 { --i: 3; }
+.intro .skill-list li:nth-child(1) { --i: 3.5; }
+.intro .skill-list li:nth-child(2) { --i: 4; }
+.intro .skill-list li:nth-child(3) { --i: 4.5; }
+.intro .skill-list li:nth-child(4) { --i: 5; }
+.intro .skill-list li:nth-child(5) { --i: 5.5; }
+.intro .skill-list li:nth-child(6) { --i: 6; }
+
+/* The mark under the chosen persona is one rule that slides to whichever is
+   chosen, rather than an underline that vanishes from one word and appears
+   under another. chat.js places it; until it has, and wherever script is off,
+   the plain underline above does the job. */
+.persona-row {
+  position: relative;
+}
+.persona-ink {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--ink);
+  transform: translate(var(--x, 0px), var(--y, 0px)) scaleX(var(--w, 0));
+  transform-origin: left center;
+  pointer-events: none;
+}
+.persona-ink.moving {
+  transition: transform var(--dur-3) var(--ease);
+}
+.persona-row.inked .persona[aria-pressed="true"] {
+  text-decoration: none;
+}
+
+/* A skill row answers the pointer: its route leans the way it runs. */
+.skill .pipe .icon {
+  transition: translate var(--dur-2) var(--ease);
+}
+.skill:hover .pipe .icon {
+  translate: 3px 0;
 }

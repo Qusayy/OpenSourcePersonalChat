@@ -2,6 +2,7 @@
 
 import { escapeHtml } from "./md.js";
 import { icon, hasIcon } from "./icons.js";
+import { REDUCED, EASE } from "./motion.js";
 
 // Every row gets a drawn icon. A tool or skill the set has no picture for
 // takes the generic one rather than a Unicode glyph, which is tofu on half
@@ -113,8 +114,21 @@ export function setupPalette(input, host, { onSkill }) {
           <span class="sr-only">. ${escapeHtml(row.desc)}</span>
         </div>`;
     });
+    const wasHidden = host.hidden;
     host.innerHTML = `<div class="pal-list">${html}</div><div class="pal-desc" aria-hidden="true"></div>`;
     host.hidden = rows.length === 0;
+    // The panel arrives; its rows do not. They are rebuilt on every keystroke,
+    // and a list that re-entered each time a letter was typed would flicker.
+    if (wasHidden && !host.hidden && !REDUCED && host.animate) {
+      const from = getComputedStyle(host).bottom === "auto" ? "-6px" : "6px";
+      host.animate(
+        [
+          { opacity: 0, translate: `0 ${from}` },
+          { opacity: 1, translate: "0 0" },
+        ],
+        { duration: 160, easing: EASE }
+      );
+    }
     const desc = host.querySelector(".pal-desc");
     const describe = (i) => {
       desc.textContent = rows[i]?.desc || "";

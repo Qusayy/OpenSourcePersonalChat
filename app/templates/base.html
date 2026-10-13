@@ -19,11 +19,18 @@
 <script type="importmap">
 {
   "imports": {
-    {%- for m in ["app", "chat", "skills", "cards", "metrics", "motion", "stream", "md", "icons", "bench"] %}
+    {%- for m in ["app", "chat", "skills", "cards", "metrics", "motion", "aurora", "stream", "md", "icons", "bench"] %}
     "/static/js/{{ m }}.js": "/static/js/{{ m }}.js?v={{ version }}"{{ "," if not loop.last }}
     {%- endfor %}
   }
 }
+</script>
+{# Arriving from outside (a typed address, a link from elsewhere, a reload)
+   the page introduces itself once. Moving between its own pages it does not:
+   that is a change of page, not an arrival. Decided before first paint, so
+   the entrance is the first thing drawn rather than a flash and a restart. #}
+<script>
+  if (document.referrer.indexOf(location.origin + "/") !== 0) document.documentElement.classList.add("intro");
 </script>
 <link rel="stylesheet" href="/static/css/tokens.css?v={{ version }}">
 <link rel="stylesheet" href="/static/css/aurora.css?v={{ version }}">
@@ -31,14 +38,20 @@
 </head>
 <body>
 <!--
-THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
-OWN-WORLD: Near-white sheet tinted green-grey, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
+THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes: its figures tick, its trace scrolls, and an aurora rises from it for as long as the answer is being produced. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
+OWN-WORLD: Near-white sheet tinted green-grey, centred, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
 STORY: A stranger sees a small model on a cheap server being straight about what each answer costs, asks one thing, and watches the line tick.
-FIRST VIEWPORT: Left-aligned 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath, the status line across the bottom edge.
+FIRST VIEWPORT: A centred column: 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath; the status line across the bottom edge on the same container as the top bar, showing the machine's cores and memory as measured.
 FORM: Status Line, position 4 on the ordered grounded list; seed aa84745b.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 -->
 <a class="skip-link" href="#main">Skip to content</a>
+{% if page == 'chat' %}
+{# The aurora: light rising from the status line while a request is in flight
+   (aurora.js). A direct child of <body>, fixed and behind everything, so it can
+   never cover the composer, the palette or a toast. Absent at rest. #}
+<div class="aurora" id="aurora" aria-hidden="true" hidden><canvas></canvas></div>
+{% endif %}
 
 <header class="topbar">
   <a class="wordmark" href="/">Aurora</a>
@@ -57,20 +70,39 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   {% block main %}{% endblock %}
 </main>
 
-{# The status line. What the machine is and what state it is in are always
-   here, and only here. What a request is costing joins them while the request
-   is in flight; once it has finished, that is printed under the answer it
-   belongs to and leaves this line. The words for each state live in app.js as
-   well, which repaints them on every poll. #}
+{# The status line. On the left, the machine: its state, the model, and what
+   its CPUs and memory are doing right now, measured and repainted about once
+   a second (app.js, /api/telemetry). On the right, the conversation: what a
+   request is costing while it is in flight, and how full the context is. When
+   an answer ends its figures are printed under it and leave this line.
+
+   The first values are rendered here so nothing pops in after load. The words
+   for each state live in app.js as well, which repaints them on every poll. #}
 {% set state_words = {'cold': 'starting', 'loading': 'loading', 'ready': 'ready', 'error': 'model unavailable'} %}
+{% set cpus = system.cpus %}
+{% set cpus_text = (cpus | int) if cpus is not none and cpus == (cpus | int) else (cpus | round(1) if cpus is not none else none) %}
+{% set core_bars = (system.cores_pct | length) if system.cores_pct else ((cpus | round(0, 'ceil') | int) if cpus is not none else 0) %}
 <footer class="status" id="status" data-phase="{{ info.status }}" aria-label="Server status">
   <div class="status-id">
     <span class="st-state">
       <span class="dot" aria-hidden="true"></span>
-      <span class="st-word" id="b-state">{{ state_words.get(info.status, info.status) }}</span>
+      <span class="st-word" id="b-state"><span class="st-word-in">{{ state_words.get(info.status, info.status) }}</span></span>
     </span>
-    <span class="st-seg">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
-    <span class="st-seg">{{ info.hardware }}, <span class="num">{{ info.n_threads }}</span> threads</span>
+    <span class="st-seg st-model" title="{{ info.model }} {{ info.quant }}">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
+    <span class="st-seg st-cpu" id="st-cpu" {% if cpus is none %}hidden{% endif %}>
+      <span class="cpu-n"><span class="num" id="cpu-count">{{ cpus_text }}</span> <span id="cpu-noun">{{ 'core' if cpus == 1 else 'cores' }}</span></span>
+      <span class="st-short">CPU</span>
+      {# One bar per core up to eight; past that the bars would be a comb, so one bar for all of them. #}
+      <span class="cpu-bars{{ ' agg' if core_bars > 8 }}" id="cpu-bars" aria-hidden="true">
+        {%- for i in range(1 if core_bars > 8 else core_bars) %}<i></i>{% endfor -%}
+      </span>
+      <b class="num" id="cpu-pct">{% if system.cpu_pct is not none %}{{ system.cpu_pct | round | int }}%{% endif %}</b>
+    </span>
+    <span class="st-seg st-ram" id="st-ram" {% if system.mem_total_mb is none %}hidden{% endif %}>
+      <span class="st-lab">RAM</span> <b class="num" id="ram-used">{% if system.mem_used_mb is not none %}{{ '%.1f' | format(system.mem_used_mb / 1024) }}{% endif %}</b>
+      / <span class="num" id="ram-total">{% if system.mem_total_mb is not none %}{{ '%.1f' | format(system.mem_total_mb / 1024) }} GB{% endif %}</span>
+      <span class="meter" aria-hidden="true"><i id="ram-fill"></i></span>
+    </span>
     {# Says the answers are canned, so it is never hidden with the rest. #}
     <span class="st-tag" id="b-mock" {% if not info.mock %}hidden{% endif %}>mock</span>
   </div>
@@ -79,21 +111,24 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <span class="st-fig st-wait" id="st-wait" hidden><span id="st-wait-lead"></span><b class="num" id="st-wait-s"></b></span>
     <span class="st-fig st-tps" hidden>
       <b class="num" id="tps-value">—</b> tok/s
-      <span class="spark-wrap" aria-hidden="true">
-        <svg class="spark" viewBox="0 0 120 38" preserveAspectRatio="none"><path id="spark-line" d=""></path></svg>
-        <i class="spark-dot" id="spark-dot" hidden></i>
-      </span>
+      <span class="spark-wrap" aria-hidden="true"><canvas class="spark" id="spark"></canvas></span>
     </span>
-    <span class="st-fig st-out" hidden><b class="num" id="out-value">—</b> tokens</span>
     <span class="st-fig st-ttft" hidden>first token <b class="num" id="ttft-value">—</b></span>
     <span class="st-fig st-ctx">
       <b class="num" id="ctx-value">0</b> / <span class="num">{{ "{:,}".format(info.n_ctx) }}</span> ctx
-      <span class="ctx-bar" aria-hidden="true"><i id="ctx-fill"></i></span>
+      <span class="meter" aria-hidden="true"><i id="ctx-fill"></i></span>
     </span>
     {% endif %}
-    <span class="st-fig st-rss" id="st-rss" {% if not info.rss_mb %}hidden{% endif %}>memory <b class="num" id="b-rss">{% if info.rss_mb %}{{ info.rss_mb }} MB{% endif %}</b></span>
   </div>
-  <button class="status-more" id="status-more" type="button" aria-expanded="false" aria-controls="status-figs">Details</button>
+  {# Shown only when the line is opened on a narrow screen: the figures that are
+     worth having but not worth a place on the line itself. #}
+  <div class="status-extra" id="status-extra">
+    <span class="st-seg"><span class="num">{{ info.n_threads }}</span> threads for the model</span>
+    <span class="st-seg" data-sys-row hidden>this app holds <b class="num" data-sys="rss"></b></span>
+    <span class="st-seg" data-sys-row hidden>service limit <b class="num" data-sys="limit"></b></span>
+    <span class="st-seg" data-sys-row hidden>load average <b class="num" data-sys="load"></b></span>
+  </div>
+  <button class="status-more" id="status-more" type="button" aria-expanded="false" aria-controls="status-figs status-extra">Details</button>
 </footer>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
@@ -107,6 +142,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <script>
   window.AURORA = {
     info: {{ info | tojson }},
+    system: {{ system | tojson }},
     personas: {{ personas | tojson }},
     defaultPersona: {{ default_persona | tojson }},
     skills: {{ skills | tojson }},

@@ -5,11 +5,9 @@
    line. There is no sidebar and no metrics column: history opens on demand,
    and every fact about the machine lives once, in the status line.
 
-   One left edge (--pad) is shared by the wordmark, the reading column and
-   the composer. The status line is the exception: it runs the full width of
-   the window, --edge in from each side, because what the machine is and what
-   a request is costing do not fit one row from the column's edge, and the
-   same line on every page should start in the same place.
+   Everything is centred. The top bar and the status line share one
+   container (--page), so they start and end on the same two lines whatever
+   the window width; the reading column sits centred between them.
    ========================================================================= */
 
 body {
@@ -87,8 +85,8 @@ body {
   align-items: center;
   gap: var(--s-5);
   min-width: 0;
-  padding-left: max(var(--pad), env(safe-area-inset-left));
-  padding-right: max(var(--edge), env(safe-area-inset-right));
+  padding-left: max(var(--inset), env(safe-area-inset-left));
+  padding-right: max(var(--inset), env(safe-area-inset-right));
   border-bottom: 1px solid var(--rule);
 }
 
@@ -350,21 +348,22 @@ body {
 
 /* ------------------------------------------------------------ status line */
 
-/* One row, edge to edge, like an editor's. What the machine is sits on the
-   left and does not move. What a request is costing sits on the right,
-   anchored to the right edge, each figure in a slot as wide as its largest
-   value — so a number that ticks changes in place and nothing beside it
-   shifts. A figure with nothing to report is absent, not a dash. */
+/* One row along the bottom, on the same centred container as the top bar. On
+   the left, the machine: state, model, and its CPUs and memory as they are
+   this second. On the right, the conversation, anchored to the right edge,
+   each figure in a slot as wide as its largest value — so a number that ticks
+   changes in place and nothing beside it shifts. A figure with nothing to
+   report is absent, not a dash. */
 .status {
   display: flex;
   align-items: center;
-  gap: var(--s-1) var(--s-6);
+  gap: var(--s-1) var(--s-5);
   min-width: 0;
   min-height: 2.5rem;
   padding-top: var(--s-1);
   padding-bottom: max(var(--s-1), env(safe-area-inset-bottom));
-  padding-left: max(var(--edge), env(safe-area-inset-left));
-  padding-right: max(var(--edge), env(safe-area-inset-right));
+  padding-left: max(var(--inset), env(safe-area-inset-left));
+  padding-right: max(var(--inset), env(safe-area-inset-right));
   border-top: 1px solid var(--rule);
   background: var(--sheet-2);
   color: var(--ink-2);
@@ -376,12 +375,61 @@ body {
 .status-figs {
   display: flex;
   align-items: center;
-  gap: var(--s-1) var(--s-5);
+  gap: var(--s-1) var(--s-4);
   min-width: 0;
   white-space: nowrap;
 }
 .status-figs {
   margin-left: auto;
+}
+/* What gives when the row is short of room, and in what order: the model's
+   name first, cut with an ellipsis (its title still carries all of it); then
+   the trace, which may narrow from 6rem but keeps 4rem, enough to show a
+   shape. Nothing else moves, and nothing runs into its neighbour. */
+.status-id > * {
+  flex: none;
+}
+.status-id > .st-model {
+  flex: 0 1 auto;
+  min-width: 8ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (min-width: 1264px) {
+  /* The order is a matter of how eagerly each shrinks. For that the name has
+     to compete with the right-hand group directly, so the left group's box is
+     dissolved and its members sit on the row themselves. The name then takes
+     all but a thousandth of any shortfall until it reaches its minimum, and
+     only what is left over reaches the trace. */
+  .status {
+    column-gap: var(--s-4);
+  }
+  .status-id {
+    display: contents;
+  }
+  .status-id > .st-model {
+    flex-shrink: 1000;
+  }
+  .status-figs {
+    flex: 0 1 auto;
+    /* with the row's own gap, the space the two halves always kept */
+    padding-left: var(--s-2);
+  }
+  .status-figs > * {
+    flex: none;
+  }
+  .status-figs > .st-tps {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .st-tps .spark-wrap {
+    flex: 0 1 auto;
+    min-width: 4rem;
+  }
+}
+/* Only for the opened line on a narrow screen; see the 620px rules. */
+.status-extra {
+  display: none;
 }
 
 .st-state {
@@ -392,10 +440,26 @@ body {
   font-weight: 600;
 }
 /* Wide enough for every state a request passes through, so ready, working,
-   reading and writing swap in place and the model's name stays where it is. */
+   reading and writing swap in place and the model's name stays where it is.
+   A longer word ("model unavailable") widens it rather than being cut. */
 .st-word {
+  position: relative;
   display: inline-block;
   min-width: 4.25rem;
+  vertical-align: bottom;
+  /* The word slides when the state changes. Clipped top and bottom so the
+     outgoing word leaves through the line; never sideways, so a long word is
+     not cut. */
+  overflow-x: visible;
+  overflow-y: clip;
+}
+.st-word-in {
+  display: inline-block;
+}
+.st-word-in.out {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .status .dot {
@@ -414,21 +478,34 @@ body {
   font-weight: 400;
 }
 
+.st-seg,
 .st-fig {
   display: inline-flex;
   align-items: center;
   gap: 0.45em;
 }
+/* A sentence with a figure inside it: block, so the space between the two
+   survives. */
+.st-model {
+  display: inline-block;
+}
+.st-seg b,
 .st-fig b {
   display: inline-block;
   color: var(--ink);
   font-weight: 600;
   text-align: right;
 }
-#tps-value {
+/* "CPU": the short name the load figure goes by in the phone corridor, where
+   the core count and its bars are behind Details. */
+.st-short {
+  display: none;
+}
+#tps-value,
+#cpu-pct,
+#ram-used {
   min-width: 4ch;
 }
-#out-value,
 #ctx-value {
   min-width: 5ch;
 }
@@ -440,73 +517,111 @@ body {
   min-width: 4ch;
 }
 
-/* The trace of the rate over the last few seconds: wide enough to read as a
-   chart, on a baseline, with the newest sample marked. */
-.spark-wrap {
+/* The machine's CPUs: one small column per core, filled to its load. They are
+   measured figures, repainted about once a second, and ease between samples. */
+.cpu-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+.cpu-bars i {
   position: relative;
-  display: block;
-  width: 10.5rem;
-  height: 20px;
-  margin-left: var(--s-1);
-  border-bottom: 1px solid var(--rule);
-}
-.spark {
-  display: block;
-  width: 100%;
+  width: 4px;
   height: 100%;
-  overflow: visible;
+  background: var(--rule);
+  overflow: hidden;
 }
-.spark path {
-  fill: none;
-  stroke: var(--live);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-/* --y is the newest sample as a share of the tallest, set from chat.js. The
-   plot keeps 3 of its 38 units clear top and bottom, which is 1.6px here. */
-.spark-dot {
+.cpu-bars i::after {
+  content: "";
   position: absolute;
-  right: -3px;
-  bottom: calc(1.6px + var(--y, 0) * 16.8px - 3px);
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+  inset: 0;
+  background: var(--ink-2);
+  transform: scaleY(var(--v, 0));
+  transform-origin: center bottom;
+  transition: transform var(--dur-3) var(--ease), background var(--dur-1);
+}
+/* More than eight cores: one horizontal bar for all of them. */
+.cpu-bars.agg {
+  align-items: center;
+}
+.cpu-bars.agg i {
+  width: 40px;
+  height: 4px;
+}
+.cpu-bars.agg i::after {
+  transform: scaleX(var(--v, 0));
+  transform-origin: left center;
+}
+/* While this visitor's own request is running, the load on the cores is that
+   request: it takes the live colour. */
+.status[data-phase="working"] .cpu-bars i::after,
+.status[data-phase="reading"] .cpu-bars i::after,
+.status[data-phase="writing"] .cpu-bars i::after {
   background: var(--live);
-  box-shadow: 0 0 0 2px var(--sheet-2);
 }
 
-.ctx-bar {
+/* A thin horizontal meter: memory in use, context in use. */
+.meter {
   display: block;
-  width: 56px;
+  width: 48px;
   height: 4px;
   background: var(--rule);
   overflow: hidden;
 }
-.ctx-bar i {
+.meter i {
   display: block;
   height: 100%;
   background: var(--ink-2);
-  /* scaleX, not width: this moves on every answer and must not relayout the
-     line it sits in. */
-  transform: scaleX(0);
+  /* scaleX, not width: this moves often and must not relayout the line it
+     sits in. */
+  transform: scaleX(var(--v, 0));
   transform-origin: left center;
-  transition: transform var(--dur-2) var(--ease);
+  transition: transform var(--dur-3) var(--ease);
 }
-.status[data-ctx="high"] .ctx-bar i {
+.status[data-ctx="high"] #ctx-fill,
+.status[data-ram="high"] #ram-fill {
   background: var(--caution);
+}
+
+/* The trace of the rate over the last few seconds, on a baseline, with the
+   newest sample marked. */
+.spark-wrap {
+  position: relative;
+  display: block;
+  width: 6rem;
+  height: 20px;
+  /* Taller than a line of this text by half a pixel. Pulled in, so the line
+     is the same height with the trace on it as without. */
+  margin-block: -1px;
+  margin-left: var(--s-1);
+  border-bottom: 1px solid var(--rule);
+}
+/* Drawn on a canvas at display rate (chat.js): the line scrolls and its head
+   glides between samples instead of jumping four times a second. The canvas
+   takes its ink from `color`, so the scheme decides it here. */
+.spark {
+  /* Out of flow, so the canvas's own pixel size never decides how wide the
+     trace is; its box does. */
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--live);
 }
 
 /* What the state is, said in colour as well as in the word beside it. */
 .status[data-phase="cold"] .dot,
 .status[data-phase="loading"] .dot,
-.status[data-phase="queued"] .dot {
+.status[data-phase="queued"] .dot,
+.status[data-phase="busy"] .dot {
   background: var(--caution);
 }
 .status[data-phase="cold"] .st-state,
 .status[data-phase="loading"] .st-state,
-.status[data-phase="queued"] .st-state {
+.status[data-phase="queued"] .st-state,
+.status[data-phase="busy"] .st-state {
   color: var(--caution);
 }
 .status[data-phase="error"] .dot {
@@ -543,8 +658,7 @@ body {
 }
 
 /* The line comes alive: while the model writes, its rate takes the live
-   colour and the trace draws beside it. This is the one place the page moves
-   on its own. */
+   colour and the trace draws beside it. */
 .status[data-phase="writing"] .st-tps b {
   color: var(--live);
 }
@@ -553,17 +667,12 @@ body {
   display: none;
 }
 
-/* Narrower than this the trace gives up width before anything else does. */
-@media (max-width: 1439px) {
-  .spark-wrap {
-    width: 6rem;
-  }
-}
-/* Narrower still, the identity and a full set of figures cannot share a row.
-   The chat page gives the figures a row of their own from the start, rather
-   than wrapping at the moment an answer begins. Context use leads that row,
-   so it stays put when the others arrive beside it. */
-@media (max-width: 1339px) {
+/* Narrower than the container, the machine and a full set of conversation
+   figures cannot share a row. The chat page gives the conversation a row of
+   its own from the start, rather than wrapping at the moment an answer
+   begins. Context use leads that row, so it stays put when the others arrive
+   beside it. Other pages have nothing on the right and stay on one row. */
+@media (max-width: 1263px) {
   :root[data-page="chat"] .status {
     flex-wrap: wrap;
   }
@@ -574,6 +683,68 @@ body {
   :root[data-page="chat"] .st-ctx {
     order: -1;
   }
+  /* Context use opens that row. Its slot is as wide as the largest count, and
+     right-aligned in it a small count stood 24px in from the edge everything
+     above it starts on. Here the count takes its own width; it changes twice
+     a request, not on every token. */
+  #ctx-value {
+    min-width: 0;
+  }
+}
+/* Before the corridor takes over, the machine's own row sheds its bars, then
+   nothing else: the figures stay. */
+@media (max-width: 760px) {
+  .status .meter,
+  .status .cpu-bars {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------ the aurora */
+
+/* Light rising from the status line while this visitor's request is being
+   read or written (aurora.js). Fixed to the window and behind everything: it
+   is a child of <body> at z-index -1, so it paints over the page's own
+   background and under all content, and cannot cover a control. Absent at
+   rest: the element is hidden, not merely transparent.
+
+   --e is the energy (0 to 1) and --peak the most alpha the effect may reach in
+   this scheme; both are set by the script. The shader draws on the canvas.
+   Where there is no WebGL2, and until the shader is ready, the strip below is
+   the effect: the same colour and ceiling, its opacity the same energy. */
+.aurora {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--status-h, 2.5rem);
+  z-index: -1;
+  height: 14rem;
+  pointer-events: none;
+  color: var(--live); /* read back by the script as the shader's colour */
+}
+.aurora canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.aurora[data-mode="css"] canvas,
+.aurora[data-mode="still"] canvas {
+  display: none;
+}
+.aurora[data-mode="css"],
+.aurora[data-mode="still"] {
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--live) calc(var(--peak, 0.24) * 100%), transparent),
+    transparent 82%
+  );
+}
+.aurora[data-mode="css"] {
+  opacity: var(--e, 0);
+}
+/* Reduced motion: no movement at all, a still tint while the request runs. */
+.aurora[data-mode="still"] {
+  opacity: 0.55;
 }
 
 /* ----------------------------------------------------------------- toasts */
@@ -612,6 +783,53 @@ body {
   }
 }
 
+/* An arrival: from just below, out of nothing. Written as a `from` only, so
+   the resting state is the element as it normally is and a failed animation
+   leaves the content in place. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+}
+
+/* History rows arrive as a list, one after another, once per opening. `pending`
+   holds them unseen for the moment it takes the fresh list to come back, so
+   they are not shown, replaced and shown again. */
+.convo-list.pending > * {
+  opacity: 0;
+}
+.convo-list.stagger > * {
+  animation: rise-in var(--dur-3) var(--ease) backwards;
+  animation-delay: calc(var(--n, 10) * 24ms);
+}
+.convo-list.stagger > :nth-child(1) { --n: 0; }
+.convo-list.stagger > :nth-child(2) { --n: 1; }
+.convo-list.stagger > :nth-child(3) { --n: 2; }
+.convo-list.stagger > :nth-child(4) { --n: 3; }
+.convo-list.stagger > :nth-child(5) { --n: 4; }
+.convo-list.stagger > :nth-child(6) { --n: 5; }
+.convo-list.stagger > :nth-child(7) { --n: 6; }
+.convo-list.stagger > :nth-child(8) { --n: 7; }
+.convo-list.stagger > :nth-child(9) { --n: 8; }
+
+/* Moving between the three pages: the top bar and the status line are the
+   same thing on each, so they stay put and only the sheet between them
+   changes. Browsers without cross-document view transitions just navigate. */
+@view-transition {
+  navigation: auto;
+}
+.topbar {
+  view-transition-name: topbar;
+}
+.status {
+  view-transition-name: status;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-2);
+}
+
 /* The staged reveal used by anything that starts transparent. It lives here,
    not in a page stylesheet: a missing @keyframes leaves such an element
    invisible on whichever page forgot to load it. */
@@ -628,6 +846,9 @@ body {
   .topbar {
     gap: var(--s-4);
   }
+  .aurora {
+    height: 10rem;
+  }
   /* On the chat page History and New take the room; the page links move into
      the drawer. The other pages have nothing else in the bar and keep them. */
   :root[data-page="chat"] .nav {
@@ -637,13 +858,39 @@ body {
     display: flex;
   }
 
-  /* The corridor: state plus the one figure that matters now — the rate while
-     the model writes, context use otherwise. Everything else waits behind
-     Details rather than being shrunk until none of it reads. */
-  .status,
-  :root[data-page="chat"] .status {
-    flex-wrap: nowrap;
-    gap: var(--s-4);
+  /* The corridor: one row. The state, then as much as fits of, in this
+     order: the mock tag, the rate while the model writes, CPU load, memory
+     used and total, context use. The row wraps and only its first line is
+     shown, so what does not fit is dropped whole, last first, rather than
+     squeezed until none of it reads. All of it is still behind Details. */
+  .status:not([data-open="true"]),
+  :root[data-page="chat"] .status:not([data-open="true"]) {
+    /* What a row of the line is tall, less its padding and its rule; or, on
+       a touch screen, as tall as the target on it. */
+    --row: var(--touch-row, calc(2.5rem - 2 * var(--s-1) - 1px));
+    position: relative;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    /* A second line starts far enough down to be outside the padding too,
+       which on a phone with a home indicator is deep. */
+    gap: 8rem var(--s-4);
+    height: calc(var(--row) + var(--s-1) + max(var(--s-1), env(safe-area-inset-bottom)) + 1px);
+    min-height: 0;
+    /* room for Details, which is pinned to the right end */
+    padding-right: calc(max(var(--inset), env(safe-area-inset-right)) + 4.5rem);
+    overflow: hidden;
+  }
+  /* A strut, so the first line is a full row tall whatever is on it. */
+  .status:not([data-open="true"])::before {
+    content: "";
+    order: -1;
+    width: 0;
+    height: var(--row);
+    margin-right: calc(var(--s-4) * -1);
+  }
+  .status:not([data-open="true"]) .status-id,
+  .status:not([data-open="true"]) .status-figs {
+    display: contents;
   }
   .status-id .st-seg,
   .status-figs > * {
@@ -654,6 +901,8 @@ body {
     flex-basis: auto;
     margin-left: 0;
   }
+  .status:not([data-open="true"]) .st-cpu:not([hidden]),
+  .status:not([data-open="true"]) .st-ram:not([hidden]),
   .status-figs > .st-ctx:not([hidden]),
   .status[data-phase="writing"] .status-figs > .st-tps:not([hidden]) {
     display: inline-flex;
@@ -661,7 +910,32 @@ body {
   .status[data-phase="writing"] .status-figs > .st-ctx {
     display: none;
   }
-  .ctx-bar,
+  /* What is dropped last comes first. */
+  .status:not([data-open="true"]) #b-mock {
+    order: 1;
+  }
+  .status:not([data-open="true"]) .st-tps {
+    order: 2;
+  }
+  .status:not([data-open="true"]) .st-cpu {
+    order: 3;
+  }
+  .status:not([data-open="true"]) .st-ram {
+    order: 4;
+  }
+  .status:not([data-open="true"]) .st-ctx,
+  :root[data-page="chat"] .status:not([data-open="true"]) .st-ctx {
+    order: 5;
+  }
+  /* In the row the load goes by a short name and memory by its unit; the core
+     count, the bars and the word are in the opened line. */
+  .status:not([data-open="true"]) .st-cpu .cpu-n,
+  .status:not([data-open="true"]) .st-ram .st-lab {
+    display: none;
+  }
+  .status:not([data-open="true"]) .st-short {
+    display: inline;
+  }
   .spark-wrap {
     display: none;
   }
@@ -683,6 +957,14 @@ body {
     text-underline-offset: 3px;
     cursor: pointer;
   }
+  .status:not([data-open="true"]) .status-more {
+    position: absolute;
+    top: var(--s-1);
+    right: max(var(--inset), env(safe-area-inset-right));
+    height: var(--row);
+    min-height: 0;
+    margin-left: 0;
+  }
 
   .status[data-open="true"],
   :root[data-page="chat"] .status[data-open="true"] {
@@ -693,8 +975,10 @@ body {
     padding-top: var(--s-2);
   }
   .status[data-open="true"] .status-id,
-  .status[data-open="true"] .status-figs {
+  .status[data-open="true"] .status-figs,
+  .status[data-open="true"] .status-extra {
     grid-column: 1;
+    display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: var(--s-1);
@@ -704,15 +988,19 @@ body {
     grid-column: 2;
     grid-row: 1;
   }
-  /* Block, not flex: these are a sentence with a figure inside it, and a
-     flex container would drop the space between the two. */
-  .status[data-open="true"] .status-id .st-seg {
-    display: block;
-  }
+  .status[data-open="true"] .st-seg:not([hidden]),
   .status[data-open="true"] .status-figs > *:not([hidden]) {
     display: inline-flex;
   }
-  .status[data-open="true"] .ctx-bar,
+  .status[data-open="true"] .st-model {
+    display: block;
+  }
+  .status[data-open="true"] .meter,
+  .status[data-open="true"] .cpu-bars,
+  .status[data-open="true"] .spark-wrap {
+    display: inline-flex;
+  }
+  .status[data-open="true"] .meter,
   .status[data-open="true"] .spark-wrap {
     display: block;
   }
@@ -731,6 +1019,10 @@ body {
   .text-btn,
   .status-more {
     min-height: 44px;
+  }
+  /* The corridor's one row is as tall as the target on it. */
+  :root {
+    --touch-row: 44px;
   }
   .text-btn {
     padding-inline: var(--s-3);
@@ -769,13 +1061,32 @@ body {
   .msg,
   .tl-step,
   .card-tool,
-  .notice {
+  .notice,
+  .intro .hero h1,
+  .intro .hero p,
+  .intro .composer,
+  .intro .skills h2,
+  .intro .skill-list li,
+  .intro .page-head > *,
+  .intro .wrap > section,
+  .convo-list.stagger > *,
+  .fresh {
     animation: none !important;
     transform: none !important;
     translate: none !important;
     opacity: 1 !important;
   }
-  .rail {
+  .rail,
+  .persona-ink,
+  .skill .pipe .icon {
+    transition: none !important;
+  }
+  /* Charts are shown drawn, not drawing. */
+  .reveal-ready .track i,
+  .reveal-ready .stack span,
+  .reveal-ready .linechart .series,
+  .reveal-ready .linechart .area,
+  .reveal-ready .linechart .pt {
     transition: none !important;
   }
   .btn:active,

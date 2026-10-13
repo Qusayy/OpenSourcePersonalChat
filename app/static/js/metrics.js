@@ -46,7 +46,9 @@ export class Meter {
     const r = this.rate();
     this.history.push(r);
     if (this.history.length > HISTORY) this.history.shift();
-    this.onSample?.({ rate: r, total: this.total, history: this.history });
+    // `at` is when this sample was taken, on the same clock animation frames
+    // use, so a consumer can draw between samples instead of only on them.
+    this.onSample?.({ rate: r, total: this.total, history: this.history, at: performance.now() });
   }
 
   stop() {

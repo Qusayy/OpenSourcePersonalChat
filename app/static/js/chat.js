@@ -3,10 +3,10 @@
 import { $, $$, toast, setRail, onHealth, setPhase, holdPhase } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
-import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
+import { Meter, fmt, fmtInt, fmtMs } from "./metrics.js";
 import { mountCard } from "./cards.js";
 import { mountSkills, setupPalette } from "./skills.js";
-import { enter, REDUCED, EASE } from "./motion.js";
+import { enter, onFrame, REDUCED, EASE } from "./motion.js";
 import { icon, hasIcon } from "./icons.js";
 
 /** Fade a transient element out before removing it. */
@@ -40,12 +40,11 @@ const els = {
   waitS: $("#st-wait-s"),
   tpsFig: $(".st-tps"),
   ttftFig: $(".st-ttft"),
-  sparkDot: $("#spark-dot"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
   ctxValue: $("#ctx-value"),
   ctxFill: $("#ctx-fill"),
-  sparkLine: $("#spark-line"),
+  spark: $("#spark"),
   skillGrid: $("#skill-grid"),
   skillChip: $("#skill-active"),
   palette: $("#palette"),
@@ -445,18 +444,131 @@ els.thread.addEventListener("click", (e) => {
 /* --------------------------------------------------------- status line --- */
 
 const meter = new Meter({
-  onSample: ({ rate, total, history }) => {
+  onSample: ({ rate, total, at }) => {
     // The meter ticks from the moment a request is sent. Until a token has
     // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
     if (!total) return;
-    els.tps.textContent = fmt(rate, 1);
-    els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
-    // The newest sample, marked on the trace: where the rate is now. Same
-    // scale as sparkPaths, which plots against the tallest sample or 1.
-    els.sparkDot.style.setProperty("--y", (history.at(-1) / Math.max(...history, 1)).toFixed(3));
-    els.sparkDot.hidden = history.length < 2;
+    traceSample(rate, at);
   },
 });
+
+/* The rate, live.
+ *
+ * The meter measures four times a second. Shown raw, the number flips and the
+ * line jerks four times a second. So what is on screen moves every frame
+ * toward what was last measured: the figure eases to the new rate and the
+ * line is drawn a quarter of a second behind now, which is exactly enough for
+ * its head to glide from one sample to the next. Nothing is invented: every
+ * point on the line is a measured sample or lies on the straight line between
+ * two of them.
+ */
+const TRACE_SPAN = 12000; // ms of history across the full width
+const TRACE_LAG = 260; // drawn this far behind now; just over one sample interval
+const trace = { samples: [], shown: 0, target: 0, top: 1, ink: "", off: null, ctx: null, w: 0, h: 0 };
+
+function traceStart() {
+  trace.samples = [];
+  trace.shown = trace.target = 0;
+  trace.top = 1;
+  trace.ink = els.spark ? getComputedStyle(els.spark).color : "";
+  if (!REDUCED && !trace.off) trace.off = onFrame(traceFrame);
+}
+
+function traceStop() {
+  trace.off?.();
+  trace.off = null;
+  trace.samples = [];
+  if (trace.ctx) trace.ctx.clearRect(0, 0, trace.w, trace.h);
+}
+
+function traceSample(rate, at) {
+  trace.samples.push({ t: at, v: rate });
+  while (trace.samples.length > 2 && at - trace.samples[0].t > TRACE_SPAN + 1000) trace.samples.shift();
+  trace.target = rate;
+  if (REDUCED) {
+    // No frame loop: the figure and the line step from sample to sample.
+    els.tps.textContent = fmt(rate, 1);
+    drawTrace(at + TRACE_LAG);
+  }
+}
+
+function traceFrame(now, dt) {
+  trace.shown += (trace.target - trace.shown) * (1 - Math.exp(-dt / 140));
+  const text = fmt(trace.shown, 1);
+  if (els.tps.textContent !== text) els.tps.textContent = text;
+  drawTrace(now);
+}
+
+/** Match the canvas's pixels to its box. False while it has no box (hidden). */
+function traceFit() {
+  const c = els.spark;
+  if (!c || !c.clientWidth || !c.clientHeight) return false;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(c.clientWidth * dpr);
+  const h = Math.round(c.clientHeight * dpr);
+  if (c.width !== w || c.height !== h) {
+    c.width = w;
+    c.height = h;
+  }
+  trace.ctx = c.getContext("2d");
+  trace.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  trace.w = c.clientWidth;
+  trace.h = c.clientHeight;
+  return true;
+}
+
+/** The measured rate at time `t`: a sample, or the line between two. */
+function rateAt(t) {
+  const s = trace.samples;
+  if (t <= s[0].t) return s[0].v;
+  for (let i = 1; i < s.length; i++) {
+    if (t <= s[i].t) {
+      const a = s[i - 1];
+      const b = s[i];
+      return a.v + (b.v - a.v) * ((t - a.t) / (b.t - a.t || 1));
+    }
+  }
+  return s[s.length - 1].v;
+}
+
+function drawTrace(now) {
+  if (!traceFit()) return;
+  const { ctx, w, h, samples } = trace;
+  ctx.clearRect(0, 0, w, h);
+  if (samples.length < 2) return;
+
+  const head = now - TRACE_LAG;
+  // Same scale as before: against the tallest sample, or 1 tok/s. The scale
+  // eases as well, so a new peak does not make the whole line jump.
+  const peak = Math.max(1, ...samples.map((s) => s.v));
+  trace.top += (peak - trace.top) * (REDUCED ? 1 : 0.1);
+  const pad = 3;
+  const right = w - 3;
+  const x = (t) => right - ((head - t) / TRACE_SPAN) * right;
+  const y = (v) => h - pad - (Math.min(v, trace.top) / trace.top) * (h - pad * 2);
+
+  ctx.beginPath();
+  let drawing = false;
+  for (const s of samples) {
+    if (s.t > head) break;
+    const px = x(s.t);
+    if (px < -6) continue;
+    if (drawing) ctx.lineTo(px, y(s.v));
+    else ctx.moveTo(px, y(s.v));
+    drawing = true;
+  }
+  const now_v = rateAt(head);
+  if (drawing) ctx.lineTo(right, y(now_v));
+  else ctx.moveTo(right, y(now_v));
+  ctx.strokeStyle = ctx.fillStyle = trace.ink;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = ctx.lineCap = "round";
+  ctx.stroke();
+  // where the rate is now
+  ctx.beginPath();
+  ctx.arc(right, y(now_v), 2.5, 0, Math.PI * 2);
+  ctx.fill();
+}
 
 function setContext(tokens) {
   const max = window.AURORA.info.n_ctx || 4096;
@@ -476,13 +588,13 @@ function resetFigures() {
   els.tpsFig.hidden = els.ttftFig.hidden = true;
   els.tps.textContent = "—";
   els.ttft.textContent = "—";
-  els.sparkLine.setAttribute("d", "");
-  els.sparkDot.hidden = true;
+  traceStop();
 }
 
 /** The first token has landed: the figures have something to report. */
 function showFigures(ttftMs) {
   els.tpsFig.hidden = false;
+  traceStart();
   if (ttftMs !== null && ttftMs !== undefined) {
     els.ttft.textContent = fmtMs(ttftMs);
     els.ttftFig.hidden = false;

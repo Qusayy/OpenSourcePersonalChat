@@ -19,7 +19,7 @@
 <script type="importmap">
 {
   "imports": {
-    {%- for m in ["app", "chat", "skills", "cards", "metrics", "motion", "stream", "md", "icons", "bench"] %}
+    {%- for m in ["app", "chat", "skills", "cards", "metrics", "motion", "aurora", "stream", "md", "icons", "bench"] %}
     "/static/js/{{ m }}.js": "/static/js/{{ m }}.js?v={{ version }}"{{ "," if not loop.last }}
     {%- endfor %}
   }
@@ -38,14 +38,20 @@
 </head>
 <body>
 <!--
-THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
-OWN-WORLD: Near-white sheet tinted green-grey, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
+THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes: its figures tick, its trace scrolls, and an aurora rises from it for as long as the answer is being produced. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
+OWN-WORLD: Near-white sheet tinted green-grey, centred, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
 STORY: A stranger sees a small model on a cheap server being straight about what each answer costs, asks one thing, and watches the line tick.
-FIRST VIEWPORT: Left-aligned 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath, the status line across the bottom edge.
+FIRST VIEWPORT: A centred column: 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath; the status line across the bottom edge on the same container as the top bar, showing the machine's cores and memory as measured.
 FORM: Status Line, position 4 on the ordered grounded list; seed aa84745b.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 -->
 <a class="skip-link" href="#main">Skip to content</a>
+{% if page == 'chat' %}
+{# The aurora: light rising from the status line while a request is in flight
+   (aurora.js). A direct child of <body>, fixed and behind everything, so it can
+   never cover the composer, the palette or a toast. Absent at rest. #}
+<div class="aurora" id="aurora" aria-hidden="true" hidden><canvas></canvas></div>
+{% endif %}
 
 <header class="topbar">
   <a class="wordmark" href="/">Aurora</a>
@@ -82,7 +88,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <span class="dot" aria-hidden="true"></span>
       <span class="st-word" id="b-state"><span class="st-word-in">{{ state_words.get(info.status, info.status) }}</span></span>
     </span>
-    <span class="st-seg st-model">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
+    <span class="st-seg st-model" title="{{ info.model }} {{ info.quant }}">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
     <span class="st-seg st-cpu" id="st-cpu" {% if cpus is none %}hidden{% endif %}>
       <span><span class="num" id="cpu-count">{{ cpus_text }}</span> <span id="cpu-noun">{{ 'core' if cpus == 1 else 'cores' }}</span></span>
       {# One bar per core up to eight; past that the bars would be a comb, so one bar for all of them. #}

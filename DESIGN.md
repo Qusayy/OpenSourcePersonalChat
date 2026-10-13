@@ -185,11 +185,14 @@ The material is paper and ink. A near-white sheet tinted toward green-grey, two 
 
 The system refuses gradients, glass and backdrop blur, glow, pills, message bubbles, avatar tiles, a sparkle mark, uppercase tracked micro-labels, themed vocabulary with renamed labels, a black-and-orange palette, and monospace set on words. The themed vocabulary, the cold mono-caps look and the black-and-orange palette are the user's stated reasons for reverting an earlier redesign; the rest were in the plan the user approved, except the monospace rule, which came out of review.
 
+There is one exception to the first and third of those, and it has a name: the aurora, a light that rises from the status line while an answer is being produced. The user asked for one live generation effect. It is the only luminous thing on any page, and it is not there when nothing is in progress.
+
 **Key Characteristics:**
 - Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
 - Everything is centred: the top bar, the reading column and the status line share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
+- One light, the aurora, and only while an answer is in flight.
 - One typeface. Numerals and units fixed-width, words proportional.
 - Hairline rules instead of boxes; flat surfaces; one shadow, only for things that float.
 - Every fact said once, in the place it belongs.
@@ -220,7 +223,7 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 ### Named Rules
 
-**The Live Rule.** `live` marks the thing that is happening now and nothing that is merely selected, chosen, successful or important. Where you are and what you chose are said in ink with a 2px underline. If nothing on the page is in progress, nothing on the page is green.
+**The Live Rule.** `live` marks the thing that is happening now and nothing that is merely selected, chosen, successful or important. Where you are and what you chose are said in ink with a 2px underline. If nothing on the page is in progress, nothing on the page is green. The aurora is the live colour at its largest and is held to the same rule.
 
 **The Two Inks Rule.** There are two inks and no third. A fainter grey is not available to reach for; hierarchy comes from size, weight and space.
 
@@ -274,11 +277,11 @@ Flat. Surfaces are the sheet and one tint of it; separation is a hairline. There
 ### Shadow Vocabulary
 - **Pop** (`box-shadow: 0 1px 2px oklch(22% 0.015 150 / 0.08), 0 12px 32px -8px oklch(22% 0.015 150 / 0.22)`; in dark, `0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6)`): the command palette, the history dialog, toasts.
 
-Layers are four: status line (10), popovers (30), toasts (60), the skip link (200).
+Layers are five: the aurora (-1, behind everything that sits in the sheet), status line (10), popovers (30), toasts (60), the skip link (200).
 
 ### Named Rules
 
-**The Floats Only Rule.** A shadow means the element is over the sheet and will go away. Nothing that sits in the sheet has one. No glow, no blur, no translucent surface.
+**The Floats Only Rule.** A shadow means the element is over the sheet and will go away. Nothing that sits in the sheet has one. No glow, no blur, no translucent surface. The aurora is not a surface: it holds nothing, casts nothing and lies under everything.
 
 ## Shapes
 
@@ -346,8 +349,9 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 
 - **Left, the machine, and it is live:** the state (an 8px dot and a word at 600), the model and its quantisation, then two figures measured on the server and repainted about once a second: the cores this process can use, with one small column per core filled to its load and the total as a percentage; and the machine's memory in use against its total, with a thin meter. Past eight cores the columns become one horizontal bar. A bordered `mock` tag appears when answers are canned and is never hidden. These are the whole machine's figures, which the site shares with others; a tooltip on each says so and gives the app's own share.
 - **Right, the conversation, anchored to the right edge:** context use on the chat page (count, limit, a 48px by 4px meter). Each figure sits in a slot as wide as its largest value, so a number that ticks changes in place.
+- **Short of room:** the row gives way in a set order. The trace takes only the space that is free (2.5rem to 6rem), so it narrows first; after that the model's name is cut with an ellipsis and keeps the whole of itself in its title. Nothing else moves and nothing runs into its neighbour.
 - **States:** ready in ink; starting, loading, queued and busy in caution; model unavailable in fault; working, reading and writing in the live colour, as is a result held for a tab that was not being watched. "Busy" means the engine is answering someone else, which explains cores at full load beside an idle conversation. The word slot is wide enough for the request states, so they swap in place; a longer word widens it. While waiting, the dot breathes (1.4s) and a seconds count, with the queue position when there is one, appears on the right. Once tokens arrive the dot holds still and the figures do the moving.
-- **In flight:** on the first token, tok/s with a live-coloured trace (newest sample dotted) and time to first token join the right side. While this visitor's request runs, the core columns take the live colour: that load is the request. The context meter turns caution above 85%, the memory meter above 90%.
+- **In flight:** on the first token, tok/s with a live-coloured trace (the last twelve seconds, newest sample dotted) and time to first token join the right side. The rate is measured four times a second; the figure eases to each measurement and the trace scrolls at display rate, drawn a quarter of a second behind now so its head glides from one sample to the next. Every point on it is a measured sample or lies on the straight line between two. While this visitor's request runs, the core columns take the live colour: that load is the request. The context meter turns caution above 85%, the memory meter above 90%.
 - **Sampling:** once a second while a request is running, every three seconds otherwise, not at all in a hidden tab.
 - **Narrow:** below 1264px the chat page's conversation figures take their own row, context first. Below 620px the line is a corridor: state plus the one figure that matters now (the rate while writing, context otherwise; memory on the other pages), with the rest behind a "Details" word button, which also lists the model's thread count, the app's own memory, the limit on the service and the load average.
 
@@ -355,8 +359,18 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 
 **The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off.
 
+### The aurora
+The page's one luminous thing: a strip of light in the live colour that rises from the top edge of the status line, across the full width of the window, while this visitor's request is being read or written. At no other time is it on the page.
+
+- **What drives it:** the same phase the status word shows, from the same call, so the two cannot disagree. While the model reads the prompt it holds a low, slow swell. Once tokens arrive its brightness and reach follow the measured tokens per second (about two-thirds lit at 12 tok/s, on a curve that does not clip on a fast machine), with a small lift as each token lands. Queued is someone else's work, so it is off. When the answer ends it fades over about two seconds and the element is hidden, not left transparent, and stops asking for frames.
+- **Where it sits:** fixed to the window, 14rem tall (10rem below 620px), a child of the body behind everything: under the thread, the composer and the palette, over nothing but the sheet's own colour. It cannot cover a control or take a pointer event.
+- **Ceiling:** no pixel carries more than 24% of the live colour on the light sheet, 22% on the dark one. Composited at that ceiling, the second ink still reads 4.8:1 and the Stop label 4.7:1.
+- **How it is drawn:** a WebGL2 fragment shader on a transparent canvas, at half resolution with the pixel ratio capped at 1.5, eased by elapsed time so it runs the same at 60 and 120 frames a second. The shader compiles when the page is idle, never on the first send. Without WebGL2, or until the shader is ready, a CSS strip of the same colour and ceiling whose opacity is the same energy. Under reduced motion, a still, faint tint for as long as the request runs.
+
+**The One Light Rule.** There is one gradient and one glow in the system, and this is it. It is made of the live colour and governed by the Live Rule: nothing in progress, no light. Nothing may borrow it: no glow on a button, no gradient on a surface, no second effect.
+
 ### Motion
-Motion explains a change or acknowledges an action; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances.
+Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances.
 
 - **The arrival.** Come to from outside (a typed address, a link from elsewhere, a reload), a page assembles once in reading order: headline, what it is, where to type, what to try, each rising 10px out of nothing, 50ms apart. It does not replay on New chat or when moving between the site's own pages.
 - **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
@@ -364,17 +378,19 @@ Motion explains a change or acknowledges an action; nothing moves for decoration
 - **The status line.** The state word slides when the state changes: the old word leaves upward, the new one comes up from below. Core columns and meters ease between samples. The dot breathes while waiting.
 - **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
 - **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
+- **In flight.** The rate eases between measurements, its trace scrolls, and the aurora rises with the rate (see The status line and The aurora). These run on one shared frame loop that exists only while something is subscribed to it; at rest the page asks for no frames.
 - **The thread.** Questions, route steps and tool figures enter from just below (6 to 8px, 240ms).
 - **Charts.** Bars grow from the baseline, the memory budget fills segment by segment and the history line is drawn left to right, each when scrolled to and once only.
 
-Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed and charts are shown drawn, while colour and opacity transitions stay so the interface still acknowledges input.
+Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed, charts are shown drawn, the rate and its trace step from sample to sample and the aurora holds still, while colour and opacity transitions stay so the interface still acknowledges input.
 
 ## Do's and Don'ts
 
 ### Do:
 - **Do** centre new content and stop it at the column measure (42rem for chat, 40rem for long-form text).
 - **Do** keep the status line on the same container as the top bar, on every page.
-- **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar.
+- **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar, the aurora.
+- **Do** keep the aurora under its ceiling and behind the content, and check the second ink over it if either changes.
 - **Do** mark selection and location in ink with a 2px underline.
 - **Do** set numerals and units fixed-width with tabular figures, and the words beside them proportional.
 - **Do** separate with a 1px rule and space; set a result as a captioned figure between two hairlines.
@@ -386,9 +402,9 @@ Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entra
 - **Do** check every new colour pair against both sheets; the floor is 4.5:1.
 
 ### Don't:
-- **Don't** use gradients.
+- **Don't** use gradients. The aurora is the one exception.
 - **Don't** use glass, backdrop blur or translucent surfaces.
-- **Don't** use glow.
+- **Don't** use glow, or add a second light. The aurora is the one exception, and only while an answer is in flight.
 - **Don't** make pills. Corners are 4px; the one floating panel is 8px.
 - **Don't** put messages in bubbles or add avatar tiles.
 - **Don't** add a sparkle mark.

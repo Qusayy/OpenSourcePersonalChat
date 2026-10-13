@@ -382,6 +382,38 @@ body {
 .status-figs {
   margin-left: auto;
 }
+/* What gives when the row is short of room, and in what order. The trace only
+   ever grows into space that is free, so it narrows first; after that the
+   model's name is cut with an ellipsis (its title still carries all of it).
+   Nothing else moves, and nothing runs into its neighbour. */
+.status-id > * {
+  flex: none;
+}
+.status-id > .st-model {
+  flex: 0 1 auto;
+  min-width: 8ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (min-width: 1264px) {
+  .status-figs {
+    flex: 1 0 auto;
+    justify-content: flex-end;
+  }
+  .status-figs > * {
+    flex: none;
+  }
+  .status-figs > .st-tps {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+  .st-tps .spark-wrap {
+    flex: 1 1 2.5rem;
+    width: auto;
+    min-width: 2.5rem;
+    max-width: 6rem;
+  }
+}
 /* Only for the opened line on a narrow screen; see the 620px rules. */
 .status-extra {
   display: none;
@@ -548,6 +580,10 @@ body {
    glides between samples instead of jumping four times a second. The canvas
    takes its ink from `color`, so the scheme decides it here. */
 .spark {
+  /* Out of flow, so the canvas's own pixel size never decides how wide the
+     trace is; its box does. */
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -634,6 +670,53 @@ body {
   .status .cpu-bars {
     display: none;
   }
+}
+
+/* ------------------------------------------------------------ the aurora */
+
+/* Light rising from the status line while this visitor's request is being
+   read or written (aurora.js). Fixed to the window and behind everything: it
+   is a child of <body> at z-index -1, so it paints over the page's own
+   background and under all content, and cannot cover a control. Absent at
+   rest: the element is hidden, not merely transparent.
+
+   --e is the energy (0 to 1) and --peak the most alpha the effect may reach in
+   this scheme; both are set by the script. The shader draws on the canvas.
+   Where there is no WebGL2, and until the shader is ready, the strip below is
+   the effect: the same colour and ceiling, its opacity the same energy. */
+.aurora {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--status-h, 2.5rem);
+  z-index: -1;
+  height: 14rem;
+  pointer-events: none;
+  color: var(--live); /* read back by the script as the shader's colour */
+}
+.aurora canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.aurora[data-mode="css"] canvas,
+.aurora[data-mode="still"] canvas {
+  display: none;
+}
+.aurora[data-mode="css"],
+.aurora[data-mode="still"] {
+  background: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--live) calc(var(--peak, 0.24) * 100%), transparent),
+    transparent 82%
+  );
+}
+.aurora[data-mode="css"] {
+  opacity: var(--e, 0);
+}
+/* Reduced motion: no movement at all, a still tint while the request runs. */
+.aurora[data-mode="still"] {
+  opacity: 0.55;
 }
 
 /* ----------------------------------------------------------------- toasts */
@@ -734,6 +817,9 @@ body {
 @media (max-width: 620px) {
   .topbar {
     gap: var(--s-4);
+  }
+  .aurora {
+    height: 10rem;
   }
   /* On the chat page History and New take the room; the page links move into
      the drawer. The other pages have nothing else in the bar and keep them. */

@@ -7,6 +7,7 @@ import { Meter, fmt, fmtInt, fmtMs } from "./metrics.js";
 import { mountCard } from "./cards.js";
 import { mountSkills, setupPalette } from "./skills.js";
 import { enter, onFrame, REDUCED, EASE } from "./motion.js";
+import { aurora } from "./aurora.js";
 import { icon, hasIcon } from "./icons.js";
 
 /** Fade a transient element out before removing it. */
@@ -485,6 +486,7 @@ function traceSample(rate, at) {
   trace.samples.push({ t: at, v: rate });
   while (trace.samples.length > 2 && at - trace.samples[0].t > TRACE_SPAN + 1000) trace.samples.shift();
   trace.target = rate;
+  aurora.rate(rate);
   if (REDUCED) {
     // No frame loop: the figure and the line step from sample to sample.
     els.tps.textContent = fmt(rate, 1);
@@ -611,6 +613,9 @@ function livePhase(key, lead = "") {
   clearInterval(phaseClock);
   phaseClock = null;
   els.wait.hidden = true;
+  // The one place the aurora is driven from: it follows the same phase the
+  // status line shows, so the two cannot disagree.
+  aurora.phase(key);
   if (!key) return setPhase(null);
   setPhase(key, PHASE_WORDS[key]);
   if (key === "writing") return;
@@ -757,6 +762,7 @@ async function send(text) {
           raw += data.t;
           dirty = true;
           meter.token(1);
+          aurora.pulse();
         } else if (event === "done") {
           caretOn = false;
           dirty = false;

@@ -38,8 +38,13 @@ const SHAPES = {
 
   // pipeline / timeline
   route: P("M6 4v6a4 4 0 0 0 4 4h8") + P("M15 11l3 3-3 3"),
-  model: P("M12 3l1.9 4.6L19 9.5l-5.1 1.9L12 16l-1.9-4.6L5 9.5l5.1-1.9z") +
-    P("M18 16l.8 2 2.2.8-2.2.8-.8 2-.8-2-2.2-.8 2.2-.8z", 'opacity=".65"'),
+  // The model's step is drawn as what it produces: lines of text and the
+  // caret still writing the last one.
+  model: P("M5 7h14M5 12h14M5 17h7") + P("M16 14.5v5"),
+
+  // interface
+  arrow: P("M5 12h14M13 6l6 6-6 6"),
+  external: P("M9 6h9v9M18 6 7 17"),
   tool: P("M14.5 4a4.5 4.5 0 0 0-4 6.6L4 17v3h3l6.4-6.4A4.5 4.5 0 1 0 14.5 4z"),
   error: P("M12 8v5M12 16.5v.5") + P("M10.3 4.3 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"),
   skill: P("M12 3l2.1 5.1L20 9l-4.4 4 1.2 5.9L12 16l-4.8 2.9L8.4 13 4 9l5.9-.9z"),

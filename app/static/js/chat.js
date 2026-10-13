@@ -1,12 +1,13 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth, canvas } from "./app.js";
+import { $, $$, toast, setRail, onHealth, setPhase, holdPhase } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
 import { mountCard } from "./cards.js";
-import { mountSkills, setupPalette, getSkill } from "./skills.js";
+import { mountSkills, setupPalette } from "./skills.js";
 import { enter, REDUCED } from "./motion.js";
+import { icon, hasIcon } from "./icons.js";
 
 /** Fade a transient element out before removing it. */
 function dismiss(el) {
@@ -15,9 +16,6 @@ function dismiss(el) {
   el.dataset.leaving = "true";
   setTimeout(() => el.remove(), 160);
 }
-import { icon, hasIcon } from "./icons.js";
-
-const RING_C = 2 * Math.PI * 22;
 
 const state = {
   conversationId: null,
@@ -28,21 +26,28 @@ const state = {
 };
 
 const els = {
+  main: $("#main"),
   thread: $("#thread"),
-  hero: $("#hero"),
   wrap: $("#stream-wrap"),
   form: $("#composer"),
   input: $("#input"),
   send: $("#send"),
+  sendLabel: $("#send-label"),
   list: $("#convo-list"),
-  ctxHint: $("#ctx-hint"),
+  bar: $("#status"),
+  wait: $("#st-wait"),
+  waitLead: $("#st-wait-lead"),
+  waitS: $("#st-wait-s"),
+  tpsFig: $(".st-tps"),
+  outFig: $(".st-out"),
+  ttftFig: $(".st-ttft"),
+  sparkDot: $("#spark-dot"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
   out: $("#out-value"),
   ctxValue: $("#ctx-value"),
-  ctxRing: $("#ctx-ring"),
+  ctxFill: $("#ctx-fill"),
   sparkLine: $("#spark-line"),
-  sparkFill: $("#spark-fill"),
   skillGrid: $("#skill-grid"),
   skillChip: $("#skill-active"),
   palette: $("#palette"),
@@ -76,19 +81,27 @@ paintPersonas();
 
 /* --------------------------------------------------------------- skills -- */
 
+/** What the empty input says, given the server's condition. */
+function placeholderFor(info) {
+  if (info.status === "ready") return "Ask something…";
+  return info.status === "error"
+    ? "The model could not be loaded — nothing can be sent right now"
+    : "The model is still loading…";
+}
+
 function setSkill(skill) {
   state.skill = skill;
   if (!els.skillChip) return;
   if (!skill) {
     els.skillChip.hidden = true;
-    els.input.placeholder = `Ask ${window.AURORA.info.model} something…`;
+    els.input.placeholder = placeholderFor(window.AURORA.info);
     return;
   }
   els.skillChip.hidden = false;
   els.skillChip.innerHTML = `
-    <span class="g">${escapeHtml(skill.glyph)}</span>
-    <span>${escapeHtml(skill.name)}</span>
-    <button class="x" type="button" aria-label="Clear skill">✕</button>`;
+    <span>Skill</span>
+    <b>${escapeHtml(skill.name)}</b>
+    <button class="text-btn small quiet x" type="button">Clear</button>`;
   els.skillChip.querySelector(".x").addEventListener("click", () => setSkill(null));
   els.input.placeholder = skill.placeholder || `${skill.name}…`;
   els.input.focus();
@@ -157,23 +170,44 @@ function nearBottom() {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 140;
 }
 
-function hideHero() {
-  const hero = els.hero;
-  if (!hero || hero.hidden || hero.dataset.leaving === "true") return;
-  hero.dataset.leaving = "true";
-  const done = () => {
-    hero.hidden = true;
-    delete hero.dataset.leaving;
+/**
+ * Switch between the empty sheet and the thread. One attribute on <main>
+ * carries it, so a view can never be half applied.
+ *
+ * `animate` is for the one change a visitor causes by sending the first
+ * question: the composer travels to the foot of the sheet. Loading a stored
+ * conversation or starting a new one just changes.
+ */
+function setView(view, { animate = false } = {}) {
+  if (els.main.dataset.view === view) return;
+  const apply = () => {
+    els.main.dataset.view = view;
+    // The thread was display:none until now, so nothing could scroll it.
+    els.wrap.scrollTop = els.wrap.scrollHeight;
   };
-  if (REDUCED) done();
-  else setTimeout(done, 200);
+  if (animate && !REDUCED && document.startViewTransition) document.startViewTransition(apply);
+  else apply();
 }
+
+// Past this a message is a pasted document, not a question, and is set as
+// text and folded rather than as the heading of the exchange.
+const LONG_CHARS = 280;
+const LONG_LINES = 4;
 
 function addUser(text) {
   const el = document.createElement("div");
   el.className = "msg user";
+  // Kept verbatim for "Ask again": the rendered body may be folded.
+  el.dataset.raw = text;
   // dir="auto" so Arabic or Hebrew input lays out right-to-left on its own.
   el.innerHTML = `<div class="body" dir="auto">${escapeHtml(text).replace(/\n/g, "<br>")}</div>`;
+  if (text.length > LONG_CHARS || text.split("\n").length > LONG_LINES) {
+    el.classList.add("long");
+    el.insertAdjacentHTML(
+      "beforeend",
+      '<button class="text-btn small quiet msg-more" type="button" aria-expanded="false">Show all</button>'
+    );
+  }
   els.thread.appendChild(el);
   els.wrap.scrollTop = els.wrap.scrollHeight;
   return el;
@@ -183,7 +217,6 @@ function addAssistant() {
   const el = document.createElement("div");
   el.className = "msg bot";
   el.innerHTML = `
-    <div class="avatar" aria-hidden="true">✦</div>
     <div class="body">
       <div class="timeline" hidden></div>
       <div class="cards"></div>
@@ -203,6 +236,20 @@ function addAssistant() {
  * measured 8.9ms per tick at 1200 tokens and rose with length — the cost was
  * DOM teardown and relayout, not the markdown parse (0.55ms of it).
  */
+/**
+ * Where the caret goes: inside the last block being written, at the end of its
+ * text. Appended after that block instead, an inline caret following a <p>
+ * starts a line of its own and sits under the sentence it is meant to end.
+ */
+const CARET_INSIDE = /^(P|UL|OL|LI|H[1-6]|BLOCKQUOTE|DIV|PRE|CODE|TABLE|TBODY|TR|TD)$/;
+function caretHost(root) {
+  let el = root;
+  while (el.lastElementChild && CARET_INSIDE.test(el.lastElementChild.tagName)) {
+    el = el.lastElementChild;
+  }
+  return el;
+}
+
 function proseRenderer(host) {
   const stable = document.createElement("div");
   const tail = document.createElement("div");
@@ -222,7 +269,7 @@ function proseRenderer(host) {
       }
       const last = blocks[blocks.length - 1];
       tail.innerHTML = last === undefined ? "" : renderMarkdown(last);
-      if (caretOn) tail.appendChild(caret);
+      if (caretOn) caretHost(tail).appendChild(caret);
       else caret.remove();
     },
     finish(raw) {
@@ -235,28 +282,66 @@ function proseRenderer(host) {
   };
 }
 
-/** Create or update one row of the answer timeline. */
+// How a tool came to be chosen, where that says something. A slash command
+// is not listed: the question above the answer already is one. Only "model"
+// costs a pass through the model; a pattern match is decided before the model
+// is touched.
+const ROUTE_WORDS = {
+  heuristic: "Pattern match",
+  model: "Model's choice",
+};
+
+/**
+ * Create or update one step of the answer's route line.
+ *
+ * The line carries only what is said nowhere else. The answer step is the
+ * status line's job while it runs and the footer's once it has. A finished
+ * tool is named, timed and qualified by its own figure below. So a step is
+ * drawn here while it is running, and afterwards only if it was a routing
+ * decision worth knowing about.
+ */
 function upsertStep(host, data) {
-  host.hidden = false;
+  if (data.kind === "model") return;
+  const status = data.status || "running";
+  const over = status !== "running";
   let row = host.querySelector(`[data-id="${CSS.escape(data.id)}"]`);
+  if (over && (data.kind === "tool" || (data.kind === "route" && data.detail === "slash"))) {
+    row?.remove();
+    host.hidden = !host.children.length;
+    return;
+  }
   if (!row) {
     row = document.createElement("div");
     row.className = "tl-step";
     row.dataset.id = data.id;
     row.innerHTML =
       '<span class="g"></span><span class="label"></span>' +
-      '<span class="detail"></span><span class="ms"></span>';
+      '<span class="st"></span><span class="ms num"></span>';
     host.appendChild(row);
-    enter(row, { distance: 8 });
+    enter(row, { distance: 6 });
   }
-  row.dataset.status = data.status || "running";
-  const art = data.tool && hasIcon(data.tool) ? icon(data.tool, 13) : icon(data.kind, 13);
-  row.querySelector(".g").innerHTML = art || escapeHtml(data.glyph || "◇");
-  row.querySelector(".label").textContent = data.label || "";
-  row.querySelector(".detail").textContent = data.detail || "";
+  host.hidden = false;
+  row.dataset.status = status;
+  let name = data.tool && hasIcon(data.tool) ? data.tool : "tool";
+  let label = data.label || "";
+  if (data.kind === "route") {
+    name = "route";
+    if (data.detail === "skill") label = `Skill: ${data.label}`;
+    else if (data.tool && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
+  }
+  row.querySelector(".g").innerHTML = icon(name, 14);
+  row.querySelector(".label").textContent = label;
+  // Said in a word as well as a colour.
+  row.querySelector(".st").textContent = over ? "" : "running";
   row.querySelector(".ms").textContent = data.ms ? fmtMs(data.ms) : "";
   return row;
 }
+
+// What a tool is called on screen, for cards replayed from a stored
+// conversation, where only its registry name was kept.
+const TOOL_LABELS = Object.fromEntries(
+  (window.AURORA.tools || []).map((t) => [t.name, t.label || t.name])
+);
 
 function notice(kind, html) {
   const el = document.createElement("div");
@@ -269,12 +354,12 @@ function notice(kind, html) {
 
 /** An error the user can act on: says what broke and offers the way back. */
 function errorNotice(message, retryText) {
-  const el = notice("err", `<span>${escapeHtml(message)}</span>`);
+  const el = notice("err", `${icon("error", 16)}<span>${escapeHtml(message)}</span>`);
   announce(message);
   if (retryText) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "notice-retry";
+    btn.className = "btn notice-retry";
     btn.textContent = "Try again";
     btn.addEventListener("click", () => {
       el.remove();
@@ -290,25 +375,35 @@ function footer(el, m) {
   const foot = el.querySelector(".msg-foot");
   const bits = [];
   const has = (v) => v !== null && v !== undefined;
-  if (has(m.gen_tps)) bits.push(`${fmt(m.gen_tps, 1)} tok/s`);
-  if (has(m.ttft_ms)) bits.push(`${fmtMs(m.ttft_ms)} to first token`);
-  if (has(m.completion_tokens)) bits.push(`${fmtInt(m.completion_tokens)} tok`);
-  if (m.tool_calls) bits.push(`${m.tool_calls} tool${m.tool_calls > 1 ? "s" : ""}`);
-  if (m.cancelled) bits.push("stopped");
+  // The numeral is fixed-width so a column of these lines up; the words
+  // around it are words and are set as words.
+  const fig = (value, words) => `<span><b class="num">${value}</b> ${words}</span>`;
+  if (has(m.gen_tps)) bits.push(fig(fmt(m.gen_tps, 1), "tok/s"));
+  if (has(m.ttft_ms)) bits.push(fig(fmtMs(m.ttft_ms), "to first token"));
+  if (has(m.completion_tokens)) bits.push(fig(fmtInt(m.completion_tokens), "tokens"));
+  if (has(m.total_ms)) bits.push(fig(fmtMs(m.total_ms), "to answer"));
+  if (m.cancelled) bits.push("<span>stopped</span>");
+  // The tools an answer used are the figures above it, so they are not
+  // counted again here.
+  // Always there, in words: an action that only appears on hover does not
+  // exist on a phone, and an unlabelled glyph has to be guessed at.
   foot.innerHTML =
-    bits.map((b) => `<span>${b}</span>`).join('<span class="sep">·</span>') +
+    `<span class="figs">${bits.join("")}</span>` +
     `<span class="act">
-       <button class="icon-btn" data-act="copy" title="Copy answer" aria-label="Copy answer">
-         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
-       </button>
-       <button class="icon-btn" data-act="again" title="Ask this again" aria-label="Ask this again">
-         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
-       </button>
+       <button class="text-btn small quiet" type="button" data-act="copy">Copy</button>
+       <button class="text-btn small quiet" type="button" data-act="again">Ask again</button>
      </span>`;
   foot.hidden = false;
 }
 
 els.thread.addEventListener("click", (e) => {
+  const more = e.target.closest(".msg-more");
+  if (more) {
+    const open = more.closest(".msg").classList.toggle("expanded");
+    more.setAttribute("aria-expanded", String(open));
+    more.textContent = open ? "Show less" : "Show all";
+    return;
+  }
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
   const msg = btn.closest(".msg");
@@ -320,23 +415,25 @@ els.thread.addEventListener("click", (e) => {
   } else if (btn.dataset.act === "again") {
     if (state.streaming) return;
     const prev = msg.previousElementSibling;
-    const q = prev?.classList.contains("user") ? prev.querySelector(".body").innerText : null;
+    const q = prev?.classList.contains("user") ? prev.dataset.raw : null;
     if (q) send(q);
   }
 });
 
-/* ----------------------------------------------------------------- HUD --- */
+/* --------------------------------------------------------- status line --- */
 
 const meter = new Meter({
   onSample: ({ rate, total, history }) => {
-    els.tps.dataset.empty = "false";
+    // The meter ticks from the moment a request is sent. Until a token has
+    // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
+    if (!total) return;
     els.tps.textContent = fmt(rate, 1);
     els.out.textContent = fmtInt(total);
-    const [line, fill] = sparkPaths(history);
-    els.sparkLine.setAttribute("d", line);
-    els.sparkFill.setAttribute("d", fill);
-    const strip = document.querySelector('[data-strip="tps"]');
-    if (strip) strip.textContent = fmt(rate, 1);
+    els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
+    // The newest sample, marked on the trace: where the rate is now. Same
+    // scale as sparkPaths, which plots against the tallest sample or 1.
+    els.sparkDot.style.setProperty("--y", (history.at(-1) / Math.max(...history, 1)).toFixed(3));
+    els.sparkDot.hidden = history.length < 2;
   },
 });
 
@@ -344,10 +441,56 @@ function setContext(tokens) {
   const max = window.AURORA.info.n_ctx || 4096;
   const pct = Math.max(0, Math.min(1, tokens / max));
   els.ctxValue.textContent = fmtInt(tokens);
-  els.ctxRing.setAttribute("stroke-dashoffset", String(RING_C * (1 - pct)));
-  els.ctxHint.textContent = `${fmtInt(tokens)} / ${fmtInt(max)} ctx`;
-  const strip = document.querySelector('[data-strip="ctx"]');
-  if (strip) strip.textContent = fmtInt(tokens);
+  els.ctxFill.style.transform = `scaleX(${pct.toFixed(4)})`;
+  // Past this the next long answer is likely to push old turns out.
+  els.bar.dataset.ctx = pct > 0.85 ? "high" : "ok";
+}
+
+/**
+ * Take the cost figures off the line. They are there while a request is in
+ * flight; once it ends they are printed under the answer they belong to, and
+ * showing them here as well would say the same thing twice.
+ */
+function resetFigures() {
+  els.tpsFig.hidden = els.outFig.hidden = els.ttftFig.hidden = true;
+  els.tps.textContent = "—";
+  els.out.textContent = "—";
+  els.ttft.textContent = "—";
+  els.sparkLine.setAttribute("d", "");
+  els.sparkDot.hidden = true;
+}
+
+/** The first token has landed: the figures have something to report. */
+function showFigures(ttftMs) {
+  els.tpsFig.hidden = els.outFig.hidden = false;
+  if (ttftMs !== null && ttftMs !== undefined) {
+    els.ttft.textContent = fmtMs(ttftMs);
+    els.ttftFig.hidden = false;
+  }
+}
+
+// The status line's state while a request is in flight. Every phase but
+// "writing" is a wait, so it counts the seconds: on this hardware a wait is
+// long enough that a still label looks like a hang. The count sits with the
+// figures on the right, where it can change width without moving anything.
+const PHASE_WORDS = { working: "working", queued: "queued", reading: "reading", writing: "writing" };
+let phaseClock = null;
+function livePhase(key, lead = "") {
+  clearInterval(phaseClock);
+  phaseClock = null;
+  els.wait.hidden = true;
+  if (!key) return setPhase(null);
+  setPhase(key, PHASE_WORDS[key]);
+  if (key === "writing") return;
+  const since = performance.now();
+  const paint = () => {
+    const s = Math.floor((performance.now() - since) / 1000);
+    els.waitLead.textContent = lead;
+    els.waitS.textContent = s >= 2 ? `${s} s` : "";
+    els.wait.hidden = !lead && s < 2;
+  };
+  paint();
+  phaseClock = setInterval(paint, 1000);
 }
 
 /* ------------------------------------------------------------ streaming -- */
@@ -355,8 +498,9 @@ function setContext(tokens) {
 function setMode(streaming) {
   state.streaming = streaming;
   els.send.dataset.mode = streaming ? "stop" : "send";
+  els.sendLabel.textContent = streaming ? "Stop" : "Send";
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
-  canvas?.setGenerating(streaming);
+  livePhase(streaming ? "working" : null);
 }
 
 async function stopGeneration() {
@@ -370,9 +514,9 @@ async function stopGeneration() {
 
 async function send(text) {
   if (state.streaming) return;
-  hideHero();
   setRail(false);
   addUser(text);
+  setView("thread", { animate: true });
 
   const skill = state.skill;
   const bot = addAssistant();
@@ -380,6 +524,10 @@ async function send(text) {
   const timeline = bot.querySelector(".timeline");
   const cardHost = bot.querySelector(".cards");
   let queueCard = null;
+  let queuedAs = null; // the queue wording currently on the status line
+  let finishedUnseen = false;
+  // What each tool step reported, kept for the figure that follows it.
+  const stepMeta = new Map();
   let raw = "";
   let dirty = false;
   let caretOn = true;
@@ -401,9 +549,7 @@ async function send(text) {
 
   setMode(true);
   meter.start();
-  els.tps.textContent = "0.0";
-  els.ttft.textContent = "—";
-  els.out.textContent = "0";
+  resetFigures();
 
   const controller = new AbortController();
 
@@ -432,13 +578,16 @@ async function send(text) {
               : "Next in line — starting shortly.";
           queueCard.lastElementChild.textContent = queueText;
           announce(queueText);
+          const ahead = data.position > 0 ? `${data.position} ahead` : "next in line";
+          if (queuedAs !== ahead) livePhase("queued", (queuedAs = ahead));
         } else if (event === "step") {
           upsertStep(timeline, data);
+          if (data.kind === "tool") stepMeta.set(data.id, { label: data.label, ms: data.ms });
           if (data.status === "failed") {
             announce(`${data.label} failed: ${data.detail || "unknown error"}`);
           }
         } else if (event === "card") {
-          mountCard(cardHost, data.card, data.data, cardIndex++);
+          mountCard(cardHost, data.card, data.data, cardIndex++, stepMeta.get(data.step_id));
           if (nearBottom()) els.wrap.scrollTop = els.wrap.scrollHeight;
         } else if (event === "trimmed") {
           notice("", `<span>${
@@ -448,19 +597,17 @@ async function send(text) {
           }</span>`);
         } else if (event === "start") {
           state.requestId = data.request_id;
-          canvas?.setWaiting(true); // holds until the first token lands
+          livePhase("reading"); // holds until the first token lands
           dismiss(queueCard);
           queueCard = null;
           setContext(data.prompt_tokens);
         } else if (event === "token") {
           // No layout reads here — the tick below batches one read and one
           // write per frame instead of a pair per token.
+          // The release: prefill is over, the model is talking.
           if (!raw) {
-            // The release: prefill is over, the model is talking.
-            canvas?.setWaiting(false);
-            canvas?.pulse(0.4);
-          } else {
-            canvas?.pulse();
+            livePhase("writing");
+            showFigures(data.ttft_ms);
           }
           raw += data.t;
           dirty = true;
@@ -470,13 +617,14 @@ async function send(text) {
           dirty = false;
           prose.finish(raw);
           bot.dataset.raw = raw;
+          // The footer adds height below the last line of the answer. If the
+          // reader was at the bottom they stay there; without this the figures
+          // and the actions land just out of sight.
+          const stick = nearBottom();
           footer(bot, data);
-          els.ttft.textContent = fmtMs(data.ttft_ms);
-          els.out.textContent = fmtInt(data.completion_tokens);
+          if (stick) els.wrap.scrollTop = els.wrap.scrollHeight;
           setContext((data.prompt_tokens || 0) + (data.completion_tokens || 0));
-          if (data.gen_tps) els.tps.textContent = fmt(data.gen_tps, 1);
-          const strip = document.querySelector('[data-strip="ttft"]');
-          if (strip) strip.textContent = Math.round(data.ttft_ms || 0);
+          finishedUnseen = document.hidden;
           announce(
             data.cancelled
               ? "Generation stopped."
@@ -511,6 +659,9 @@ async function send(text) {
     dismiss(queueCard);
     meter.stop();
     setMode(false);
+    resetFigures();
+    // Finished while the tab was in the background: say so until it is seen.
+    if (finishedUnseen) holdPhase("answer ready");
     state.requestId = null;
     if (!raw.trim() && !cardHost.children.length) bot.remove();
     setSkill(null); // a skill applies to one message, not the whole thread
@@ -519,6 +670,16 @@ async function send(text) {
 }
 
 /* -------------------------------------------------------- conversations -- */
+
+/** How long ago, in words short enough for a list row. `ts` is epoch seconds. */
+function ago(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(ts * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
 
 async function refreshList() {
   try {
@@ -533,11 +694,11 @@ async function refreshList() {
           c.id === state.conversationId ? 'aria-current="true"' : ""
         }>
           <span class="t" dir="auto">${escapeHtml(c.title)}</span>
-          <span class="m">${c.n} messages</span>
+          <span class="m">${c.n} ${c.n === 1 ? "message" : "messages"} · ${ago(c.updated_at)}</span>
         </button>
-        <button class="convo-del" type="button" data-del="${c.id}"
+        <button class="icon-btn convo-del" type="button" data-del="${c.id}"
                 aria-label="Delete conversation: ${escapeHtml(c.title)}">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </li>`
         )
@@ -577,7 +738,6 @@ async function loadConversation(cid) {
     state.conversationId = cid;
     state.persona = convo.persona || state.persona;
     paintPersonas();
-    hideHero();
     els.thread.innerHTML = "";
 
     let ctx = 0;
@@ -590,18 +750,18 @@ async function loadConversation(cid) {
         // Replay stored tool cards, so reloading a conversation is not lossy.
         const cardHost = bot.querySelector(".cards");
         (m.tool_calls || []).forEach((call, i) => {
-          if (call.ok && call.card) mountCard(cardHost, call.card, call.data, i);
-          else mountCard(cardHost, "error", { message: call.summary }, i);
+          const meta = { label: TOOL_LABELS[call.tool] || call.tool, ms: call.ms };
+          if (call.ok && call.card) mountCard(cardHost, call.card, call.data, i, meta);
+          else mountCard(cardHost, "error", { message: call.summary }, i, meta);
         });
         bot.querySelector(".prose").innerHTML = renderMarkdown(m.content);
-        if (m.gen_tps != null || m.ttft_ms != null) {
-          footer(bot, { ...m, tool_calls: (m.tool_calls || []).length });
-        }
+        if (m.gen_tps != null || m.ttft_ms != null) footer(bot, m);
         ctx = (m.prompt_tokens || 0) + (m.completion_tokens || 0) || ctx;
       }
     }
     setContext(ctx);
     setRail(false);
+    setView("thread");
     els.wrap.scrollTop = els.wrap.scrollHeight;
     refreshList();
   } catch (err) {
@@ -613,33 +773,24 @@ function newChat() {
   if (state.streaming) return;
   state.conversationId = null;
   els.thread.innerHTML = "";
-  if (els.hero) els.hero.hidden = false;
+  setView("empty");
   setSkill(null);
   setContext(0);
-  els.tps.dataset.empty = "true";
-  els.tps.textContent = "—";
-  els.ttft.textContent = "—";
-  els.out.textContent = "—";
-  els.sparkLine.setAttribute("d", "");
-  els.sparkFill.setAttribute("d", "");
   setRail(false);
   refreshList();
   els.input.focus();
 }
 $("#new-chat").addEventListener("click", newChat);
+// Fetched as the drawer opens, so the times are current and a conversation
+// started in another tab is listed.
+$("#menu-btn").addEventListener("click", refreshList);
 
 /* ------------------------------------------------------------- startup -- */
 
 onHealth((info) => {
   const ready = info.status === "ready";
   els.send.disabled = !ready;
-  if (!state.skill) {
-    els.input.placeholder = ready
-      ? `Ask ${info.model} something…  (press / for tools)`
-      : info.status === "error"
-      ? "The model could not be loaded — nothing can be sent right now"
-      : "The model is still loading…";
-  }
+  if (!state.skill) els.input.placeholder = placeholderFor(info);
 });
 
 setContext(0);

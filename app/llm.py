@@ -381,11 +381,16 @@ class Engine:
                 for text in self._iter_chunks(messages, sampling):
                     if cancel_ev.is_set():
                         break
+                    payload = {"t": text}
                     if t_first is None:
                         t_first = time.perf_counter()
+                        # The same figure "done" reports, sent as soon as it is
+                        # known, so the page can show it while the answer is
+                        # still being written instead of after it has ended.
+                        payload["ttft_ms"] = round((t_first - t_start) * 1000, 1)
                     produced += 1
                     pieces.append(text)
-                    emit(("token", {"t": text}))
+                    emit(("token", payload))
 
                 now = time.perf_counter()
                 ttft_ms = round(((t_first or now) - t_start) * 1000, 1)

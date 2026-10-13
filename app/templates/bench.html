@@ -2,19 +2,6 @@
 {% block title %}Benchmark — {{ info.model }}{% endblock %}
 {% block styles %}<link rel="stylesheet" href="/static/css/bench.css?v={{ version }}">{% endblock %}
 
-{% block rail %}
-<div class="rail-scroll">
-  <div class="rail-label">On this page</div>
-  <a class="convo" href="#measured"><span class="t">Measured on this box</span></a>
-  <a class="convo" href="#throughput"><span class="t">Throughput by prompt size</span></a>
-  <a class="convo" href="#latency"><span class="t">Time to first token</span></a>
-  <a class="convo" href="#context"><span class="t">Against other hardware</span></a>
-  <a class="convo" href="#memory"><span class="t">Memory budget</span></a>
-  <a class="convo" href="#history"><span class="t">History</span></a>
-  <a class="convo" href="#why"><span class="t">Why it is this fast</span></a>
-</div>
-{% endblock %}
-
 {% block main %}
 <div class="page">
   <div class="wrap">
@@ -26,15 +13,19 @@
         page uses — same lock, same sampling, same context window — and reports
         what came back. Nothing here is quoted from a spec sheet.
       </p>
+      <nav class="toc" aria-label="On this page">
+        <a href="#measured">Measured on this box</a>
+        <a href="#throughput">Throughput by prompt size</a>
+        <a href="#latency">Time to first token</a>
+        <a href="#context">Against other hardware</a>
+        <a href="#memory">Memory budget</a>
+        <a href="#history">History</a>
+        <a href="#why">Why it is this fast</a>
+      </nav>
     </header>
 
-    <section class="panel runbar" id="measured">
-      <div>
-        <button class="btn btn-primary" id="run-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          Run the benchmark
-        </button>
-      </div>
+    <section class="runbar" id="measured">
+      <button class="btn btn-primary" id="run-btn">Run the benchmark</button>
       <div class="grow">
         <div class="progress"><i id="progress"></i></div>
         <div class="run-status" id="run-status">
@@ -46,28 +37,29 @@
     <section class="section">
       <h2>Headline</h2>
       <p class="sub">Median across every case in the most recent suite.</p>
-      <div class="tiles" id="tiles">
-        <div class="tile">
-          <div class="k">Generation</div>
-          <div class="v num" id="t-gen">—</div>
-          <div class="n">tokens per second</div>
-        </div>
-        <div class="tile">
-          <div class="k">Prefill</div>
-          <div class="v num" id="t-prefill">—</div>
-          <div class="n">prompt tokens per second</div>
-        </div>
-        <div class="tile">
-          <div class="k">First token</div>
-          <div class="v num" id="t-ttft">—</div>
-          <div class="n">short prompt, p50</div>
-        </div>
-        <div class="tile">
-          <div class="k">Peak memory</div>
-          <div class="v num" id="t-rss">—</div>
-          <div class="n">resident, whole process</div>
-        </div>
-      </div>
+      {# A row that was not measured is left out rather than printed as a
+         dash; bench.js shows the list once there is a run to report. #}
+      <dl class="facts lead" id="tiles" hidden>
+        <div id="row-gen"><dt>Generation</dt><dd><span class="num" id="t-gen"></span> tokens per second</dd></div>
+        <div id="row-prefill"><dt>Prefill</dt><dd><span class="num" id="t-prefill"></span> prompt tokens per second</dd></div>
+        <div id="row-ttft"><dt>First token</dt><dd><span class="num" id="t-ttft"></span> short prompt, p50</dd></div>
+        <div id="row-rss"><dt>Peak memory</dt><dd><span class="num" id="t-rss"></span> resident, whole process</dd></div>
+      </dl>
+      <div class="empty" id="tiles-empty">Run the suite to fill this in.</div>
+    </section>
+
+    <section class="section" id="suite">
+      <h2>Suite</h2>
+      <dl class="facts">
+        {% for c in cases %}
+        <div><dt>{{ c.label }}</dt><dd class="num">~{{ c.target }} tok × {{ c.reps }}</dd></div>
+        {% endfor %}
+        <div><dt>Generated</dt><dd><span class="num">128 tok</span> each</dd></div>
+        <div><dt>Warm-up</dt><dd>discarded</dd></div>
+        <div><dt>Context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
+        <div><dt>Threads</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
+        <div><dt>n_batch</dt><dd class="num">{{ info.n_batch }}</dd></div>
+      </dl>
     </section>
 
     <section class="section" id="throughput">
@@ -86,7 +78,7 @@
       <h2>Time to first token</h2>
       <p class="sub">
         Prefill is compute-bound and batches, so a 1024-token prompt costs far
-        less than 32× a 32-token one. The lighter bar is the p95.
+        less than 32× a 32-token one. The fainter bar is the p95.
       </p>
       <div class="panel">
         <div class="chart" id="chart-ttft"><div class="empty">Run the suite to fill this in.</div></div>
@@ -97,7 +89,7 @@
       <h2>Against other hardware</h2>
       <p class="sub">Same model, same quantisation, different machines.</p>
       <div class="caveat">
-        <span aria-hidden="true">⚠</span>
+        <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><path d="M10.3 4.3 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/></svg>
         <span>
           Every row except this server is an order-of-magnitude range collected
           from published llama.cpp figures, not a measurement taken here. Real
@@ -107,7 +99,7 @@
       </div>
       <div class="panel">
         <div class="chart" id="chart-ref"></div>
-        <div class="axis"><span>0</span><span>tokens per second</span><span id="ref-max">70</span></div>
+        <div class="axis"><span class="num">0</span><span>tokens per second</span><span class="num" id="ref-max">70</span></div>
       </div>
     </section>
 
@@ -132,7 +124,7 @@
           </span>
           {% endfor %}
         </div>
-        <p class="explain" style="margin-top:16px">
+        <p class="explain after-chart">
           <b class="num">{{ (total / 1024) | round(2) }} GB</b> peak of the 4 GB on this
           machine. A 7B model at the same quantisation is roughly 4.4 GB of weights
           alone — it would not load, and if it did, every token would come off disk.
@@ -145,14 +137,7 @@
       <p class="sub">Every benchmark run this server has recorded, oldest first.</p>
       <div class="panel">
         <svg class="linechart" id="history-chart" viewBox="0 0 720 190"
-             role="img" aria-label="Generation speed across past benchmark runs">
-          <defs>
-            <linearGradient id="histfill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>
-              <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
-            </linearGradient>
-          </defs>
-        </svg>
+             role="img" aria-label="Generation speed across past benchmark runs"></svg>
         <div class="empty" id="history-empty">No benchmark runs recorded yet.</div>
       </div>
     </section>
@@ -209,38 +194,6 @@
 
   </div>
 </div>
-{% endblock %}
-
-{% block hud %}
-<aside class="hud" aria-label="Environment">
-  <h2>Environment</h2>
-  <div class="hud-card" id="boot-panel">
-    <div class="boot-line"><span>model</span><b>{{ info.model }}</b></div>
-    <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
-    <div class="boot-line"><span>context</span><b class="num">{{ info.n_ctx }}</b></div>
-    <div class="boot-line"><span>threads</span><b class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</b></div>
-    <div class="boot-line"><span>n_batch</span><b class="num">{{ info.n_batch }}</b></div>
-    <div class="boot-line"><span>memory</span><b class="num" id="b-rss">—</b></div>
-    <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
-  </div>
-
-  <h2>Suite</h2>
-  <div class="hud-card">
-    {% for c in cases %}
-    <div class="boot-line">
-      <span>{{ c.label|lower }}</span>
-      <b class="num">~{{ c.target }} tok × {{ c.reps }}</b>
-    </div>
-    {% endfor %}
-    <div class="boot-line"><span>generated</span><b class="num">128 tok each</b></div>
-    <div class="boot-line"><span>warm-up</span><b>discarded</b></div>
-  </div>
-
-  <a class="btn" href="/" style="justify-content:space-between">
-    Back to chat
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H6M12 5l-7 7 7 7"/></svg>
-  </a>
-</aside>
 {% endblock %}
 
 {% block scripts %}

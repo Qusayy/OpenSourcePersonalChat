@@ -25,16 +25,29 @@ const els = {
   table: $("#case-table").querySelector("tbody"),
 };
 
-let latest = null;
-
 /* ------------------------------------------------------------- rendering */
 
 function tiles(s) {
-  $("#t-gen").textContent = s ? fmt(s.gen_tps, 1) : "—";
-  $("#t-prefill").textContent = s ? fmt(s.prefill_tps, 0) : "—";
   const short = s?.cases?.find((c) => c.id === "short") || s?.cases?.[0];
-  $("#t-ttft").textContent = short ? fmtMs(short.ttft_p50) : "—";
-  $("#t-rss").textContent = s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : "—";
+  const has = (v) => v !== null && v !== undefined && !Number.isNaN(v);
+  const rows = {
+    gen: has(s?.gen_tps) ? fmt(s.gen_tps, 1) : null,
+    prefill: has(s?.prefill_tps) ? fmt(s.prefill_tps, 0) : null,
+    ttft: has(short?.ttft_p50) ? fmtMs(short.ttft_p50) : null,
+    rss: s?.rss_mb ? `${fmtInt(s.rss_mb)} MB` : null,
+  };
+  // A figure that was not measured is left out, not printed as a dash: an
+  // empty row under "Headline" reads as a result of nothing.
+  let any = false;
+  for (const [key, value] of Object.entries(rows)) {
+    $(`#row-${key}`).hidden = value === null;
+    if (value !== null) {
+      $(`#t-${key}`).textContent = value;
+      any = true;
+    }
+  }
+  $("#tiles").hidden = !any;
+  $("#tiles-empty").hidden = any;
 }
 
 function barChart(host, rows, { max, unit, digits = 1, alt = false }) {
@@ -102,24 +115,28 @@ function referenceChart(measured) {
     .join("");
 }
 
+// Kept so the chart can be redrawn at a new width without refetching.
+let historyRuns = [];
+
 function historyChart(runs) {
+  historyRuns = runs;
   const pts = runs
     .filter((r) => r.gen_tps)
     .slice()
     .reverse()
     .slice(-60);
 
-  if (pts.length < 2) {
-    els.history.style.display = "none";
-    els.historyEmpty.hidden = false;
-    return;
-  }
-  els.history.style.display = "block";
-  els.historyEmpty.hidden = true;
+  const none = pts.length < 2;
+  els.history.toggleAttribute("hidden", none);
+  els.historyEmpty.hidden = !none;
+  if (none) return;
 
-  const W = 720;
+  // Drawn in real pixels. A fixed 720-unit viewBox stretched to the column
+  // scaled its labels with it: 10px on a desktop became 5px on a phone.
+  const W = Math.max(280, Math.round(els.history.clientWidth));
   const H = 190;
-  const pad = { l: 42, r: 16, t: 14, b: 26 };
+  els.history.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const pad = { l: 42, r: 16, t: 14, b: 28 };
   const max = Math.max(...pts.map((p) => p.gen_tps)) * 1.15;
   const x = (i) => pad.l + (i * (W - pad.l - pad.r)) / (pts.length - 1);
   const y = (v) => H - pad.b - (v / max) * (H - pad.t - pad.b);
@@ -140,23 +157,29 @@ function historyChart(runs) {
   pts.forEach((p, i) => {
     const when = new Date(p.created_at * 1000).toLocaleString();
     svg +=
-      `<circle class="pt" cx="${x(i).toFixed(1)}" cy="${y(p.gen_tps).toFixed(1)}" r="3">` +
+      `<circle class="pt" cx="${x(i).toFixed(1)}" cy="${y(p.gen_tps).toFixed(1)}" r="4">` +
       `<title>${escapeHtml(p.label || "run")} — ${fmt(p.gen_tps, 2)} tok/s · ${escapeHtml(when)}</title></circle>`;
   });
 
   // Direct-label the newest point only; a number on every point is noise.
   const last = pts[pts.length - 1];
   svg +=
-    `<text class="lbl" x="${(x(pts.length - 1) - 6).toFixed(1)}" y="${(y(last.gen_tps) - 9).toFixed(1)}" ` +
-    `text-anchor="end" style="fill:var(--ink-1)">${fmt(last.gen_tps, 1)} tok/s</text>`;
+    `<text class="lbl strong" x="${(x(pts.length - 1) - 6).toFixed(1)}" y="${(y(last.gen_tps) - 10).toFixed(1)}" ` +
+    `text-anchor="end">${fmt(last.gen_tps, 1)} tok/s</text>`;
   svg += `<text class="lbl" x="${pad.l}" y="${H - 6}">oldest</text>`;
   svg += `<text class="lbl" x="${W - pad.r}" y="${H - 6}" text-anchor="end">newest</text>`;
 
-  els.history.innerHTML =
-    `<defs><linearGradient id="histfill" x1="0" y1="0" x2="0" y2="1">` +
-    `<stop offset="0" stop-color="#6366f1" stop-opacity=".26"/>` +
-    `<stop offset="1" stop-color="#6366f1" stop-opacity="0"/></linearGradient></defs>` +
-    svg;
+  els.history.innerHTML = svg;
+}
+
+if ("ResizeObserver" in window) {
+  let lastWidth = 0;
+  new ResizeObserver(() => {
+    const w = Math.round(els.history.clientWidth);
+    if (!w || w === lastWidth) return;
+    lastWidth = w;
+    historyChart(historyRuns);
+  }).observe(els.history.parentElement);
 }
 
 function caseTable(summary) {
@@ -179,7 +202,6 @@ function caseTable(summary) {
 }
 
 function paint(summary, runs) {
-  latest = summary;
   tiles(summary);
   caseTable(summary);
   referenceChart(summary?.gen_tps);
@@ -235,7 +257,6 @@ els.run.addEventListener("click", async () => {
   els.progress.style.transform = "scaleX(0)";
   els.status.textContent = "Starting…";
 
-  const live = [];
   try {
     await sseFetch("/api/bench/run", {
       onEvent: (event, data) => {
@@ -243,7 +264,6 @@ els.run.addEventListener("click", async () => {
           els.status.textContent = data.text;
           if (data.pct != null) els.progress.style.transform = `scaleX(${data.pct / 100})`;
         } else if (event === "rep") {
-          live.push(data);
           els.progress.style.transform = `scaleX(${data.pct / 100})`;
           els.status.textContent = `${data.case} run ${data.rep}: ${fmt(
             data.gen_tps,

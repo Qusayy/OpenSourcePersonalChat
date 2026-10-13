@@ -3,70 +3,98 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f8fbf9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c110d" media="(prefers-color-scheme: dark)">
 <meta name="description" content="{{ info.params }} {{ info.model }} running locally on a {{ info.hardware }} — with the numbers on screen.">
 <title>{% block title %}Aurora{% endblock %}</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='.55' stop-color='%23a855f7'/%3E%3Cstop offset='1' stop-color='%2322d3ee'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M16 7l2.4 5.4L24 15l-5.6 2.6L16 23l-2.4-5.4L8 15l5.6-2.6z' fill='%23fff'/%3E%3C/svg%3E">
+{# The mark is the status line itself: a dot and a rule along the bottom edge. #}
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161d17'/%3E%3Ccircle cx='8.5' cy='22.5' r='3' fill='%2349de78'/%3E%3Crect x='14' y='21' width='12' height='3' rx='1.5' fill='%23f8fbf9'/%3E%3C/svg%3E">
+<link rel="preload" href="/static/fonts/Recursive_VF_1.085--subset-GF_latin_basic.woff2" as="font" type="font/woff2" crossorigin>
+{# One URL per module. Without this map the page loads app.js?v=… while every
+   other module imports ./app.js — two URLs, so two instances of the same
+   module, two health loops, and two click handlers on the same button. It also
+   carries the version to relative imports, which a ?v= on the entry script
+   alone never reached. #}
+<script type="importmap">
+{
+  "imports": {
+    {%- for m in ["app", "chat", "skills", "cards", "metrics", "motion", "stream", "md", "icons", "bench"] %}
+    "/static/js/{{ m }}.js": "/static/js/{{ m }}.js?v={{ version }}"{{ "," if not loop.last }}
+    {%- endfor %}
+  }
+}
+</script>
 <link rel="stylesheet" href="/static/css/tokens.css?v={{ version }}">
 <link rel="stylesheet" href="/static/css/aurora.css?v={{ version }}">
 {% block styles %}{% endblock %}
 </head>
 <body>
+<!--
+THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
+OWN-WORLD: Near-white sheet tinted green-grey, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
+STORY: A stranger sees a small model on a cheap server being straight about what each answer costs, asks one thing, and watches the line tick.
+FIRST VIEWPORT: Left-aligned 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath, the status line across the bottom edge.
+FORM: Status Line, position 4 on the ordered grounded list; seed aa84745b.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
 <a class="skip-link" href="#main">Skip to content</a>
-<canvas id="gl" class="gl" aria-hidden="true"></canvas>
-<div class="aurora" aria-hidden="true"></div>
-<div class="aurora-alt" aria-hidden="true"></div>
-<div class="veil" aria-hidden="true"></div>
-<div class="grain" aria-hidden="true"></div>
 
-<div class="shell">
-  <aside class="rail" id="rail" aria-label="Conversations">
-    <a class="brand" href="/">
-      <span class="mark" aria-hidden="true">✦</span>
-      <span>
-        <span class="name">Aurora</span>
-        <span class="sub">local inference</span>
+<header class="topbar">
+  <a class="wordmark" href="/">Aurora</a>
+  <nav class="nav" aria-label="Primary">
+    <a href="/" {% if page == 'chat' %}aria-current="page"{% endif %}>Chat</a>
+    <a href="/bench" {% if page == 'bench' %}aria-current="page"{% endif %}>Benchmark</a>
+    <a href="/about" {% if page == 'about' %}aria-current="page"{% endif %}>About</a>
+  </nav>
+  <span class="spacer"></span>
+  {% block actions %}{% endblock %}
+</header>
+
+{% block drawer %}{% endblock %}
+
+<main class="center" id="main" tabindex="-1" {% block main_attrs %}{% endblock %}>
+  {% block main %}{% endblock %}
+</main>
+
+{# The status line. What the machine is and what state it is in are always
+   here, and only here. What a request is costing joins them while the request
+   is in flight; once it has finished, that is printed under the answer it
+   belongs to and leaves this line. The words for each state live in app.js as
+   well, which repaints them on every poll. #}
+{% set state_words = {'cold': 'starting', 'loading': 'loading', 'ready': 'ready', 'error': 'model unavailable'} %}
+<footer class="status" id="status" data-phase="{{ info.status }}" aria-label="Server status">
+  <div class="status-id">
+    <span class="st-state">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="st-word" id="b-state">{{ state_words.get(info.status, info.status) }}</span>
+    </span>
+    <span class="st-seg">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
+    <span class="st-seg">{{ info.hardware }}, <span class="num">{{ info.n_threads }}</span> threads</span>
+    {# Says the answers are canned, so it is never hidden with the rest. #}
+    <span class="st-tag" id="b-mock" {% if not info.mock %}hidden{% endif %}>mock</span>
+  </div>
+  <div class="status-figs" id="status-figs">
+    {% if page == 'chat' %}
+    <span class="st-fig st-wait" id="st-wait" hidden><span id="st-wait-lead"></span><b class="num" id="st-wait-s"></b></span>
+    <span class="st-fig st-tps" hidden>
+      <b class="num" id="tps-value">—</b> tok/s
+      <span class="spark-wrap" aria-hidden="true">
+        <svg class="spark" viewBox="0 0 120 38" preserveAspectRatio="none"><path id="spark-line" d=""></path></svg>
+        <i class="spark-dot" id="spark-dot" hidden></i>
       </span>
-    </a>
-    {% block rail %}{% endblock %}
-    <div class="rail-foot">
-      <a class="btn btn-ghost" href="/about" style="flex:1">About</a>
-      <a class="btn btn-ghost" href="/bench" style="flex:1">Benchmark</a>
-    </div>
-  </aside>
-  <div class="rail-scrim" id="rail-scrim" hidden></div>
-
-  <main class="center" id="main" tabindex="-1">
-    <header class="topbar">
-      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open conversations">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-      </button>
-      <span class="model-chip">
-        <span class="dot {{ info.status }}" id="status-dot" title="{{ info.status }}"></span>
-        <span>{{ info.model }}</span>
-        <span class="chip-meta mono">{{ info.params }} · {{ info.quant }}</span>
-      </span>
-      <span class="chip-meta mono" id="hw-label">{{ info.hardware }}</span>
-      <span class="spacer"></span>
-      <nav class="navlinks" aria-label="Primary">
-        <a href="/" {% if page == 'chat' %}aria-current="page"{% endif %}>Chat</a>
-        <a href="/bench" {% if page == 'bench' %}aria-current="page"{% endif %}>Benchmark</a>
-        <a href="/about" {% if page == 'about' %}aria-current="page"{% endif %}>About</a>
-      </nav>
-    </header>
-
-    <div class="hud-strip" id="hud-strip" role="group" aria-label="Live metrics">
-      <span><b class="num" data-strip="tps">—</b> tok/s</span>
-      <span><b class="num" data-strip="ttft">—</b> ms to first token</span>
-      <span><b class="num" data-strip="ctx">0</b> / {{ info.n_ctx }} ctx</span>
-      <span><b class="num" data-strip="rss">—</b> MB rss</span>
-    </div>
-
-    {% block main %}{% endblock %}
-  </main>
-
-  {% block hud %}{% endblock %}
-</div>
+    </span>
+    <span class="st-fig st-out" hidden><b class="num" id="out-value">—</b> tokens</span>
+    <span class="st-fig st-ttft" hidden>first token <b class="num" id="ttft-value">—</b></span>
+    <span class="st-fig st-ctx">
+      <b class="num" id="ctx-value">0</b> / <span class="num">{{ "{:,}".format(info.n_ctx) }}</span> ctx
+      <span class="ctx-bar" aria-hidden="true"><i id="ctx-fill"></i></span>
+    </span>
+    {% endif %}
+    <span class="st-fig st-rss" id="st-rss" {% if not info.rss_mb %}hidden{% endif %}>memory <b class="num" id="b-rss">{% if info.rss_mb %}{{ info.rss_mb }} MB{% endif %}</b></span>
+  </div>
+  <button class="status-more" id="status-more" type="button" aria-expanded="false" aria-controls="status-figs">Details</button>
+</footer>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 

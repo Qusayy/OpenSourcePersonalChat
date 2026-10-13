@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import threading
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
@@ -43,6 +44,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Aurora", lifespan=lifespan, docs_url=None, redoc_url=None)
+# Python's table has no entry for woff2 before 3.13 (and none at all on some
+# Windows installs), so StaticFiles would send the typeface as octet-stream.
+mimetypes.add_type("font/woff2", ".woff2")
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 

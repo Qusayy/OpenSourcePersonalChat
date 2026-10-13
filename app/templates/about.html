@@ -2,16 +2,6 @@
 {% block title %}About — Aurora{% endblock %}
 {% block styles %}<link rel="stylesheet" href="/static/css/bench.css?v={{ version }}">{% endblock %}
 
-{% block rail %}
-<div class="rail-scroll">
-  <div class="rail-label">On this page</div>
-  <a class="convo" href="#stack"><span class="t">The stack</span></a>
-  <a class="convo" href="#queue"><span class="t">One request at a time</span></a>
-  <a class="convo" href="#template"><span class="t">Getting the prompt right</span></a>
-  <a class="convo" href="#limits"><span class="t">What it cannot do</span></a>
-</div>
-{% endblock %}
-
 {% block main %}
 <div class="page">
   <div class="wrap">
@@ -22,7 +12,23 @@
         {{ info.quant }} on a {{ info.hardware }}, answering in the open with its
         own speed printed under every reply.
       </p>
+      <nav class="toc" aria-label="On this page">
+        <a href="#stack">The stack</a>
+        <a href="#queue">One request at a time</a>
+        <a href="#template">Getting the prompt right</a>
+        <a href="#limits">What it cannot do</a>
+      </nav>
     </header>
+
+    <section class="section">
+      <h2>Server</h2>
+      <dl class="facts">
+        <div><dt>Params</dt><dd class="num">{{ info.params }}</dd></div>
+        <div><dt>Context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
+        <div><dt>Threads</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
+        {% if info.load_ms %}<div><dt>Load time</dt><dd class="num">{{ info.load_ms }} ms</dd></div>{% endif %}
+      </dl>
+    </section>
 
     <section class="section" id="stack">
       <h2>The stack</h2>
@@ -34,7 +40,8 @@
           over Server-Sent Events. <b>SQLite</b> in WAL mode stores conversations
           and every recorded run. The front-end is hand-written CSS and ES
           modules with <b>no build step and no third-party JavaScript</b> — the
-          markdown renderer included.
+          markdown renderer included. The one thing it borrows is its typeface,
+          Recursive, served from this machine under the SIL Open Font License.
         </p>
         <p>
           Generation happens on a worker thread and tokens cross back to the
@@ -102,10 +109,10 @@
           </span>
           {% endfor %}
         </div>
-        <p class="explain" style="margin-top:14px">
+        <p class="explain after-chart">
           About <b class="num">{{ (total / 1024) | round(2) }} GB</b> resident, leaving
           room for nginx, the OS and a little headroom.
-          <a href="/bench">See the measured numbers →</a>
+          <a href="/bench">See the measured numbers</a>
         </p>
       </div>
     </section>
@@ -130,24 +137,4 @@
     </section>
   </div>
 </div>
-{% endblock %}
-
-{% block hud %}
-<aside class="hud" aria-label="Server">
-  <h2>Server</h2>
-  <div class="hud-card">
-    <div class="boot-line"><span>model</span><b>{{ info.model }}</b></div>
-    <div class="boot-line"><span>params</span><b class="num">{{ info.params }}</b></div>
-    <div class="boot-line"><span>quant</span><b>{{ info.quant }}</b></div>
-    <div class="boot-line"><span>context</span><b class="num">{{ info.n_ctx }}</b></div>
-    <div class="boot-line"><span>threads</span><b class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</b></div>
-    <div class="boot-line"><span>load time</span><b class="num">{{ info.load_ms or '—' }} ms</b></div>
-    <div class="boot-line"><span>memory</span><b class="num" id="b-rss">—</b></div>
-    <div class="boot-line"><span>state</span><b id="b-state">{{ info.status }}</b></div>
-  </div>
-  <a class="btn" href="/" style="justify-content:space-between">
-    Back to chat
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H6M12 5l-7 7 7 7"/></svg>
-  </a>
-</aside>
 {% endblock %}

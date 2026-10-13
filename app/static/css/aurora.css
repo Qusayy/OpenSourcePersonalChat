@@ -1,214 +1,20 @@
 /* ============================================================================
-   Aurora shell: background, layout, and the shared glass component set.
+   Aurora shell: the frame every page shares.
 
-   Performance notes (this box serves people on modest laptops and phones):
-   * The aurora is two fixed layers of soft radial-gradients. No filter:blur()
-     at all — a radial gradient's own falloff is already soft, and skipping the
-     filter removes the single most expensive thing a background like this
-     normally does.
-   * Both layers animate with transform only, so they composite and never
-     repaint. ~50s cycles keep motion ambient rather than distracting.
-   * backdrop-filter is used on exactly three persistent surfaces (rail,
-     header, composer). Message cards use a translucent fill instead — visually
-     near-identical, dramatically cheaper when hundreds of them scroll.
+   Three rows and nothing beside them — a top bar, the sheet, and the status
+   line. There is no sidebar and no metrics column: history opens on demand,
+   and every fact about the machine lives once, in the status line.
+
+   One left edge (--pad) is shared by the wordmark, the reading column and
+   the composer. The status line is the exception: it runs the full width of
+   the window, --edge in from each side, because what the machine is and what
+   a request is costing do not fit one row from the column's edge, and the
+   same line on every page should start in the same place.
    ========================================================================= */
 
-/* The WebGL canvas. When the shader starts it sets data-canvas="on" and the
-   CSS gradient layers below get out of the way — they are the fallback, not a
-   second layer to composite over. */
-.gl {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: -3;
-  display: none;
-  pointer-events: none;
-}
-:root[data-canvas="on"] .gl {
-  display: block;
-}
-:root[data-canvas="on"] .aurora,
-:root[data-canvas="on"] .aurora-alt {
-  display: none;
-}
-:root[data-canvas="on"] .veil {
-  /* The shader already carries its own vignette; a second one buries it. */
-  background: radial-gradient(
-    140% 100% at 50% 0%,
-    rgba(6, 7, 15, 0.05),
-    rgba(6, 7, 15, 0.5) 80%
-  );
-}
-
-.aurora,
-.aurora-alt {
-  position: fixed;
-  inset: -35%;
-  z-index: -2;
-  pointer-events: none;
-}
-
-/* Two full-viewport compositor layers are not free. Promote them only while
-   they are the background actually in use — with the shader running these are
-   display:none, and the hint would reserve memory for nothing. */
-:root:not([data-canvas="on"]) .aurora,
-:root:not([data-canvas="on"]) .aurora-alt {
-  will-change: transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .aurora,
-  .aurora-alt {
-    will-change: auto;
-  }
-}
-
-/* Positions are in the layer's own coordinates, and the layer is inset -35%
-   (so it spans -35%..135% of the viewport and has room to drift without
-   exposing an edge). A position p in the layer lands at (p * 1.7 - 35)% of the
-   viewport — which is why these cluster around 35–65% rather than the corners.
-   Getting that mapping wrong is what makes an aurora background look flat. */
-.aurora {
-  background-image:
-    radial-gradient(34% 30% at 35% 38%, rgba(99, 102, 241, 0.85), transparent 66%),
-    radial-gradient(30% 26% at 65% 32%, rgba(168, 85, 247, 0.62), transparent 64%),
-    radial-gradient(36% 32% at 53% 66%, rgba(34, 211, 238, 0.42), transparent 68%);
-  animation: drift-a 54s var(--ease-in-out) infinite;
-}
-
-.aurora-alt {
-  background-image:
-    radial-gradient(26% 24% at 30% 70%, rgba(244, 114, 182, 0.38), transparent 66%),
-    radial-gradient(30% 26% at 72% 58%, rgba(99, 102, 241, 0.45), transparent 68%);
-  animation: drift-b 78s var(--ease-in-out) infinite;
-  opacity: 0.9;
-}
-
-@keyframes drift-a {
-  0%   { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-  33%  { transform: translate3d(3%, -2.5%, 0) rotate(4deg) scale(1.07); }
-  66%  { transform: translate3d(-2.5%, 2%, 0) rotate(-3deg) scale(1.03); }
-  100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-}
-@keyframes drift-b {
-  0%   { transform: translate3d(0, 0, 0) scale(1.05); }
-  50%  { transform: translate3d(-4%, -3%, 0) scale(1.12); }
-  100% { transform: translate3d(0, 0, 0) scale(1.05); }
-}
-
-/* A single vignette layer keeps text contrast honest wherever a bright blob
-   drifts. One layer, not two: stacked veils composite to ~0.9 alpha and erase
-   the aurora entirely. 0.28 at the top still holds --ink-1 above 6:1 over the
-   brightest point of a blob. */
-.veil {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background: radial-gradient(
-    130% 92% at 50% -2%,
-    rgba(6, 7, 15, 0.22),
-    rgba(6, 7, 15, 0.74) 78%
-  );
-}
-
-/* Film grain: an inline SVG turbulence, rasterised once. Kills the banding
-   that large gradients show on 8-bit displays. */
-.grain {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-/* Reduced motion is not "no motion".
- *
- * The old blanket `* { animation-duration: 0.001ms }` also flattened every
- * transition, so hover, focus, disabled and loading states all changed with a
- * hard cut and the interface stopped acknowledging input. What actually needs
- * removing is looping decoration and travel across the screen; colour and
- * opacity still carry meaning and stay. */
-@media (prefers-reduced-motion: reduce) {
-  /* 1. Stop the ambient loops. `!important` because this block cannot win on
-        source order — chat.css and cards.css load after it, and .dot.ready is
-        defined further down this very file. A targeted override, not a
-        blanket one. */
-  .aurora,
-  .aurora-alt,
-  .dot.ready,
-  .dot.loading,
-  .tl-step[data-status="running"] .g,
-  .msg-foot .act,
-  .mono-badge {
-    animation: none !important;
-  }
-
-  /* 2. The spinner becomes a static mark rather than disappearing: it still
-        says "working", it just stops turning. */
-  .notice .spin {
-    animation: none !important;
-    border-top-color: currentColor;
-    opacity: 0.7;
-  }
-
-  /* 3. The caret stops blinking but stays visible, so the writing position is
-        still obvious. */
-  .caret {
-    animation: none !important;
-  }
-
-  /* 4. No travel: entrances resolve in place, and press/hover offsets go. */
-  /* Anything whose entrance animation is cancelled here must be forced
-     visible: several of these start at opacity 0 and rely on that animation
-     to appear at all. Removing the motion must never remove the content. */
-  .toast,
-  .skill,
-  .msg,
-  .tl-step,
-  .card-tool,
-  .boot-line,
-  .hero {
-    animation: none !important;
-    transform: none !important;
-    opacity: 1 !important;
-  }
-  .btn:active,
-  .send:active,
-  .skill:hover {
-    transform: none !important;
-  }
-
-  /* 5. Everything else keeps its transition — shortened, not removed, so
-        feedback is immediate but still legible as a change. */
-  *,
-  *::before,
-  *::after {
-    transition-duration: 120ms !important;
-    animation-iteration-count: 1 !important;
-  }
-}
-
-/* The staged reveal used by messages, suggestion chips and the HUD boot lines.
-   It lives here, not in chat.css: elements that start at opacity 0 and animate
-   in are on every page, and a missing @keyframes leaves them invisible. */
-@keyframes rise {
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* ------------------------------------------------------------------ shell */
-
-.shell {
-  position: relative;
-  z-index: 1;
+body {
   display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--hud-w);
+  grid-template-rows: var(--bar-h) minmax(0, 1fr) auto;
   height: 100dvh;
 }
 
@@ -218,355 +24,12 @@
   min-width: 0;
   min-height: 0;
 }
-
-/* -------------------------------------------------------------------- rail */
-
-.rail {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  /* viewport-fit=cover means the page runs under the notch and the home
-     indicator; these reclaim it without adding padding on hardware that has
-     no inset. */
-  padding: 16px 12px max(16px, env(safe-area-inset-bottom));
-  padding-left: max(12px, env(safe-area-inset-left));
-  gap: 14px;
-  background: linear-gradient(180deg, rgba(11, 13, 26, 0.72), rgba(6, 7, 15, 0.62));
-  backdrop-filter: blur(var(--blur));
-  -webkit-backdrop-filter: blur(var(--blur));
-  border-right: 1px solid var(--glass-brd);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px 0;
-  text-decoration: none;
-}
-
-.brand .mark {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: linear-gradient(140deg, var(--aur-indigo), var(--aur-violet) 55%, var(--aur-cyan));
-  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
-  font-size: 15px;
-  color: #fff;
-}
-
-.brand .name {
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.brand .sub {
-  display: block;
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.rail-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  margin: 0 -4px;
-  padding: 0 4px;
-}
-
-.rail-label {
-  font-size: var(--t-xs);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  padding: 2px 8px 8px;
-}
-
-.convo-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.convo-empty {
-  padding: 6px 10px;
-  font-size: var(--t-sm);
-}
-
-/* Two sibling buttons, not one nested inside the other: a control inside a
-   control is invalid and leaves the inner one unreachable by keyboard. */
-.convo {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: 100%;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--ink-1);
-  border-radius: var(--r-md);
-  text-decoration: none;
-  transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
-}
-.convo:hover {
-  background: var(--glass);
-  border-color: var(--glass-brd);
-  color: var(--ink-0);
-}
-.convo:has(.convo-open[aria-current="true"]) {
-  background: var(--accent-soft);
-  border-color: rgba(99, 102, 241, 0.4);
-  color: var(--ink-0);
-}
-
-.convo-open {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  padding: 9px 4px 9px 11px;
-  border-radius: inherit;
-  cursor: pointer;
-  font: inherit;
-}
-.convo .t {
-  display: block;
-  font-size: var(--t-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.convo .m {
-  display: block;
-  font-size: var(--t-xs);
-  color: var(--ink-3);
-}
-.convo-del {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  margin-right: 5px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--ink-3);
-  opacity: 0;
-  cursor: pointer;
-  transition: opacity var(--dur-1), background var(--dur-1), color var(--dur-1);
-}
-.convo:hover .convo-del,
-.convo-del:focus-visible {
-  opacity: 1;
-}
-.convo-del:hover {
-  background: rgba(244, 114, 182, 0.18);
-  color: var(--aur-rose);
-}
-/* Touch has no hover to reveal it, so it is always visible there. */
-@media (hover: none) {
-  .convo-del {
-    opacity: 1;
-  }
-}
-
-.rail-foot {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  padding-top: 10px;
-  border-top: 1px solid var(--glass-brd);
-}
-
-/* ------------------------------------------------------------------ header */
-
-.topbar {
-  height: var(--header-h);
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-left: max(22px, env(safe-area-inset-left));
-  padding-right: max(22px, env(safe-area-inset-right));
-  border-bottom: 1px solid var(--glass-brd);
-  background: rgba(6, 7, 15, 0.42);
-  backdrop-filter: blur(var(--blur));
-  -webkit-backdrop-filter: blur(var(--blur));
-}
-
-.model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 12px 6px 10px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-  font-size: var(--t-sm);
-  white-space: nowrap;
-}
-
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 99px;
-  background: var(--ink-3);
-  flex: 0 0 auto;
-}
-.dot.ready {
-  background: var(--aur-green);
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
-  animation: pulse-dot 2.6s var(--ease-in-out) infinite;
-}
-.dot.loading {
-  background: var(--aur-amber);
-  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
-  animation: pulse-dot 1.1s var(--ease-in-out) infinite;
-}
-.dot.error {
-  background: var(--aur-rose);
-  box-shadow: 0 0 0 3px rgba(244, 114, 182, 0.16);
-}
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-
-.chip-meta {
-  color: var(--ink-2);
-  font-size: var(--t-xs);
-  letter-spacing: 0.04em;
+.center:focus {
+  outline: none;
 }
 
 .spacer {
   flex: 1;
-}
-
-.navlinks {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-}
-.navlinks a {
-  padding: 5px 13px;
-  border-radius: 99px;
-  font-size: var(--t-sm);
-  color: var(--ink-2);
-  text-decoration: none;
-  transition: color var(--dur-1), background var(--dur-1);
-}
-.navlinks a:hover {
-  color: var(--ink-0);
-}
-.navlinks a[aria-current="page"] {
-  background: var(--glass-strong);
-  color: var(--ink-0);
-}
-
-/* ---------------------------------------------------------------- buttons */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 9px 15px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-  color: var(--ink-0);
-  font-size: var(--t-sm);
-  font-weight: 500;
-  text-decoration: none;
-  cursor: pointer;
-  transition: transform var(--dur-1) var(--ease-out), background var(--dur-1),
-    border-color var(--dur-1), box-shadow var(--dur-2);
-}
-.btn:hover {
-  background: var(--glass-strong);
-  border-color: var(--glass-brd-strong);
-}
-.btn:active {
-  transform: translateY(1px);
-}
-.btn[disabled] {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--aur-indigo), var(--aur-violet));
-  border-color: transparent;
-  box-shadow: 0 8px 26px rgba(99, 102, 241, 0.35);
-}
-.btn-primary:hover {
-  filter: brightness(1.08);
-}
-
-.btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--ink-2);
-}
-.btn-ghost:hover {
-  background: var(--glass);
-  color: var(--ink-0);
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-sm);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: background var(--dur-1), color var(--dur-1);
-}
-.icon-btn:hover {
-  background: var(--glass);
-  color: var(--ink-0);
-}
-
-/* ------------------------------------------------------------------ cards */
-
-.card {
-  border-radius: var(--r-lg);
-  border: 1px solid var(--glass-brd);
-  background: linear-gradient(180deg, rgba(23, 27, 52, 0.55), rgba(11, 13, 26, 0.5));
-  box-shadow: var(--sh-md);
-}
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-  font-size: var(--t-xs);
-  color: var(--ink-1);
-  white-space: nowrap;
-}
-
-/* ------------------------------------------------------------------- misc */
-
-.mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
 }
 
 .muted {
@@ -585,282 +48,674 @@
   border: 0;
 }
 
+/* Inline SVG icons (icons.js) sit on the text baseline by default, which
+   nudges every label they share a line with. Blocks them instead. */
+.icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
 /* Hidden until focused, then a real, visible target — a keyboard user should
-   not have to tab the whole conversation rail to reach the composer. */
+   not have to tab the whole top bar to reach the composer. */
 .skip-link {
   position: fixed;
-  top: 10px;
-  left: 10px;
-  z-index: 200;
-  padding: 10px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd-strong);
-  background: var(--bg-2);
-  color: var(--ink-0);
-  font-size: var(--t-sm);
+  top: var(--s-2);
+  left: var(--s-2);
+  z-index: var(--z-skip);
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-1);
+  background: var(--ink);
+  color: var(--sheet);
+  font-size: var(--t-2);
   text-decoration: none;
-  transform: translateY(-160%);
-  transition: transform var(--dur-2) var(--ease-out);
+  transform: translateY(-200%);
+  transition: transform var(--dur-2) var(--ease);
 }
 /* :focus, not :focus-visible — the link is only reachable by keyboard or AT in
    the first place, and :focus-visible does not match programmatic focus, which
    is exactly how assistive technology moves to it. */
 .skip-link:focus {
   transform: none;
+  outline-color: var(--sheet);
+  outline-offset: -4px;
 }
 
-.toasts {
-  position: fixed;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+/* ---------------------------------------------------------------- top bar */
+
+.topbar {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  z-index: 60;
-  pointer-events: none;
-}
-.toast {
-  padding: 10px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: rgba(17, 20, 42, 0.92);
-  backdrop-filter: blur(10px);
-  box-shadow: var(--sh-lg);
-  font-size: var(--t-sm);
-  animation: toast-in var(--dur-3) var(--ease-out);
-}
-.toast.err {
-  border-color: rgba(244, 114, 182, 0.45);
-  color: #ffd9ec;
-}
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: none; }
+  align-items: center;
+  gap: var(--s-5);
+  min-width: 0;
+  padding-left: max(var(--pad), env(safe-area-inset-left));
+  padding-right: max(var(--edge), env(safe-area-inset-right));
+  border-bottom: 1px solid var(--rule);
 }
 
-/* -------------------------------------------------------------------- HUD */
+.wordmark {
+  font-size: var(--t-3);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
 
-.hud {
+.nav {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 0;
-  padding: 16px 14px;
-  border-left: 1px solid var(--glass-brd);
-  background: linear-gradient(180deg, rgba(11, 13, 26, 0.6), rgba(6, 7, 15, 0.5));
-  overflow-y: auto;
+  gap: var(--s-4);
+  font-size: var(--t-2);
 }
-
-.hud h2 {
-  margin: 0;
-  font-size: var(--t-xs);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  font-weight: 500;
-}
-
-.hud-card {
-  padding: 13px 14px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  /* was var(--glass): a white tint that lightened the aurora behind it and
-     pushed the boot lines under 3:1 */
-  background: var(--surface);
-}
-
-.big-stat {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  margin: 6px 0 2px;
-}
-.big-stat .v {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  color: var(--ink-0);
-}
-/* A gradient-clipped em dash reads as a stray bar, so the empty state opts out
-   of the gradient entirely. */
-.big-stat .v[data-empty="true"] {
-  background: none;
-  -webkit-text-fill-color: var(--ink-3);
-  color: var(--ink-3);
-  font-size: 24px;
-}
-.big-stat .u {
-  font-size: var(--t-xs);
+.nav a {
+  padding: var(--s-1) 0;
   color: var(--ink-2);
-  letter-spacing: 0.05em;
+  text-decoration: none;
+  transition: color var(--dur-1);
+}
+.nav a:hover {
+  color: var(--ink);
+}
+/* Where you are is said with ink and a rule, not a filled tab. */
+.nav a[aria-current="page"] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--ink);
+  text-underline-offset: 7px;
 }
 
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 36px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--ink);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--t-2);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1);
+}
+.btn:hover {
+  background: var(--sheet-2);
+}
+.btn:active {
+  translate: 0 1px;
+}
+.btn[disabled] {
+  border-color: var(--rule);
+  color: var(--ink-2);
+  cursor: not-allowed;
+  translate: none;
+}
+
+.btn-primary {
+  background: var(--ink);
+  color: var(--sheet);
+}
+.btn-primary:hover {
+  background: color-mix(in oklch, var(--ink) 84%, var(--sheet));
+}
+.btn-primary[disabled] {
+  background: var(--rule);
+}
+
+/* A button that reads as a word. Used where a box would add chrome and the
+   position already says it is a control: the top bar, a footer, a caption. */
+.text-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0;
+  padding: var(--s-1) var(--s-2);
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--ink);
+  font-size: var(--t-2);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+.text-btn:hover {
+  background: var(--sheet-2);
+}
+.text-btn[disabled] {
+  color: var(--ink-2);
+  cursor: not-allowed;
+}
+.text-btn.quiet {
+  color: var(--ink-2);
+}
+.text-btn.quiet:hover {
+  color: var(--ink);
+}
+.text-btn.small {
+  font-size: var(--t-1);
+}
+
+.icon-btn {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+.icon-btn:hover {
+  background: var(--sheet-2);
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------- history drawer */
+
+/* A real <dialog>: the focus trap, Escape, the inert page behind it and the
+   return of focus to the button that opened it all come from the platform. */
+.rail {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(88vw, 24rem);
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--rule);
+  background: var(--sheet);
+  color: var(--ink);
+  box-shadow: var(--sh-pop);
+  transition: translate var(--dur-2) var(--ease), overlay var(--dur-2) allow-discrete,
+    display var(--dur-2) allow-discrete;
+  translate: 100% 0;
+}
+.rail[open] {
+  translate: 0 0;
+}
+@starting-style {
+  .rail[open] {
+    translate: 100% 0;
+  }
+}
+.rail::backdrop {
+  background: var(--scrim);
+}
+
+/* The dialog itself has no padding, so a click that lands on it rather than on
+   this wrapper can only have been on the backdrop. */
+.rail-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--s-4) max(var(--edge), env(safe-area-inset-right)) max(var(--s-4), env(safe-area-inset-bottom)) var(--s-5);
+}
+
+.rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: var(--s-3);
+}
+.rail-head h2 {
+  margin: 0;
+  font-size: var(--t-4);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: calc(var(--s-2) * -1);
+  padding-right: var(--s-2);
+}
+
+.convo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.convo-empty {
+  padding: var(--s-4) 0;
+  font-size: var(--t-2);
+}
+
+/* Two sibling buttons, not one nested inside the other: a control inside a
+   control is invalid and leaves the inner one unreachable by keyboard. */
+.convo {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  border-bottom: 1px solid var(--rule);
+}
+.convo-open {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-3) var(--s-2) var(--s-3) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.convo-open:hover .t {
+  text-decoration: underline;
+  text-decoration-color: var(--ink-2);
+  text-underline-offset: 3px;
+}
+.convo .t {
+  display: block;
+  font-size: var(--t-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.convo .m {
+  display: block;
+  font-size: var(--t-1);
+  color: var(--ink-2);
+}
+.convo-open[aria-current="true"] .t {
+  font-weight: 600;
+}
+.convo-del:hover {
+  color: var(--fault);
+}
+
+/* The page links join the drawer only where the top bar has no room for them. */
+.rail-foot {
+  display: none;
+  gap: var(--s-5);
+  padding-top: var(--s-4);
+  font-size: var(--t-2);
+}
+
+/* ------------------------------------------------------------ status line */
+
+/* One row, edge to edge, like an editor's. What the machine is sits on the
+   left and does not move. What a request is costing sits on the right,
+   anchored to the right edge, each figure in a slot as wide as its largest
+   value — so a number that ticks changes in place and nothing beside it
+   shifts. A figure with nothing to report is absent, not a dash. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1) var(--s-6);
+  min-width: 0;
+  min-height: 2.5rem;
+  padding-top: var(--s-1);
+  padding-bottom: max(var(--s-1), env(safe-area-inset-bottom));
+  padding-left: max(var(--edge), env(safe-area-inset-left));
+  padding-right: max(var(--edge), env(safe-area-inset-right));
+  border-top: 1px solid var(--rule);
+  background: var(--sheet-2);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+  line-height: 1.5;
+}
+
+.status-id,
+.status-figs {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1) var(--s-5);
+  min-width: 0;
+  white-space: nowrap;
+}
+.status-figs {
+  margin-left: auto;
+}
+
+.st-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--ink);
+  font-weight: 600;
+}
+/* Wide enough for every state a request passes through, so ready, working,
+   reading and writing swap in place and the model's name stays where it is. */
+.st-word {
+  display: inline-block;
+  min-width: 4.25rem;
+}
+
+.status .dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+.st-tag {
+  padding: 0 5px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.st-fig {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+}
+.st-fig b {
+  display: inline-block;
+  color: var(--ink);
+  font-weight: 600;
+  text-align: right;
+}
+#tps-value {
+  min-width: 4ch;
+}
+#out-value,
+#ctx-value {
+  min-width: 5ch;
+}
+#ttft-value {
+  min-width: 6ch;
+  text-align: left;
+}
+#st-wait-s {
+  min-width: 4ch;
+}
+
+/* The trace of the rate over the last few seconds: wide enough to read as a
+   chart, on a baseline, with the newest sample marked. */
+.spark-wrap {
+  position: relative;
+  display: block;
+  width: 10.5rem;
+  height: 20px;
+  margin-left: var(--s-1);
+  border-bottom: 1px solid var(--rule);
+}
 .spark {
   display: block;
   width: 100%;
-  height: 38px;
-  margin-top: 6px;
+  height: 100%;
+  overflow: visible;
 }
-.spark path { vector-effect: non-scaling-stroke; }
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 9px;
+.spark path {
+  fill: none;
+  stroke: var(--live);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
-.stat {
-  padding: 9px 11px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--glass-brd);
-  /* darkens rather than lightens, so nesting never raises the ground */
-  background: var(--surface-inset);
-}
-.stat .k {
-  font-size: 10px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-.stat .v {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--t-lg);
-  color: var(--ink-0);
-}
-.stat .v small { font-size: var(--t-xs); color: var(--ink-2); }
-
-/* context ring */
-.ring-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.ring {
-  flex: 0 0 auto;
-  width: 54px;
-  height: 54px;
-  transform: rotate(-90deg);
-}
-.ring circle { fill: none; stroke-width: 6; stroke-linecap: round; }
-.ring .track { stroke: rgba(255, 255, 255, 0.08); }
-.ring .val {
-  stroke: url(#ringgrad);
-  transition: stroke-dashoffset var(--dur-3) var(--ease-out);
+/* --y is the newest sample as a share of the tallest, set from chat.js. The
+   plot keeps 3 of its 38 units clear top and bottom, which is 1.6px here. */
+.spark-dot {
+  position: absolute;
+  right: -3px;
+  bottom: calc(1.6px + var(--y, 0) * 16.8px - 3px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 2px var(--sheet-2);
 }
 
-.boot-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: var(--t-xs);
-  padding: 3px 0;
-  color: var(--ink-2);
-  opacity: 0;
-  animation: rise var(--dur-3) var(--ease-out) forwards;
+.ctx-bar {
+  display: block;
+  width: 56px;
+  height: 4px;
+  background: var(--rule);
+  overflow: hidden;
 }
-.boot-line b { color: var(--ink-1); font-weight: 500; font-family: var(--font-mono); }
-.boot-line:nth-child(1) { animation-delay: 80ms; }
-.boot-line:nth-child(2) { animation-delay: 200ms; }
-.boot-line:nth-child(3) { animation-delay: 320ms; }
-.boot-line:nth-child(4) { animation-delay: 440ms; }
-.boot-line:nth-child(5) { animation-delay: 560ms; }
+.ctx-bar i {
+  display: block;
+  height: 100%;
+  background: var(--ink-2);
+  /* scaleX, not width: this moves on every answer and must not relayout the
+     line it sits in. */
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-2) var(--ease);
+}
+.status[data-ctx="high"] .ctx-bar i {
+  background: var(--caution);
+}
 
-/* collapsed HUD for medium screens */
-.hud-strip {
+/* What the state is, said in colour as well as in the word beside it. */
+.status[data-phase="cold"] .dot,
+.status[data-phase="loading"] .dot,
+.status[data-phase="queued"] .dot {
+  background: var(--caution);
+}
+.status[data-phase="cold"] .st-state,
+.status[data-phase="loading"] .st-state,
+.status[data-phase="queued"] .st-state {
+  color: var(--caution);
+}
+.status[data-phase="error"] .dot {
+  background: var(--fault);
+}
+.status[data-phase="error"] .st-state {
+  color: var(--fault);
+}
+.status[data-phase="working"] .dot,
+.status[data-phase="reading"] .dot,
+.status[data-phase="writing"] .dot,
+.status[data-phase="held"] .dot {
+  background: var(--live);
+}
+.status[data-phase="working"] .st-state,
+.status[data-phase="reading"] .st-state,
+.status[data-phase="writing"] .st-state,
+.status[data-phase="held"] .st-state {
+  color: var(--live);
+}
+
+/* Waiting on the machine: the dot breathes. Once tokens arrive it holds still
+   and the figures do the moving. */
+.status[data-phase="working"] .dot,
+.status[data-phase="queued"] .dot,
+.status[data-phase="reading"] .dot,
+.status[data-phase="loading"] .dot {
+  animation: wait 1.4s var(--ease) infinite alternate;
+}
+@keyframes wait {
+  to {
+    opacity: 0.3;
+  }
+}
+
+/* The line comes alive: while the model writes, its rate takes the live
+   colour and the trace draws beside it. This is the one place the page moves
+   on its own. */
+.status[data-phase="writing"] .st-tps b {
+  color: var(--live);
+}
+
+.status-more {
   display: none;
-  align-items: center;
-  gap: 14px;
-  padding: 7px 22px;
-  border-bottom: 1px solid var(--glass-brd);
-  background: rgba(11, 13, 26, 0.45);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  overflow-x: auto;
-  white-space: nowrap;
 }
-.hud-strip b { color: var(--ink-0); font-weight: 500; }
 
-/* --------------------------------------------------------------- responsive */
-
-@media (max-width: 1200px) {
-  .shell {
-    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+/* Narrower than this the trace gives up width before anything else does. */
+@media (max-width: 1439px) {
+  .spark-wrap {
+    width: 6rem;
   }
-  .hud {
-    display: none;
+}
+/* Narrower still, the identity and a full set of figures cannot share a row.
+   The chat page gives the figures a row of their own from the start, rather
+   than wrapping at the moment an answer begins. Context use leads that row,
+   so it stays put when the others arrive beside it. */
+@media (max-width: 1339px) {
+  :root[data-page="chat"] .status {
+    flex-wrap: wrap;
   }
-  .hud-strip {
-    display: flex;
+  :root[data-page="chat"] .status-figs {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  :root[data-page="chat"] .st-ctx {
+    order: -1;
   }
 }
 
-@media (max-width: 860px) {
-  .shell {
-    grid-template-columns: minmax(0, 1fr);
+/* ----------------------------------------------------------------- toasts */
+
+.toasts {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* --status-h is measured in app.js; the status line wraps to two rows at
+     middling widths and a toast must clear it either way. */
+  bottom: calc(var(--status-h, 44px) + var(--s-4));
+  z-index: var(--z-toast);
+  display: grid;
+  justify-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--edge);
+  pointer-events: none;
+}
+.toast {
+  max-width: 34rem;
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-1);
+  background: var(--ink);
+  color: var(--sheet);
+  box-shadow: var(--sh-pop);
+  font-size: var(--t-2);
+  animation: toast-in var(--dur-2) var(--ease);
+}
+.toast.err {
+  background: var(--fault);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    translate: 0 8px;
   }
-  .rail {
-    position: fixed;
-    z-index: 40;
-    inset: 0 auto 0 0;
-    width: min(84vw, var(--rail-w));
-    transform: translateX(-102%);
-    transition: transform var(--dur-3) var(--ease-out);
-    box-shadow: var(--sh-lg);
-  }
-  .rail[data-open="true"] {
+}
+
+/* The staged reveal used by anything that starts transparent. It lives here,
+   not in a page stylesheet: a missing @keyframes leaves such an element
+   invisible on whichever page forgot to load it. */
+@keyframes rise {
+  to {
+    opacity: 1;
     transform: none;
   }
-  .rail-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 39;
-    background: rgba(4, 5, 12, 0.6);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--dur-2);
-  }
-  .rail-scrim[data-open="true"] {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .menu-btn {
-    display: grid !important;
-  }
-  .topbar {
-    padding: 0 12px;
-    min-width: 0;
-  }
-  /* nowrap chips crowd a narrow header; the hardware label is repeated on the
-     hero and the About page, so it is the first thing to go. */
-  #hw-label {
-    display: none;
-  }
-  .model-chip {
-    min-width: 0;
-    overflow: hidden;
-  }
-  .model-chip > span:not(.dot) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
 }
+
+/* -------------------------------------------------------------- responsive */
 
 @media (max-width: 620px) {
-  /* Below this the nav pills and the model chip fight for the same row; the
-     rail drawer already carries About and Benchmark, and the brand is a link
-     back to chat. Lives here, not chat.css — every page has this header. */
-  .navlinks {
+  .topbar {
+    gap: var(--s-4);
+  }
+  /* On the chat page History and New take the room; the page links move into
+     the drawer. The other pages have nothing else in the bar and keep them. */
+  :root[data-page="chat"] .nav {
     display: none;
   }
-}
+  .rail-foot {
+    display: flex;
+  }
 
-.menu-btn {
-  display: none;
+  /* The corridor: state plus the one figure that matters now — the rate while
+     the model writes, context use otherwise. Everything else waits behind
+     Details rather than being shrunk until none of it reads. */
+  .status,
+  :root[data-page="chat"] .status {
+    flex-wrap: nowrap;
+    gap: var(--s-4);
+  }
+  .status-id .st-seg,
+  .status-figs > * {
+    display: none;
+  }
+  .status-figs,
+  :root[data-page="chat"] .status-figs {
+    flex-basis: auto;
+    margin-left: 0;
+  }
+  .status-figs > .st-ctx:not([hidden]),
+  .status[data-phase="writing"] .status-figs > .st-tps:not([hidden]) {
+    display: inline-flex;
+  }
+  .status[data-phase="writing"] .status-figs > .st-ctx {
+    display: none;
+  }
+  .ctx-bar,
+  .spark-wrap {
+    display: none;
+  }
+  .st-word {
+    min-width: 0;
+  }
+  .status-more {
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+    padding: var(--s-1) var(--s-2);
+    border: 0;
+    border-radius: var(--r-1);
+    background: none;
+    color: var(--ink);
+    font-size: var(--t-1);
+    text-decoration: underline;
+    text-decoration-color: var(--ink-2);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .status[data-open="true"],
+  :root[data-page="chat"] .status[data-open="true"] {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    row-gap: var(--s-2);
+    padding-top: var(--s-2);
+  }
+  .status[data-open="true"] .status-id,
+  .status[data-open="true"] .status-figs {
+    grid-column: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s-1);
+    white-space: normal;
+  }
+  .status[data-open="true"] .status-more {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  /* Block, not flex: these are a sentence with a figure inside it, and a
+     flex container would drop the space between the two. */
+  .status[data-open="true"] .status-id .st-seg {
+    display: block;
+  }
+  .status[data-open="true"] .status-figs > *:not([hidden]) {
+    display: inline-flex;
+  }
+  .status[data-open="true"] .ctx-bar,
+  .status[data-open="true"] .spark-wrap {
+    display: block;
+  }
 }
 
 /* Touch, not width. A laptop with a touchscreen needs the same target size as
@@ -868,29 +723,70 @@
 @media (pointer: coarse) {
   /* Explicit minimums rather than padding arithmetic: padding that happens to
      add up to 44px on one font stack quietly falls short on another. */
-  .icon-btn,
-  .convo-del {
+  .icon-btn {
     width: 44px;
     height: 44px;
   }
-  .convo-del {
-    margin-right: 2px;
+  .btn,
+  .text-btn,
+  .status-more {
+    min-height: 44px;
+  }
+  .text-btn {
+    padding-inline: var(--s-3);
+  }
+  .nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
   }
   .convo-open {
     min-height: 52px;
   }
-  .btn {
-    min-height: 44px;
-    padding: 10px 18px;
+}
+
+/* Reduced motion is not "no motion".
+ *
+ * A blanket `* { animation-duration: 0.001ms }` also flattens every
+ * transition, so hover, focus, disabled and loading states all change with a
+ * hard cut and the interface stops acknowledging input. What needs removing is
+ * looping decoration and travel across the screen; colour and opacity still
+ * carry meaning and stay. */
+@media (prefers-reduced-motion: reduce) {
+  /* 1. Stop the loops. `!important` because this block cannot win on source
+        order — the page stylesheets load after it. The dot stays lit in its
+        state colour; it just stops breathing. */
+  .status .dot,
+  .caret,
+  .notice .spin {
+    animation: none !important;
   }
-  .navlinks a {
-    display: inline-flex;
-    align-items: center;
-    min-height: 44px;
-    padding: 0 16px;
+
+  /* 2. No travel: entrances resolve in place, the drawer appears rather than
+        slides, and press offsets go. Anything whose entrance is cancelled here
+        is forced visible — removing the motion must never remove the content. */
+  .toast,
+  .msg,
+  .tl-step,
+  .card-tool,
+  .notice {
+    animation: none !important;
+    transform: none !important;
+    translate: none !important;
+    opacity: 1 !important;
   }
-  .pill {
-    min-height: 36px;
-    padding: 6px 14px;
+  .rail {
+    transition: none !important;
+  }
+  .btn:active,
+  .send:active {
+    translate: none !important;
+  }
+
+  /* 3. The page must not animate the change of view. */
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }

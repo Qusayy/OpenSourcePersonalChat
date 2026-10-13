@@ -375,7 +375,7 @@ Motion explains a change, acknowledges an action or reports work in progress; no
 
 - **The arrival.** Come to from outside (a typed address, a link from elsewhere, a reload), a page assembles once in reading order: headline, what it is, where to type, what to try, each rising 10px out of nothing, 50ms apart. It does not replay on New chat or when moving between the site's own pages.
 - **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
-- **Between pages.** The top bar and the status line are the same on every page, so they hold still and only the sheet between them changes (cross-document view transitions; other browsers simply navigate).
+- **Between pages.** The top bar and the status line are the same on every page, so they hold still and only the sheet between them changes. Moving between pages does not reload the document: the router changes the sheet inside a view transition, in which the bar and the line each carry a `view-transition-name` of their own and so are not part of the cross-fade. A browser without view transitions simply changes page.
 - **The status line.** The state word slides when the state changes: the old word leaves upward, the new one comes up from below. Core columns and meters ease between samples. The dot breathes while waiting.
 - **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
 - **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
@@ -384,6 +384,52 @@ Motion explains a change, acknowledges an action or reports work in progress; no
 - **Charts.** Bars grow from the baseline, the memory budget fills segment by segment and the history line is drawn left to right, each when scrolled to and once only.
 
 Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed, charts are shown drawn, the rate and its trace step from sample to sample, the aurora holds still and an answer's text simply appears, while colour and opacity transitions stay so the interface still acknowledges input.
+
+## How it is built
+
+The interface is React components styled with Tailwind CSS 4 (`web/src`). This section says how the system above is written down there, so that a change to one is a change to the other.
+
+### The tokens are the theme
+
+Every value in the frontmatter is a plain custom property on `:root` (`web/src/styles/theme.css`): `--sheet`, `--ink-2`, `--s-4`, `--t-3`, `--r-1`, `--dur-2`. The dark scheme is one block that redefines the colour roles, under `prefers-color-scheme` and again under `[data-theme="dark"]`; nothing else knows which scheme is showing.
+
+Tailwind's theme does not hold values. It names the tokens:
+
+| Written | Is |
+|---|---|
+| `bg-sheet`, `text-ink-2`, `border-rule`, `text-live` | the colour roles |
+| `p-4`, `gap-2`, `mt-7` | `--s-4`, `--s-2`, `--s-7`: the nine steps, by number |
+| `text-1` … `text-7` | `--t-1` … `--t-7` |
+| `rounded-1`, `rounded-2` | the two radii |
+| `shadow-pop` | the one shadow |
+| `ease-arrive`, `ease-leave`, `duration-(--dur-2)` | the two curves and the four durations |
+| `max-w-col`, `max-w-page`, `px-edge`, `pl-inset`, `h-bar` | the layout measures |
+| `num` | the Fixed Figures Rule: fixed-width, tabular |
+
+Because a utility resolves to `var(--sheet)` and not to a colour, it follows the scheme with no `dark:` variant, and there are none in the code. Tailwind's own palette, type scale, spacing scale, radii, shadows and breakpoints are removed from the theme, so a value that is not a token cannot be typed as one. A literal the design calls for (a 36px control, a 6px gap) is written in brackets, `min-h-[36px]`, where it can be seen for what it is.
+
+The widths at which the layout changes are variants that carry the design's exact media queries: `ge-1264:`, `le-1263:`, `le-760:`, `le-680:`, `le-640:`, `le-620:`, and `coarse:` for touch. Tailwind's built-in `max-*` variants stop a pixel short of these (`width < 620px` where the design says up to and including 620) and are not used. `intro:` styles an element only during the arrival; `motion-reduce:` is the reduced-motion rule for one element.
+
+Two utilities for the same property are never put on one element. The order they are written in does not decide which wins, so a variant of a component is a complete list of its own (see `shell/Button.tsx`), not the base list with an override appended.
+
+### What is written as CSS, and why
+
+Utility classes say what one element looks like. Some of the system is not about one element, and stays as CSS, in Tailwind's layers and using the same token names:
+
+- **The status line** (`styles/status.css`), whole. It has three layouts, told apart by rules on the same elements that override each other by specificity and source order, and that order is the order in which things give way. As class attributes it would not be readable anywhere.
+- **Text the markdown renderer wrote** (`styles/prose.css`). It reaches the page as HTML, not as components, so it cannot carry classes. The caret and the ink-in fade are here too, for the same reason.
+- **Charts and the table** (`features/bench/bench.css`). A bar, a range strip, the stacked memory bar and the history line are styled by where their parts sit in the chart; the table turns into a list below 640px; and a chart is held undrawn until it carries `in-view`, which is a rule about an ancestor.
+- **The drawings inside a tool figure** (`features/cards/cards.css`): the weather art, the temperature curve and the clock face are SVG whose shapes are coloured by what they are.
+- **Keyframes and the change of page** (`styles/motion.css`), which belong to no element.
+- **Element rules** (`styles/base.css`): the page grid, links, focus, selection, `kbd`.
+
+Everything else (the top bar, buttons, the composer and thread, fact lists, panels, notes, the figures of a tool result, the long-form pages) is utility classes in the components.
+
+Tailwind's reset (Preflight) is on, so no element keeps a browser default margin, list marker or heading size. Nothing leans on one: every component states the space it keeps, and generated text is given its list markers back in `prose.css`.
+
+### Moving parts are not rendered
+
+React draws the page. It does not draw each frame of something that moves. The streaming answer, the rate figure and its trace, the state word and the aurora are written to the DOM directly by plain modules (`web/src/lib`, `shell/figures.ts`), each given an empty element that React then leaves alone. And a figure with its unit is written as one string, not as two expressions side by side: two text nodes are shaped separately and can land a pixel apart.
 
 ## Do's and Don'ts
 

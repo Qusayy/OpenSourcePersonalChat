@@ -712,3 +712,60 @@
     padding-inline: 5px;
   }
 }
+
+/* ------------------------------------------------------------------ motion */
+
+/* The arrival. Once, when the page is come to from outside (the `intro` class
+   is set in the head before first paint and taken off again when this has
+   played, so New chat does not replay it). The sheet assembles in reading
+   order: headline, what it is, where to type, what to try. */
+.intro .hero h1,
+.intro .hero p,
+.intro .composer,
+.intro .skills h2,
+.intro .skill-list li {
+  animation: rise-in var(--dur-4) var(--ease) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.intro .hero p { --i: 1; }
+.intro .composer { --i: 2; }
+.intro .skills h2 { --i: 3; }
+.intro .skill-list li:nth-child(1) { --i: 3.5; }
+.intro .skill-list li:nth-child(2) { --i: 4; }
+.intro .skill-list li:nth-child(3) { --i: 4.5; }
+.intro .skill-list li:nth-child(4) { --i: 5; }
+.intro .skill-list li:nth-child(5) { --i: 5.5; }
+.intro .skill-list li:nth-child(6) { --i: 6; }
+
+/* The mark under the chosen persona is one rule that slides to whichever is
+   chosen, rather than an underline that vanishes from one word and appears
+   under another. chat.js places it; until it has, and wherever script is off,
+   the plain underline above does the job. */
+.persona-row {
+  position: relative;
+}
+.persona-ink {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--ink);
+  transform: translate(var(--x, 0px), var(--y, 0px)) scaleX(var(--w, 0));
+  transform-origin: left center;
+  pointer-events: none;
+}
+.persona-ink.moving {
+  transition: transform var(--dur-3) var(--ease);
+}
+.persona-row.inked .persona[aria-pressed="true"] {
+  text-decoration: none;
+}
+
+/* A skill row answers the pointer: its route leans the way it runs. */
+.skill .pipe .icon {
+  transition: translate var(--dur-2) var(--ease);
+}
+.skill:hover .pipe .icon {
+  translate: 3px 0;
+}

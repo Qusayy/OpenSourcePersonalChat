@@ -6,7 +6,7 @@ import { sseFetch } from "./stream.js";
 import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
 import { mountCard } from "./cards.js";
 import { mountSkills, setupPalette } from "./skills.js";
-import { enter, REDUCED } from "./motion.js";
+import { enter, REDUCED, EASE } from "./motion.js";
 import { icon, hasIcon } from "./icons.js";
 
 /** Fade a transient element out before removing it. */
@@ -67,7 +67,31 @@ function paintPersonas() {
   $$(".persona").forEach((b) =>
     b.setAttribute("aria-pressed", String(b.dataset.persona === state.persona))
   );
+  placePersonaInk();
 }
+
+// One rule that slides under whichever persona is chosen. It is positioned
+// from the chosen button's own box, so it follows a wrap onto a second row and
+// a change of font; `moving` is added only after the first placement, so it
+// appears in place on load and travels thereafter.
+const personaRow = $("#persona-row");
+const personaInk = document.createElement("span");
+personaInk.className = "persona-ink";
+personaInk.setAttribute("aria-hidden", "true");
+personaRow?.appendChild(personaInk);
+
+function placePersonaInk() {
+  const chosen = personaRow?.querySelector('.persona[aria-pressed="true"]');
+  if (!chosen || !chosen.offsetWidth) return;
+  const pad = parseFloat(getComputedStyle(chosen).paddingLeft) || 0;
+  personaInk.style.setProperty("--x", `${chosen.offsetLeft + pad}px`);
+  personaInk.style.setProperty("--y", `${chosen.offsetTop + chosen.offsetHeight - 3}px`);
+  personaInk.style.setProperty("--w", String(Math.max(0, chosen.offsetWidth - pad * 2)));
+  personaRow.classList.add("inked");
+  if (!REDUCED) requestAnimationFrame(() => personaInk.classList.add("moving"));
+}
+window.addEventListener("resize", placePersonaInk);
+document.fonts?.ready.then(placePersonaInk);
 $$(".persona").forEach((b) =>
   b.addEventListener("click", () => {
     state.persona = b.dataset.persona;
@@ -493,8 +517,21 @@ function livePhase(key, lead = "") {
 
 function setMode(streaming) {
   state.streaming = streaming;
-  els.send.dataset.mode = streaming ? "stop" : "send";
-  els.sendLabel.textContent = streaming ? "Stop" : "Send";
+  const label = streaming ? "Stop" : "Send";
+  if (els.sendLabel.textContent !== label) {
+    els.send.dataset.mode = streaming ? "stop" : "send";
+    els.sendLabel.textContent = label;
+    // The button changes what it does; the word is seen to change with it.
+    if (!REDUCED && els.sendLabel.animate) {
+      els.sendLabel.animate(
+        [
+          { opacity: 0, translate: "0 35%" },
+          { opacity: 1, translate: "0 0" },
+        ],
+        { duration: 200, easing: EASE }
+      );
+    }
+  }
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
   livePhase(streaming ? "working" : null);
 }
@@ -778,8 +815,19 @@ function newChat() {
 }
 $("#new-chat").addEventListener("click", newChat);
 // Fetched as the drawer opens, so the times are current and a conversation
-// started in another tab is listed.
-$("#menu-btn").addEventListener("click", refreshList);
+// started in another tab is listed. The rows are held unseen for the moment
+// that takes (the drawer is still sliding in) and then arrive as a list, once:
+// showing the old rows, replacing them and animating the new ones would be the
+// same list entering twice.
+$("#menu-btn").addEventListener("click", async () => {
+  els.list.classList.remove("stagger");
+  els.list.classList.add("pending");
+  await Promise.race([refreshList(), new Promise((done) => setTimeout(done, 300))]);
+  els.list.classList.remove("pending");
+  if (REDUCED) return;
+  els.list.classList.add("stagger");
+  setTimeout(() => els.list.classList.remove("stagger"), 700);
+});
 
 /* ------------------------------------------------------------- startup -- */
 

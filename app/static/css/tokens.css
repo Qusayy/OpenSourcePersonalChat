@@ -102,9 +102,13 @@
     0 12px 32px -8px oklch(22% 0.015 150 / 0.22);
 
   /* motion — state changes only */
+  /* Arrivals decelerate; exits leave faster than things arrive. */
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-1: 120ms;
-  --dur-2: 200ms;
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --dur-1: 120ms; /* feedback: hover, press, colour */
+  --dur-2: 200ms; /* a routine change of state */
+  --dur-3: 320ms; /* something moving across part of the screen */
+  --dur-4: 480ms; /* an entrance, or a chart drawing itself */
 
   /* layers */
   --z-status: 10;

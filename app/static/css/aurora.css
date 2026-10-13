@@ -398,8 +398,23 @@ body {
    reading and writing swap in place and the model's name stays where it is.
    A longer word ("model unavailable") widens it rather than being cut. */
 .st-word {
+  position: relative;
   display: inline-block;
   min-width: 4.25rem;
+  vertical-align: bottom;
+  /* The word slides when the state changes. Clipped top and bottom so the
+     outgoing word leaves through the line; never sideways, so a long word is
+     not cut. */
+  overflow-x: visible;
+  overflow-y: clip;
+}
+.st-word-in {
+  display: inline-block;
+}
+.st-word-in.out {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .status .dot {
@@ -474,7 +489,7 @@ body {
   background: var(--ink-2);
   transform: scaleY(var(--v, 0));
   transform-origin: center bottom;
-  transition: transform var(--dur-2) var(--ease), background var(--dur-1);
+  transition: transform var(--dur-3) var(--ease), background var(--dur-1);
 }
 /* More than eight cores: one horizontal bar for all of them. */
 .cpu-bars.agg {
@@ -512,7 +527,7 @@ body {
      sits in. */
   transform: scaleX(var(--v, 0));
   transform-origin: left center;
-  transition: transform var(--dur-2) var(--ease);
+  transition: transform var(--dur-3) var(--ease);
 }
 .status[data-ctx="high"] #ctx-fill,
 .status[data-ram="high"] #ram-fill {
@@ -672,6 +687,53 @@ body {
     opacity: 0;
     translate: 0 8px;
   }
+}
+
+/* An arrival: from just below, out of nothing. Written as a `from` only, so
+   the resting state is the element as it normally is and a failed animation
+   leaves the content in place. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+}
+
+/* History rows arrive as a list, one after another, once per opening. `pending`
+   holds them unseen for the moment it takes the fresh list to come back, so
+   they are not shown, replaced and shown again. */
+.convo-list.pending > * {
+  opacity: 0;
+}
+.convo-list.stagger > * {
+  animation: rise-in var(--dur-3) var(--ease) backwards;
+  animation-delay: calc(var(--n, 10) * 24ms);
+}
+.convo-list.stagger > :nth-child(1) { --n: 0; }
+.convo-list.stagger > :nth-child(2) { --n: 1; }
+.convo-list.stagger > :nth-child(3) { --n: 2; }
+.convo-list.stagger > :nth-child(4) { --n: 3; }
+.convo-list.stagger > :nth-child(5) { --n: 4; }
+.convo-list.stagger > :nth-child(6) { --n: 5; }
+.convo-list.stagger > :nth-child(7) { --n: 6; }
+.convo-list.stagger > :nth-child(8) { --n: 7; }
+.convo-list.stagger > :nth-child(9) { --n: 8; }
+
+/* Moving between the three pages: the top bar and the status line are the
+   same thing on each, so they stay put and only the sheet between them
+   changes. Browsers without cross-document view transitions just navigate. */
+@view-transition {
+  navigation: auto;
+}
+.topbar {
+  view-transition-name: topbar;
+}
+.status {
+  view-transition-name: status;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-2);
 }
 
 /* The staged reveal used by anything that starts transparent. It lives here,
@@ -841,13 +903,31 @@ body {
   .msg,
   .tl-step,
   .card-tool,
-  .notice {
+  .notice,
+  .intro .hero h1,
+  .intro .hero p,
+  .intro .composer,
+  .intro .skills h2,
+  .intro .skill-list li,
+  .intro .page-head > *,
+  .intro .wrap > section,
+  .convo-list.stagger > * {
     animation: none !important;
     transform: none !important;
     translate: none !important;
     opacity: 1 !important;
   }
-  .rail {
+  .rail,
+  .persona-ink,
+  .skill .pipe .icon {
+    transition: none !important;
+  }
+  /* Charts are shown drawn, not drawing. */
+  .reveal-ready .track i,
+  .reveal-ready .stack span,
+  .reveal-ready .linechart .series,
+  .reveal-ready .linechart .area,
+  .reveal-ready .linechart .pt {
     transition: none !important;
   }
   .btn:active,

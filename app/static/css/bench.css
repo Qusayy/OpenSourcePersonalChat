@@ -535,3 +535,65 @@
     min-height: 44px;
   }
 }
+
+/* ------------------------------------------------------------------ motion */
+
+/* The arrival, once, when the page is come to from outside. */
+.intro .page-head > *,
+.intro .wrap > section {
+  animation: rise-in var(--dur-4) var(--ease) backwards;
+  animation-delay: calc(var(--i, 4) * 50ms);
+}
+.intro .page-head > :nth-child(1) { --i: 0; }
+.intro .page-head > :nth-child(2) { --i: 1; }
+.intro .page-head > :nth-child(3) { --i: 2; }
+.intro .wrap > section:nth-of-type(1) { --i: 3; }
+
+/* Charts draw themselves when they are scrolled to. `reveal-ready` is set by
+   app.js, which also adds `in-view`; without the script nothing is hidden and
+   the charts are simply there. */
+.reveal-ready .track i {
+  transition: transform var(--dur-4) var(--ease);
+}
+.reveal-ready .in-view .track i {
+  transform: scaleX(var(--v, 0));
+}
+.reveal-ready .in-view .bar-row:nth-child(2) .track i { transition-delay: 40ms; }
+.reveal-ready .in-view .bar-row:nth-child(3) .track i { transition-delay: 80ms; }
+.reveal-ready .in-view .bar-row:nth-child(4) .track i { transition-delay: 120ms; }
+.reveal-ready .in-view .bar-row:nth-child(5) .track i { transition-delay: 160ms; }
+.reveal-ready .in-view .bar-row:nth-child(6) .track i { transition-delay: 200ms; }
+:root:not(.reveal-ready) .track i {
+  transform: scaleX(var(--v, 0));
+}
+
+.reveal-ready .stack span {
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-4) var(--ease);
+}
+.reveal-ready .stack.in-view span {
+  transform: none;
+}
+.reveal-ready .stack.in-view span:nth-child(2) { transition-delay: 80ms; }
+.reveal-ready .stack.in-view span:nth-child(3) { transition-delay: 160ms; }
+.reveal-ready .stack.in-view span:nth-child(4) { transition-delay: 240ms; }
+
+/* The history line is drawn left to right, then its points and fill appear. */
+.reveal-ready .linechart .series {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 640ms var(--ease);
+}
+.reveal-ready .linechart.in-view .series {
+  stroke-dashoffset: 0;
+}
+.reveal-ready .linechart .area,
+.reveal-ready .linechart .pt {
+  opacity: 0;
+  transition: opacity var(--dur-3) var(--ease) 360ms;
+}
+.reveal-ready .linechart.in-view .area,
+.reveal-ready .linechart.in-view .pt {
+  opacity: 1;
+}

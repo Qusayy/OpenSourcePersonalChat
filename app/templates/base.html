@@ -25,6 +25,13 @@
   }
 }
 </script>
+{# Arriving from outside (a typed address, a link from elsewhere, a reload)
+   the page introduces itself once. Moving between its own pages it does not:
+   that is a change of page, not an arrival. Decided before first paint, so
+   the entrance is the first thing drawn rather than a flash and a restart. #}
+<script>
+  if (document.referrer.indexOf(location.origin + "/") !== 0) document.documentElement.classList.add("intro");
+</script>
 <link rel="stylesheet" href="/static/css/tokens.css?v={{ version }}">
 <link rel="stylesheet" href="/static/css/aurora.css?v={{ version }}">
 {% block styles %}{% endblock %}
@@ -73,7 +80,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <div class="status-id">
     <span class="st-state">
       <span class="dot" aria-hidden="true"></span>
-      <span class="st-word" id="b-state">{{ state_words.get(info.status, info.status) }}</span>
+      <span class="st-word" id="b-state"><span class="st-word-in">{{ state_words.get(info.status, info.status) }}</span></span>
     </span>
     <span class="st-seg st-model">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
     <span class="st-seg st-cpu" id="st-cpu" {% if cpus is none %}hidden{% endif %}>

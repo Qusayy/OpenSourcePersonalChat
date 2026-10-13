@@ -1,5 +1,7 @@
 /* Shared shell behaviour: status line, history drawer, toasts, health polling, copy. */
 
+import { REDUCED, EASE } from "./motion.js";
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -94,12 +96,44 @@ function paintState() {
     text = "busy";
   }
   bar.dataset.phase = key;
-  if (stateEl && stateEl.textContent.trim() !== text) setStateWord(text);
+  if (stateEl && text !== shownWord) setStateWord(text);
 }
 
-/** Change the state word. Its own function so the change can be animated. */
+// What the line currently says. Compared against rather than read back from
+// the element, which briefly holds two words while one replaces the other.
+let shownWord = stateEl?.textContent.trim() ?? "";
+
+/**
+ * Change the state word. Only called when the word is actually different: the
+ * outgoing one leaves upward as the new one comes up from below, so a change
+ * of state is seen to happen rather than found to have happened.
+ */
 function setStateWord(text) {
-  stateEl.textContent = text;
+  shownWord = text;
+  const next = document.createElement("span");
+  next.className = "st-word-in";
+  next.textContent = text;
+  const old = stateEl.querySelector(".st-word-in:not(.out)");
+  if (REDUCED || !old || !old.animate || document.hidden) {
+    stateEl.replaceChildren(next);
+    return;
+  }
+  old.classList.add("out");
+  stateEl.appendChild(next);
+  old.animate(
+    [
+      { opacity: 1, translate: "0 0" },
+      { opacity: 0, translate: "0 -70%" },
+    ],
+    { duration: 140, easing: "cubic-bezier(0.7, 0, 0.84, 0)", fill: "forwards" }
+  ).onfinish = () => old.remove();
+  next.animate(
+    [
+      { opacity: 0, translate: "0 70%" },
+      { opacity: 1, translate: "0 0" },
+    ],
+    { duration: 220, easing: EASE }
+  );
 }
 
 /**
@@ -164,6 +198,46 @@ if (bar && "ResizeObserver" in window) {
     document.documentElement.style.setProperty("--status-h", `${bar.offsetHeight}px`);
   }).observe(bar);
 }
+
+/* ------------------------------------------------------------- motion --- */
+
+// The arrival plays once. The class that starts it is set in the head before
+// first paint; taking it off afterwards is what stops it replaying whenever a
+// section comes back on screen (New chat brings the headline back).
+if (document.documentElement.classList.contains("intro")) {
+  setTimeout(() => document.documentElement.classList.remove("intro"), 1100);
+}
+
+// Charts draw themselves when scrolled to. Elements start drawn; this marks
+// the page as able to do better than that, and each chart as arrived.
+const revealIO =
+  "IntersectionObserver" in window && !REDUCED
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            entry.target.classList.add("in-view");
+            revealIO.unobserve(entry.target);
+          }
+        },
+        { threshold: 0.2 }
+      )
+    : null;
+
+/** Have `el` draw itself the next time it is on screen (now, if it already is). */
+export function reveal(el) {
+  if (!el) return;
+  if (!revealIO) {
+    el.classList.add("in-view");
+    return;
+  }
+  el.classList.remove("in-view");
+  void el.offsetWidth; // commit the undrawn state before it can be drawn
+  revealIO.observe(el);
+}
+
+document.documentElement.classList.add("reveal-ready");
+$$(".stack").forEach(reveal);
 
 /* ---------------------------------------------------------- telemetry --- */
 

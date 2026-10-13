@@ -356,7 +356,18 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 **The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off.
 
 ### Motion
-State changes only: 120ms for colour, 200ms for position, on `cubic-bezier(0.16, 1, 0.3, 1)`. There is one entrance, for things that arrive in the thread (6 to 8px rise, 200ms), and one authored move: the composer travels from under the headline to the foot of the sheet when the first question is sent. The status line is the one place the page moves on its own. Bars and meters animate `scaleX`, never width. Under reduced motion the loops stop and travel is removed, while colour and opacity transitions stay so the interface still acknowledges input.
+Motion explains a change or acknowledges an action; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances.
+
+- **The arrival.** Come to from outside (a typed address, a link from elsewhere, a reload), a page assembles once in reading order: headline, what it is, where to type, what to try, each rising 10px out of nothing, 50ms apart. It does not replay on New chat or when moving between the site's own pages.
+- **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
+- **Between pages.** The top bar and the status line are the same on every page, so they hold still and only the sheet between them changes (cross-document view transitions; other browsers simply navigate).
+- **The status line.** The state word slides when the state changes: the old word leaves upward, the new one comes up from below. Core columns and meters ease between samples. The dot breathes while waiting.
+- **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
+- **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
+- **The thread.** Questions, route steps and tool figures enter from just below (6 to 8px, 240ms).
+- **Charts.** Bars grow from the baseline, the memory budget fills segment by segment and the history line is drawn left to right, each when scrolled to and once only.
+
+Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed and charts are shown drawn, while colour and opacity transitions stay so the interface still acknowledges input.
 
 ## Do's and Don'ts
 

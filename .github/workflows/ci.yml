@@ -2,6 +2,12 @@ name: CI
 
 # The interface is built here, not on the server: the server pulls finished
 # files and never runs Node.
+#
+# Every push to master and every pull request is type-checked, linted, tested
+# and built, and the built interface is driven in a browser against the real
+# server. A push to master that passes all of that is then published: the
+# built files are committed to the `release` branch, which is what a server
+# pulls (scripts/publish_release.sh).
 
 on:
   push:
@@ -57,3 +63,94 @@ jobs:
           grep -v '^llama-cpp-python' requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
       - run: python -m unittest discover -s tests -t .
+
+  browser:
+    name: Browser (the built interface on the real server, mock mode)
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+      # Playwright starts the server itself; this is the interpreter it uses.
+      AURORA_PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Mock mode needs no model and no llama.cpp: the engine imports it only
+      # when there is a model to load.
+      - run: |
+          grep -v '^llama-cpp-python' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - name: Browser tests
+        run: npm run e2e
+        working-directory: web
+      # The same tests under a made-up hostname, so the page is not a secure
+      # context: no navigator.clipboard, no crypto.randomUUID. That is how the
+      # site is reached at http://<server ip>, and localhost hides it.
+      - name: Browser tests, insecure context
+        run: npm run e2e
+        working-directory: web
+        env:
+          AURORA_E2E_INSECURE: "1"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
+
+  release:
+    name: Publish the built files to the release branch
+    # Only what is on master, and only once everything above has passed.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [web, server, browser]
+    runs-on: ubuntu-latest
+    # The one job that may write to the repository.
+    permissions:
+      contents: write
+    # One publish at a time, in order, and never cut off halfway.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      # A run can be overtaken: by the time its tests pass, master may have
+      # moved, or an older run may be re-run by hand. Publishing it then would
+      # put older code on top of newer. Only master's tip is published; the
+      # run for the newer commit publishes that one.
+      - name: Is this still master's tip?
+        id: tip
+        run: |
+          tip="$(git ls-remote origin refs/heads/master | cut -f1)"
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::master is now $tip; this run is for $GITHUB_SHA and publishes nothing."
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.tip.outputs.current == 'true'
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build and publish
+        if: steps.tip.outputs.current == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bash scripts/publish_release.sh

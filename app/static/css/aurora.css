@@ -980,7 +980,8 @@ body {
   .intro .skill-list li,
   .intro .page-head > *,
   .intro .wrap > section,
-  .convo-list.stagger > * {
+  .convo-list.stagger > *,
+  .fresh {
     animation: none !important;
     transform: none !important;
     translate: none !important;

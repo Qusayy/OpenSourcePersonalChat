@@ -272,6 +272,47 @@ function caretHost(root) {
   return el;
 }
 
+/* Ink-in.
+ *
+ * Text that has just arrived fades up from nothing, so an answer is seen being
+ * written rather than appearing in slabs ten times a second. The block being
+ * written is rebuilt on every tick, which would restart any animation inside
+ * it. So the renderer remembers which stretches of that block are new, as
+ * offsets into its rendered text with the time each arrived, and wraps them
+ * again after every rebuild with the animation already that far along.
+ */
+const INK_MS = 280; // matches `ink-in` in chat.css
+
+function inkIn(root, ranges, now) {
+  if (!ranges.length) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+  let offset = 0;
+  for (const node of nodes) {
+    const start = offset;
+    const end = start + node.nodeValue.length;
+    offset = end;
+    // White space between blocks is counted but never wrapped: a span there
+    // would be a stray child of a list or a table row.
+    if (!node.nodeValue.trim()) continue;
+    // Latest stretch first. Wrapping splits the text node and leaves its
+    // beginning in place, so the offsets of earlier stretches stay true.
+    for (let i = ranges.length - 1; i >= 0; i--) {
+      const from = Math.max(ranges[i].start, start);
+      const to = Math.min(ranges[i].end, end);
+      if (from >= to) continue;
+      const range = document.createRange();
+      range.setStart(node, from - start);
+      range.setEnd(node, to - start);
+      const span = document.createElement("span");
+      span.className = "fresh";
+      span.style.animationDelay = `${-Math.round(now - ranges[i].at)}ms`;
+      range.surroundContents(span);
+    }
+  }
+}
+
 function proseRenderer(host) {
   const stable = document.createElement("div");
   const tail = document.createElement("div");
@@ -279,18 +320,46 @@ function proseRenderer(host) {
   caret.className = "caret";
   host.append(stable, tail);
   let settled = 0; // blocks already committed to `stable`
+  let written = 0; // rendered length of the block being written, at the last tick
+  let fresh = []; // {start, end, at}: stretches of that block still fading up
+
+  /** Note what is new in a block `length` long, and return what is still fading. */
+  const mark = (length, now) => {
+    fresh = fresh.filter((r) => now - r.at < INK_MS);
+    // Shorter than it was: a closing mark arrived and markdown re-read what
+    // was there ("**bold" became bold). The offsets no longer mean what they
+    // did, so nothing is wrapped this time.
+    if (length < written) fresh = [];
+    else if (length > written) fresh.push({ start: written, end: length, at: now });
+    written = length;
+    return fresh;
+  };
 
   return {
     update(raw, caretOn) {
+      const now = performance.now();
       const blocks = splitBlocks(raw);
       // Commit every block that is now finished, appending rather than
       // rebuilding so existing nodes are left alone.
       while (settled < blocks.length - 1) {
-        stable.insertAdjacentHTML("beforeend", renderMarkdown(blocks[settled]));
+        const html = renderMarkdown(blocks[settled]);
+        if (REDUCED) {
+          stable.insertAdjacentHTML("beforeend", html);
+        } else {
+          // Its last words may still be fading up, and it will not be
+          // rendered again: wrap them once, here, on the way in.
+          const done = document.createElement("div");
+          done.innerHTML = html;
+          inkIn(done, mark(done.textContent.length, now), now);
+          stable.append(...done.childNodes);
+          written = 0;
+          fresh = [];
+        }
         settled++;
       }
       const last = blocks[blocks.length - 1];
       tail.innerHTML = last === undefined ? "" : renderMarkdown(last);
+      if (!REDUCED) inkIn(tail, mark(tail.textContent.length, now), now);
       if (caretOn) caretHost(tail).appendChild(caret);
       else caret.remove();
     },
@@ -300,6 +369,8 @@ function proseRenderer(host) {
       stable.innerHTML = "";
       tail.innerHTML = renderMarkdown(raw);
       settled = 0;
+      written = 0;
+      fresh = [];
     },
   };
 }

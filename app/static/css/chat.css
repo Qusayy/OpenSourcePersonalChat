@@ -565,6 +565,20 @@
   }
 }
 
+/* Text that has just arrived (chat.js wraps it, and gives each stretch a
+   negative delay so a rebuild of the block does not restart it). Opacity
+   only: nothing here may move the line it is in. */
+.fresh {
+  /* A gentler curve than the entrances use: with theirs the fade would be all
+     but over in the first 100ms, and the text arrives in 100ms steps. */
+  animation: ink-in 280ms cubic-bezier(0.5, 1, 0.89, 1) both;
+}
+@keyframes ink-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* what this answer cost */
 .msg-foot {
   display: flex;

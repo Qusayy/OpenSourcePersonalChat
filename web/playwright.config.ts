@@ -20,7 +20,7 @@ import { defineConfig, devices } from "@playwright/test";
                             no crypto.randomUUID, as on http://<server ip>  */
 
 const PORT = Number(process.env.AURORA_E2E_PORT ?? 8799);
-const INSECURE = Boolean(process.env.AURORA_E2E_INSECURE);
+export const INSECURE = Boolean(process.env.AURORA_E2E_INSECURE);
 const HOST = INSECURE ? "aurora.test" : "127.0.0.1";
 
 /** Where the app itself listens, whatever name the browser is given for it.

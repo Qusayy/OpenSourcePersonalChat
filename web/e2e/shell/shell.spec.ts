@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { APP, FOREIGN_PAGE, fixMachine, forward } from "../support";
+import { APP, FOREIGN_PAGE, fixMachine, forward, INSECURE } from "../support";
 
 /* The frame every page shares: the top bar, the status line, moving between
    pages, and what the server says about a page that does not exist. */
@@ -146,6 +146,16 @@ test.describe("what the server sends", () => {
     expect(response.status()).toBe(404);
     expect(await response.text()).not.toContain("<html");
   });
+});
+
+test("the page is in the kind of context the run says it is", async ({ page }) => {
+  // The insecure run exists to find code that only works over HTTPS or on
+  // localhost. It proves nothing unless the page really is insecure there.
+  await page.goto("/about");
+  expect(await page.evaluate(() => window.isSecureContext)).toBe(!INSECURE);
+  expect(await page.evaluate(() => typeof navigator.clipboard)).toBe(
+    INSECURE ? "undefined" : "object",
+  );
 });
 
 test("nothing is logged to the console on any page", async ({ page }) => {

@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import type { APIResponse, Page, Route } from "@playwright/test";
 import { APP, DB, PYTHON, REPO, SERVER_ENV } from "../playwright.config";
 
-export { APP, FOREIGN_PAGE } from "../playwright.config";
+export { APP, FOREIGN_PAGE, INSECURE } from "../playwright.config";
 
 /**
  * Let a routed request through to the app and return its answer, so a test

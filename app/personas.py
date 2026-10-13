@@ -29,6 +29,14 @@ class Persona:
     def as_dict(self) -> dict:
         return asdict(self)
 
+    def public(self) -> dict:
+        """What a page needs to offer this persona: its name and what it is for.
+
+        The system prompt and the sampling profile are used here, on the server.
+        Nothing in the interface reads them, so they are not sent with it.
+        """
+        return {"id": self.id, "name": self.name, "blurb": self.blurb}
+
     def sampling(self) -> dict:
         return {
             "temperature": self.temperature,
@@ -132,4 +140,4 @@ def get_persona(persona_id: str | None) -> Persona:
 
 
 def persona_list() -> list[dict]:
-    return [p.as_dict() for p in PERSONAS.values()]
+    return [p.public() for p in PERSONAS.values()]

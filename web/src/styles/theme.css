@@ -1,0 +1,320 @@
+/* Design tokens, and the Tailwind theme that points at them.
+
+   One quiet sheet, two inks, one live colour. Light is the designed case — a
+   visitor arriving from a GitHub profile in a browser tab — and the dark
+   scheme follows the visitor's OS setting. There is no theme switch; setting
+   data-theme="light" or "dark" on <html> pins one, which is how screenshots of
+   both are taken.
+
+   Colour is authored in OKLCH with every neutral tinted toward the accent hue
+   (150°), so the greys stay of a piece with the green instead of going flat.
+   Contrast, checked against both sheets in both schemes:
+
+     pair                 light     dark     floor
+     --ink   on --sheet   16.5:1    15.6:1   4.5
+     --ink-2 on --sheet    7.1:1     7.8:1   4.5
+     --ink-2 on --sheet-2  6.5:1     7.1:1   4.5
+     --live  on --sheet-2  5.9:1    10.0:1   4.5
+     --fault on --sheet-2  6.4:1     7.1:1   4.5
+     --caution on --sheet-2 6.1:1    9.9:1   4.5
+
+   There are two inks and no third. Hierarchy comes from size, weight and
+   space; a fainter grey is not available to reach for.
+
+   --live is not a brand colour to decorate with. It marks the thing that is
+   happening right now — the caret, the running figure, the state dot — and
+   nothing that is merely selected or important.
+
+   The tokens are plain custom properties on :root, so the scheme is changed by
+   redefining them and nothing else. The @theme block at the end of this file
+   names each one for Tailwind: `bg-sheet` is var(--sheet), `p-4` is
+   var(--s-4), `text-3` is var(--t-3). A utility therefore follows the scheme
+   without a `dark:` variant, and a value that is not a token cannot be typed
+   as one. */
+
+@font-face {
+  font-family: "Recursive";
+  src: url("../assets/fonts/Recursive_VF_1.085--subset-GF_latin_basic.woff2") format("woff2");
+  font-weight: 300 1000;
+  font-style: oblique 0deg 15deg;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* colour roles */
+  --sheet: oklch(98.5% 0.004 150);
+  --sheet-2: oklch(95.5% 0.007 150);
+  --rule: oklch(87% 0.01 150);
+  --ink: oklch(22% 0.015 150);
+  --ink-2: oklch(45% 0.018 150);
+  --live: oklch(46% 0.12 152);
+  --fault: oklch(48% 0.19 27);
+  --caution: oklch(47% 0.095 70);
+  --scrim: oklch(22% 0.015 150 / 0.32);
+  /* Ink a little nearer the sheet: a filled control under the pointer. Mixed
+     from the two, so it follows the scheme without a second definition. */
+  --ink-hover: color-mix(in oklch, var(--ink) 84%, var(--sheet));
+
+  /* Charts. A single series is drawn in ink: there is no category for a
+     colour to name, and a hue there would read as the page's second accent.
+     --bar-step is the same ink one step fainter, nearer the sheet, for the
+     second of an ordered pair such as p50 and p95. Fainter, not lighter: on
+     the dark sheet the receding step is the darker one. */
+  --bar: var(--ink);
+  --bar-step: oklch(64% 0.012 150);
+
+  /* The one chart with categories, the memory budget, takes these four in
+     this fixed order: blue, magenta, violet, orange. None is a hue the
+     interface uses for state. Steps come from a validated palette and were
+     re-checked on these sheets; see the benchmark page. */
+  --c1: #2a78d6;
+  --c2: #e87ba4;
+  --c3: #6250d6;
+  --c4: #eb6834;
+
+  /* type — one family. The MONO axis turns the same letterforms fixed-width,
+     so a figure that ticks sits in running text without changing voice. */
+  --font:
+    "Recursive", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans", sans-serif;
+  --font-fixed:
+    "Recursive", ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono",
+    monospace;
+  /* Running text. Light text on a dark sheet reads heavier than the same
+     weight in ink on white, so the dark scheme takes a little off. */
+  --w-text: 400;
+
+  --t-1: 0.8125rem; /* 13 — the floor; nothing is set smaller */
+  --t-2: 0.9375rem; /* 15 — controls, status line */
+  --t-3: 1.0625rem; /* 17 — body, answers, the input */
+  --t-4: 1.25rem; /*   20 — the question */
+  --t-5: 1.5rem; /*    24 — section headings */
+  --t-6: 2rem; /*      32 — a figure that is the answer */
+  --t-7: 3.25rem; /*   52 — the headline */
+
+  /* space */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+
+  /* shape — two radii. Nothing is a pill. */
+  --r-1: 4px;
+  --r-2: 8px;
+
+  /* depth — one shadow, for things that float over the sheet */
+  --sh-pop: 0 1px 2px oklch(22% 0.015 150 / 0.08), 0 12px 32px -8px oklch(22% 0.015 150 / 0.22);
+
+  /* motion — state changes only */
+  /* Arrivals decelerate; exits leave faster than things arrive. */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --dur-1: 120ms; /* feedback: hover, press, colour */
+  --dur-2: 200ms; /* a routine change of state */
+  --dur-3: 320ms; /* something moving across part of the screen */
+  --dur-4: 480ms; /* an entrance, or a chart drawing itself */
+
+  /* layers */
+  --z-status: 10;
+  --z-pop: 30;
+  --z-toast: 60;
+  --z-skip: 200;
+
+  /* layout — everything is centred. The top bar and the status line share
+     one container, --page wide, so both start and end on the same two lines
+     at any window width; --inset is the space either side of it. The reading
+     column, --col, is centred inside. --edge is the least space anything
+     keeps from the window. */
+  --page: 76rem;
+  --col: 42rem;
+  --edge: 24px;
+  --inset: max(var(--edge), calc((100vw - var(--page)) / 2));
+  --bar-h: 56px;
+}
+
+/* At phone width the headline takes one step down. Set here, once, so every
+   page's headline follows and no component carries the size as a literal. */
+@media (max-width: 620px) {
+  :root {
+    --t-7: 2.25rem;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sheet: oklch(17% 0.01 150);
+    --sheet-2: oklch(21.5% 0.012 150);
+    --rule: oklch(31% 0.014 150);
+    --ink: oklch(93% 0.01 150);
+    --ink-2: oklch(72% 0.018 150);
+    --live: oklch(80% 0.19 150);
+    --fault: oklch(74% 0.14 27);
+    --caution: oklch(82% 0.13 82);
+    --scrim: oklch(8% 0.01 150 / 0.6);
+    --w-text: 360;
+    --bar: var(--ink);
+    --bar-step: oklch(58% 0.016 150);
+    --c1: #3987e5;
+    --c2: #d55181;
+    --c3: #9085e9;
+    --c4: #d95926;
+    --sh-pop: 0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --sheet: oklch(17% 0.01 150);
+  --sheet-2: oklch(21.5% 0.012 150);
+  --rule: oklch(31% 0.014 150);
+  --ink: oklch(93% 0.01 150);
+  --ink-2: oklch(72% 0.018 150);
+  --live: oklch(80% 0.19 150);
+  --fault: oklch(74% 0.14 27);
+  --caution: oklch(82% 0.13 82);
+  --scrim: oklch(8% 0.01 150 / 0.6);
+  --w-text: 360;
+  --bar: var(--ink);
+  --bar-step: oklch(58% 0.016 150);
+  --c1: #3987e5;
+  --c2: #d55181;
+  --c3: #9085e9;
+  --c4: #d95926;
+  --sh-pop: 0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* ------------------------------------------------------- Tailwind theme -- */
+
+/* Tailwind's own palette, type scale, spacing scale, radii, shadows, easings
+   and breakpoints are removed, so the only names that exist are the ones
+   below. A literal that is not a token is still writable, in brackets, where
+   it can be seen for what it is: `gap-[6px]`. */
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --font-weight-*: initial;
+  --tracking-*: initial;
+  --leading-*: initial;
+  --spacing: initial;
+  --spacing-*: initial;
+  --breakpoint-*: initial;
+  --container-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --blur-*: initial;
+  --ease-*: initial;
+  --animate-*: initial;
+}
+
+@theme inline {
+  --color-sheet: var(--sheet);
+  --color-sheet-2: var(--sheet-2);
+  --color-rule: var(--rule);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-hover: var(--ink-hover);
+  --color-live: var(--live);
+  --color-fault: var(--fault);
+  --color-caution: var(--caution);
+  --color-scrim: var(--scrim);
+  --color-bar: var(--bar);
+  --color-bar-step: var(--bar-step);
+  --color-c1: var(--c1);
+  --color-c2: var(--c2);
+  --color-c3: var(--c3);
+  --color-c4: var(--c4);
+
+  --font-sans: var(--font);
+  --font-mono: var(--font-fixed);
+
+  --text-1: var(--t-1);
+  --text-2: var(--t-2);
+  --text-3: var(--t-3);
+  --text-4: var(--t-4);
+  --text-5: var(--t-5);
+  --text-6: var(--t-6);
+  --text-7: var(--t-7);
+
+  /* Weight is a continuous axis in this face; these are the stops in use. */
+  --font-weight-text: var(--w-text);
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --spacing-0: 0px;
+  --spacing-1: var(--s-1);
+  --spacing-2: var(--s-2);
+  --spacing-3: var(--s-3);
+  --spacing-4: var(--s-4);
+  --spacing-5: var(--s-5);
+  --spacing-6: var(--s-6);
+  --spacing-7: var(--s-7);
+  --spacing-8: var(--s-8);
+  --spacing-9: var(--s-9);
+  --spacing-edge: var(--edge);
+  --spacing-inset: var(--inset);
+  --spacing-bar: var(--bar-h);
+
+  --container-col: var(--col);
+  --container-page: var(--page);
+
+  --radius-1: var(--r-1);
+  --radius-2: var(--r-2);
+
+  --shadow-pop: var(--sh-pop);
+
+  --ease-arrive: var(--ease);
+  --ease-leave: var(--ease-exit);
+
+  /* A transition that names no curve takes the browser's own, as a plain
+     `transition: color 120ms` does. */
+  --default-transition-timing-function: ease;
+
+  --animate-toast-in: toast-in var(--dur-2) var(--ease);
+}
+
+/* Widths at which the layout changes, as the exact queries the design was
+   drawn to. Tailwind's own `max-*` variants stop one pixel short of these
+   (`width < 620px` where the design says `max-width: 620px`), so they are
+   spelled out and the built-in ones are not used. */
+@custom-variant ge-1264 (@media (min-width: 1264px));
+@custom-variant le-1263 (@media (max-width: 1263px));
+@custom-variant le-760 (@media (max-width: 760px));
+@custom-variant le-680 (@media (max-width: 680px));
+@custom-variant le-640 (@media (max-width: 640px));
+@custom-variant le-620 (@media (max-width: 620px));
+@custom-variant coarse (@media (pointer: coarse));
+
+/* `hover:` means :hover, on every device. Tailwind's own applies only where
+   the pointer can hover, so on a phone a tapped control would no longer take
+   its pressed-and-held tint the way every control here always has. */
+@custom-variant hover (&:hover);
+
+/* Arriving from outside, the page introduces itself once: <html> carries
+   `intro` for the first second (set before first paint in index.html, taken
+   off by the shell). `intro:` styles an element only during that arrival. */
+@custom-variant intro (&:where(:root.intro *));
+
+/* Figures and code: the same face, fixed-width. Numbers that change every
+   frame must not reflow the line around them. */
+@utility num {
+  font-family: var(--font-fixed);
+  font-variation-settings:
+    "MONO" 1,
+    "CASL" 0;
+  font-variant-numeric: tabular-nums;
+}

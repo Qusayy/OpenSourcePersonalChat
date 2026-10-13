@@ -4,25 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-import mimetypes
 import threading
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import __version__, bench, db, telemetry
-from .config import APP_DIR, settings
+from .config import settings
 from .llm import engine
 from .personas import DEFAULT_PERSONA, get_persona, persona_list
 from .router import route
 from .skills import build_prompt, get_skill, skill_list
 from .tools import REGISTRY, call_tool
 from .tools.base import available as available_tools
+from .web import Frontend, not_found
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache, no-transform",
@@ -47,72 +45,92 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Aurora", lifespan=lifespan, docs_url=None, redoc_url=None)
-# Python's table has no entry for woff2 before 3.13 (and none at all on some
-# Windows installs), so StaticFiles would send the typeface as octet-stream.
-mimetypes.add_type("font/woff2", ".woff2")
-app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+frontend = Frontend()
 
 
 def sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def page_context(**extra) -> dict:
-    ctx = {
+def bench_static() -> dict:
+    """What the benchmark page shows before any run: the suite, the reference
+    machines, the memory estimate and how a larger model would stand here."""
+    budget = bench.memory_budget(settings.n_ctx)
+    return {
+        "cases": bench.CASES,
+        "reference": bench.REFERENCE,
+        "budget": budget,
+        "larger": bench.larger_model(budget, telemetry.snapshot()),
+        "latest": bench.latest_summary(),
+    }
+
+
+def bootstrap() -> dict:
+    """The first values a page shows, written into its HTML so they are on
+    screen at load instead of appearing a second later.
+
+    Everything here is also public through the API. It is what the page reads
+    and no more: no system prompts, no paths.
+    """
+    return {
+        "version": __version__,
         "info": engine.info(),
-        # Rendered into the first paint, so the live figures are there on load
-        # instead of appearing a second later.
         "system": telemetry.snapshot(),
         "personas": persona_list(),
-        "default_persona": DEFAULT_PERSONA,
-        "settings": settings,
-        "version": __version__,
+        "defaultPersona": DEFAULT_PERSONA,
         "skills": skill_list(),
         "tools": [t.as_dict() for t in available_tools()],
+        "conversations": db.list_conversations(),
+        "bench": bench_static(),
     }
-    ctx.update(extra)
-    return ctx
-
-
-def memory_context() -> dict:
-    """The memory estimate, and how a larger model would stand on this machine."""
-    budget = bench.memory_budget(settings.n_ctx)
-    return {"budget": budget, "larger": bench.larger_model(budget, telemetry.snapshot())}
 
 
 # ------------------------------------------------------------------ pages ---
 
+# One HTML file serves every route; the browser's router draws the page. The
+# title and description are still set here, per route, so a link preview or a
+# reader without JavaScript gets the right ones.
 
-@app.get("/", response_class=HTMLResponse)
-async def page_chat(request: Request):
-    return templates.TemplateResponse(
-        request, "chat.html", page_context(page="chat", conversations=db.list_conversations())
+
+def render_page(page: str, status_code: int = 200) -> Response:
+    data = bootstrap()
+    info = data["info"]
+    titles = {
+        "chat": f"Aurora — {info['model']}",
+        "bench": f"Benchmark — {info['model']}",
+        "about": "About — Aurora",
+    }
+    description = (
+        f"{info['params']} {info['model']} running locally on a {info['hardware']} "
+        "— with the numbers on screen."
+    )
+    return frontend.page(
+        page=page,
+        title=titles[page],
+        description=description,
+        bootstrap=data,
+        status_code=status_code,
     )
 
 
-@app.get("/bench", response_class=HTMLResponse)
-async def page_bench(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "bench.html",
-        page_context(
-            page="bench",
-            cases=bench.CASES,
-            reference=bench.REFERENCE,
-            latest=bench.latest_summary(),
-            **memory_context(),
-        ),
-    )
+@app.get("/")
+async def page_chat():
+    return render_page("chat")
 
 
-@app.get("/about", response_class=HTMLResponse)
-async def page_about(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "about.html",
-        page_context(page="about", **memory_context()),
-    )
+@app.get("/bench")
+async def page_bench():
+    return render_page("bench")
+
+
+@app.get("/about")
+async def page_about():
+    return render_page("about")
+
+
+@app.get("/assets/{name:path}")
+async def asset(name: str):
+    return frontend.asset(name)
 
 
 # ------------------------------------------------------------------- api ----
@@ -121,6 +139,13 @@ async def page_about(request: Request):
 @app.get("/api/health")
 async def api_health():
     return {"engine": engine.info(), "system": telemetry.snapshot(), "chat": db.chat_stats()}
+
+
+@app.get("/api/bootstrap")
+async def api_bootstrap():
+    """The same values a served page carries, for a page that was not served
+    by this app (the Vite dev server)."""
+    return bootstrap()
 
 
 @app.get("/api/telemetry")
@@ -394,22 +419,16 @@ async def api_bench_run():
 
 @app.get("/api/bench/results")
 async def api_bench_results():
-    return {
-        "latest": bench.latest_summary(),
-        "history": bench.history(),
-        "reference": bench.REFERENCE,
-        "budget": bench.memory_budget(settings.n_ctx),
-        "info": engine.info(),
-    }
+    return {**bench_static(), "history": bench.history(), "info": engine.info()}
 
 
 @app.exception_handler(404)
-async def not_found(request: Request, exc):  # noqa: ANN001
-    if request.url.path.startswith("/api/"):
+async def handle_404(request: Request, exc):  # noqa: ANN001
+    path = request.url.path
+    if path.startswith("/api/"):
         return JSONResponse({"error": "not found"}, status_code=404)
-    return templates.TemplateResponse(
-        request,
-        "chat.html",
-        page_context(page="chat", conversations=db.list_conversations()),
-        status_code=404,
-    )
+    # A missing file is a missing file. Only something that could be a page
+    # gets the page.
+    if path.startswith("/assets/") or "." in path.rsplit("/", 1)[-1]:
+        return not_found()
+    return render_page("chat", status_code=404)

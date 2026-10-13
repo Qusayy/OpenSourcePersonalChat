@@ -347,8 +347,8 @@ class DescribeTests(unittest.TestCase):
             return telemetry.describe()
 
     def test_reads_as_a_noun_phrase_after_an_article(self) -> None:
-        # Templates write "on a {{ hardware }}"; the phrase must not start with
-        # a number, or eight cores would need "an".
+        # Pages write "on a <hardware>"; the phrase must not start with a
+        # number, or eight cores would need "an".
         self.assertEqual(self.describe_with(2, 3888.0), "machine with 2 cores and 3.8 GB of RAM")
         self.assertEqual(self.describe_with(8, 16000.0), "machine with 8 cores and 15.6 GB of RAM")
 

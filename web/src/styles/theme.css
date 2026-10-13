@@ -53,6 +53,9 @@
   --fault: oklch(48% 0.19 27);
   --caution: oklch(47% 0.095 70);
   --scrim: oklch(22% 0.015 150 / 0.32);
+  /* Ink a little nearer the sheet: a filled control under the pointer. Mixed
+     from the two, so it follows the scheme without a second definition. */
+  --ink-hover: color-mix(in oklch, var(--ink) 84%, var(--sheet));
 
   /* Charts. A single series is drawn in ink: there is no category for a
      colour to name, and a hue there would read as the page's second accent.
@@ -223,6 +226,7 @@
   --color-rule: var(--rule);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
+  --color-ink-hover: var(--ink-hover);
   --color-live: var(--live);
   --color-fault: var(--fault);
   --color-caution: var(--caution);
@@ -275,6 +279,12 @@
 
   --ease-arrive: var(--ease);
   --ease-leave: var(--ease-exit);
+
+  /* A transition that names no curve takes the browser's own, as a plain
+     `transition: color 120ms` does. */
+  --default-transition-timing-function: ease;
+
+  --animate-toast-in: toast-in var(--dur-2) var(--ease);
 }
 
 /* Widths at which the layout changes, as the exact queries the design was
@@ -288,6 +298,11 @@
 @custom-variant le-640 (@media (max-width: 640px));
 @custom-variant le-620 (@media (max-width: 620px));
 @custom-variant coarse (@media (pointer: coarse));
+
+/* Arriving from outside, the page introduces itself once: <html> carries
+   `intro` for the first second (set before first paint in index.html, taken
+   off by the shell). `intro:` styles an element only during that arrival. */
+@custom-variant intro (&:where(:root.intro *));
 
 /* Figures and code: the same face, fixed-width. Numbers that change every
    frame must not reflow the line around them. */

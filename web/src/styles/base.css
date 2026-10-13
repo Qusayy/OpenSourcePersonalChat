@@ -65,6 +65,13 @@
     vertical-align: baseline;
   }
 
+  /* The exception: an icon from the icon set (lib/icons.tsx). On the text
+     baseline it nudges every label it shares a line with, so it is a block. */
+  .icon {
+    display: block;
+    flex: 0 0 auto;
+  }
+
   /* Selected text is tinted with ink. It is something chosen, not something
    happening, so it does not take the live colour. */
   ::selection {

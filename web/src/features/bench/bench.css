@@ -1,4 +1,429 @@
-/* Rules for this part of the interface that are written as CSS rather than as
-   utility classes. Put them in a layer (`@layer components { … }`) so a
-   utility on the same element still wins; utilities and variants declared
-   with @utility or @custom-variant go at the top level. */
+/* The charts and the table of the benchmark and about pages.
+
+   The pages themselves (features/bench, features/about) are utility classes.
+   What is here is what utilities cannot say cleanly: charts whose parts are
+   styled by where they sit in the chart, a table that turns into a list on a
+   phone, and the rules that hold a chart undrawn until it is scrolled to.
+
+   Charts are drawn in ink. A single series has no category for a colour to
+   name, so the bars, the history line and this server's range are --bar, and
+   the p50/p95 pair is that ink at two steps, the p95 the fainter, because the
+   two are ordered, not different things.
+
+   The memory budget is the one place four categories meet, and the only place
+   colour appears: --c1..--c4 in that fixed order. Validated against both
+   sheets with the palette validator (adjacent pairs): worst colour-blind
+   separation ΔE 13.0 light / 15.9 dark, worst normal-vision 19.7. One slot,
+   the light-scheme magenta, sits under 3:1 against the sheet, which is why
+   every segment is also named with its value in the legend beneath it. */
+
+/* The arrival, once, when the page is come to from outside: the heading, the
+   paragraph, the contents list and each section rise in, 50ms apart.
+   `intro:arrive-2` is the third of them. Under reduced motion nothing
+   travels: the element is simply there. */
+@utility arrive-* {
+  animation: rise-in var(--dur-4) var(--ease) backwards;
+  animation-delay: calc(--value(integer) * 50ms);
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+/* Two things need more room than a reading column: the eight-column table
+   and the history chart. They break out of it by the same amount on each
+   side, to at most 56rem across, and so stay centred on the page's axis.
+   --sbw is the scrollbar gutter the scroller keeps on each side (measured by
+   the shell); in a window too narrow to give anything, the amount is nought. */
+@utility breakout {
+  --out: clamp(
+    0px,
+    (100vw - 2 * var(--sbw, 0px) - var(--col)) /
+    2 -
+    var(--edge),
+    (56rem - var(--col)) /
+    2
+  );
+  margin-inline: calc(var(--out) * -1);
+}
+
+@layer components {
+  /* ---------------------------------------------------------- bar chart */
+
+  .chart {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: 9rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s-3);
+  }
+  .bar-row .lab {
+    font-size: var(--t-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar-row .lab small {
+    display: block;
+    color: var(--ink-2);
+    font-size: var(--t-1);
+  }
+
+  .track {
+    position: relative;
+    height: 20px;
+    background: var(--sheet-2);
+    overflow: hidden;
+  }
+  .track i {
+    position: absolute;
+    inset: 0;
+    /* rounded data end, anchored square to the baseline */
+    border-radius: 0 var(--r-1) var(--r-1) 0;
+    background: var(--bar);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform var(--dur-2) var(--ease);
+  }
+  /* p95: the same ink, one step fainter, so the median leads in both schemes
+     and the sentence above the chart holds in both. */
+  .track i.alt {
+    background: var(--bar-step);
+  }
+  .bar-row .val {
+    font-family: var(--font-fixed);
+    font-variation-settings:
+      "MONO" 1,
+      "CASL" 0;
+    font-variant-numeric: tabular-nums;
+    font-size: var(--t-2);
+    white-space: nowrap;
+  }
+  .bar-row .val small {
+    color: var(--ink-2);
+    font-size: var(--t-1);
+  }
+
+  /* Hardware names are longer than case names — give them room rather than
+     truncating the one column a reader needs to identify the row. */
+  #chart-ref .bar-row {
+    grid-template-columns: 13rem minmax(0, 1fr) auto;
+  }
+  #chart-ref .bar-row .lab {
+    white-space: normal;
+  }
+
+  /* range strip: where this machine sits against reference hardware */
+  .strip {
+    position: relative;
+    height: 20px;
+  }
+  .strip::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    background: var(--rule);
+  }
+  /* Other machines are context and recede; this one is drawn at full ink. */
+  .strip i {
+    position: absolute;
+    top: 50%;
+    height: 8px;
+    border-radius: var(--r-1);
+    background: color-mix(in oklch, var(--ink-2) 45%, var(--sheet));
+    transform: translateY(-50%);
+  }
+  .strip.self i {
+    background: var(--bar);
+  }
+  /* The measured value: an open ring, so it reads against the solid band it
+     sits on, with a sheet-coloured gap to part it from that band. */
+  .strip b {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    background: var(--sheet);
+    box-shadow: 0 0 0 2px var(--sheet);
+    transform: translateY(-50%);
+  }
+
+  /* ------------------------------------------------------- stacked bar -- */
+
+  .stack {
+    display: flex;
+    gap: 2px; /* 2px surface gap between segments */
+    height: 28px;
+    margin-bottom: var(--s-3);
+  }
+  /* Segments meet square, parted by the gap; only the two outer ends of the
+     bar are rounded, with the one radius everything else uses. */
+  .stack span {
+    height: 100%;
+  }
+  .stack span:first-child {
+    border-radius: var(--r-1) 0 0 var(--r-1);
+  }
+  .stack span:last-child {
+    border-radius: 0 var(--r-1) var(--r-1) 0;
+  }
+
+  /* ---------------------------------------------------------- line chart */
+
+  /* Drawn at the pixel width it is given (HistoryChart), so the labels are
+     the size the stylesheet says and not whatever a stretched viewBox makes
+     them. */
+  .linechart {
+    display: block;
+    width: 100%;
+    height: 190px;
+    overflow: visible;
+  }
+  .linechart .grid {
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+  .linechart .lbl {
+    fill: var(--ink-2);
+    font-size: var(--t-1);
+    font-variant-numeric: tabular-nums;
+  }
+  .linechart .lbl.strong {
+    fill: var(--ink);
+  }
+  .linechart .series {
+    fill: none;
+    stroke: var(--bar);
+    stroke-width: 2;
+    stroke-linejoin: round;
+  }
+  .linechart .area {
+    fill: color-mix(in oklch, var(--bar) 7%, transparent);
+  }
+  .linechart .pt {
+    fill: var(--bar);
+    stroke: var(--sheet);
+    stroke-width: 2;
+  }
+
+  /* -------------------------------------------------------------- table */
+
+  .tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--t-2);
+  }
+  .tbl th,
+  .tbl td {
+    padding: var(--s-2) var(--s-3);
+    border-bottom: 1px solid var(--rule);
+    text-align: right;
+  }
+  .tbl th:first-child,
+  .tbl td:first-child {
+    padding-left: 0;
+    text-align: left;
+  }
+  .tbl th:last-child,
+  .tbl td:last-child {
+    padding-right: 0;
+  }
+  .tbl thead th {
+    border-bottom-color: var(--ink-2);
+    color: var(--ink-2);
+    font-size: var(--t-1);
+    font-weight: 600;
+  }
+  .tbl td {
+    font-family: var(--font-fixed);
+    font-variation-settings:
+      "MONO" 1,
+      "CASL" 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .tbl td:first-child {
+    font-family: var(--font);
+    font-variation-settings:
+      "MONO" 0,
+      "CASL" 0;
+  }
+  .tbl td.tbl-empty {
+    color: var(--ink-2);
+    font-family: var(--font);
+    font-variation-settings:
+      "MONO" 0,
+      "CASL" 0;
+    text-align: left;
+  }
+
+  /* Three columns on one line leaves the bar with ~55px on a phone — the value
+     text wins and the chart stops being a chart. Stack instead: label and
+     value share a line, the bar gets the full width beneath them. */
+  @media (max-width: 680px) {
+    .bar-row,
+    #chart-ref .bar-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "lab val"
+        "bar bar";
+      row-gap: var(--s-2);
+      margin-bottom: var(--s-1);
+    }
+    .bar-row .lab {
+      grid-area: lab;
+      white-space: normal;
+    }
+    .bar-row .track,
+    .bar-row .strip {
+      grid-area: bar;
+    }
+    .bar-row .val {
+      grid-area: val;
+      align-self: center;
+    }
+  }
+
+  /* An eight-column table does not survive a phone by scrolling sideways.
+     Below this width each row becomes a block and every cell carries its own
+     heading, so the data is read rather than dragged. */
+  @media (max-width: 640px) {
+    .tbl thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+    .tbl,
+    .tbl tbody,
+    .tbl tr,
+    .tbl td {
+      display: block;
+      width: 100%;
+    }
+    .tbl tr {
+      padding: var(--s-3) 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .tbl td,
+    .tbl td:first-child,
+    .tbl td:last-child {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--s-4);
+      padding: 2px 0;
+      border: 0;
+      text-align: right;
+    }
+    .tbl td::before {
+      content: attr(data-label);
+      color: var(--ink-2);
+      font-family: var(--font);
+      font-variation-settings:
+        "MONO" 0,
+        "CASL" 0;
+      text-align: left;
+    }
+    .tbl td:first-child {
+      margin-bottom: var(--s-1);
+      font-size: var(--t-3);
+      font-weight: 600;
+    }
+    .tbl td:first-child::before,
+    .tbl td.tbl-empty::before {
+      content: none;
+    }
+    .tbl td.tbl-empty {
+      display: block;
+    }
+  }
+
+  /* ------------------------------------------------------------- motion */
+
+  /* Charts draw themselves when they are scrolled to. `reveal-ready` is set
+     on <html> by the shell, and shell/reveal.ts adds `in-view`; without the
+     script nothing is hidden and the charts are simply there. */
+  .reveal-ready .track i {
+    transition: transform var(--dur-4) var(--ease);
+  }
+  .reveal-ready .in-view .track i {
+    transform: scaleX(var(--v, 0));
+  }
+  .reveal-ready .in-view .bar-row:nth-child(2) .track i {
+    transition-delay: 40ms;
+  }
+  .reveal-ready .in-view .bar-row:nth-child(3) .track i {
+    transition-delay: 80ms;
+  }
+  .reveal-ready .in-view .bar-row:nth-child(4) .track i {
+    transition-delay: 120ms;
+  }
+  .reveal-ready .in-view .bar-row:nth-child(5) .track i {
+    transition-delay: 160ms;
+  }
+  .reveal-ready .in-view .bar-row:nth-child(6) .track i {
+    transition-delay: 200ms;
+  }
+  :root:not(.reveal-ready) .track i {
+    transform: scaleX(var(--v, 0));
+  }
+
+  .reveal-ready .stack span {
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform var(--dur-4) var(--ease);
+  }
+  .reveal-ready .stack.in-view span {
+    transform: none;
+  }
+  .reveal-ready .stack.in-view span:nth-child(2) {
+    transition-delay: 80ms;
+  }
+  .reveal-ready .stack.in-view span:nth-child(3) {
+    transition-delay: 160ms;
+  }
+  .reveal-ready .stack.in-view span:nth-child(4) {
+    transition-delay: 240ms;
+  }
+
+  /* The history line is drawn left to right, then its points and fill appear. */
+  .reveal-ready .linechart .series {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    transition: stroke-dashoffset var(--dur-4) var(--ease);
+  }
+  .reveal-ready .linechart.in-view .series {
+    stroke-dashoffset: 0;
+  }
+  .reveal-ready .linechart .area,
+  .reveal-ready .linechart .pt {
+    opacity: 0;
+    transition: opacity var(--dur-3) var(--ease) 360ms;
+  }
+  .reveal-ready .linechart.in-view .area,
+  .reveal-ready .linechart.in-view .pt {
+    opacity: 1;
+  }
+
+  /* Reduced motion: charts are shown drawn, not drawing. */
+  @media (prefers-reduced-motion: reduce) {
+    .reveal-ready .track i,
+    .reveal-ready .stack span,
+    .reveal-ready .linechart .series,
+    .reveal-ready .linechart .area,
+    .reveal-ready .linechart .pt {
+      transition: none !important;
+    }
+  }
+}

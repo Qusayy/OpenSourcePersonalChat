@@ -1,8 +1,21 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Page } from "@playwright/test";
-import { DB, PYTHON, REPO, SERVER_ENV } from "../playwright.config";
+import type { APIResponse, Page, Route } from "@playwright/test";
+import { APP, DB, PYTHON, REPO, SERVER_ENV } from "../playwright.config";
+
+export { APP, FOREIGN_PAGE } from "../playwright.config";
+
+/**
+ * Let a routed request through to the app and return its answer, so a test
+ * can change part of it. Use this instead of `route.fetch()`: that call is
+ * made from the test process, which cannot resolve the made-up hostname of an
+ * insecure-context run, so the request is sent to the app's real address.
+ */
+export function forward(route: Route): Promise<APIResponse> {
+  const url = new URL(route.request().url());
+  return route.fetch({ url: APP + url.pathname + url.search });
+}
 
 /**
  * Put the database back to the three seeded conversations (e2e/seed.py). The
@@ -43,7 +56,7 @@ export async function fixMachine(page: Page, machine: typeof MACHINE = MACHINE):
   let n = 1;
   for (const path of ["**/api/telemetry", "**/api/health"]) {
     await page.route(path, async (route) => {
-      const response = await route.fetch();
+      const response = await forward(route);
       const body = await response.json();
       body.system = { ...machine, at: ++n };
       await route.fulfill({ response, json: body });

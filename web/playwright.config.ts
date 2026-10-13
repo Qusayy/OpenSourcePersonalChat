@@ -23,6 +23,13 @@ const PORT = Number(process.env.AURORA_E2E_PORT ?? 8799);
 const INSECURE = Boolean(process.env.AURORA_E2E_INSECURE);
 const HOST = INSECURE ? "aurora.test" : "127.0.0.1";
 
+/** Where the app itself listens, whatever name the browser is given for it.
+ *  Requests made from the test process (not from the page) go here: Node does
+ *  not know the made-up hostname, and the dev server is not the app. */
+export const APP = `http://127.0.0.1:${PORT}`;
+/** True when the page under test is not served by the app (the dev server). */
+export const FOREIGN_PAGE = Boolean(process.env.AURORA_E2E_BASE);
+
 export const REPO = fileURLToPath(new URL("..", import.meta.url));
 // Not under test-results: Playwright empties that folder as a run starts,
 // and the server already has this file open by then.
@@ -67,7 +74,7 @@ export default defineConfig({
   webServer: {
     command: `${PYTHON} -m uvicorn app.main:app --host 127.0.0.1 --port ${PORT} --log-level warning`,
     cwd: REPO,
-    url: `http://127.0.0.1:${PORT}/api/health`,
+    url: `${APP}/api/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
     env: SERVER_ENV,

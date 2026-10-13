@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { fixMachine } from "../support";
+import { APP, FOREIGN_PAGE, fixMachine, forward } from "../support";
 
 /* The frame every page shares: the top bar, the status line, moving between
    pages, and what the server says about a page that does not exist. */
@@ -25,7 +25,7 @@ test.describe("the status line", () => {
   test("keeps polling: a later sample replaces an earlier one", async ({ page }) => {
     let cpu = 5;
     await page.route("**/api/telemetry", async (route) => {
-      const response = await route.fetch();
+      const response = await forward(route);
       const body = await response.json();
       body.system = { ...body.system, cpus: 2, cores_pct: [cpu, cpu], cpu_pct: cpu };
       await route.fulfill({ response, json: body });
@@ -121,6 +121,9 @@ test.describe("moving between pages", () => {
 });
 
 test.describe("what the server sends", () => {
+  // These are about the app's own responses; the dev server's are not them.
+  test.skip(FOREIGN_PAGE, "the page under test is not served by the app");
+
   test("a page that does not exist is the chat page, with a 404", async ({ page }) => {
     const response = await page.goto("/no/such/page");
     expect(response?.status()).toBe(404);
@@ -129,7 +132,7 @@ test.describe("what the server sends", () => {
   });
 
   test("the first values are in the page, with no prompts and no paths", async ({ request }) => {
-    const html = await (await request.get("/")).text();
+    const html = await (await request.get(`${APP}/`)).text();
     const found = html.match(/<script type="application\/json" id="bootstrap">(.*?)<\/script>/s);
     expect(found).not.toBeNull();
     const boot = JSON.parse(found?.[1] ?? "null");
@@ -139,7 +142,7 @@ test.describe("what the server sends", () => {
   });
 
   test("a missing file is a 404, never the page", async ({ request }) => {
-    const response = await request.get("/assets/index-gone.js");
+    const response = await request.get(`${APP}/assets/index-gone.js`);
     expect(response.status()).toBe(404);
     expect(await response.text()).not.toContain("<html");
   });

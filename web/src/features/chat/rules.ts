@@ -1,0 +1,216 @@
+/* The chat page's rules that are not about the DOM: what counts as a long
+ * message, what a wait is called, which steps of an answer's route are worth
+ * a line, what the slash palette lists. Pure, so each can be tested by value.
+ */
+
+import { fmt, fmtInt, fmtMs } from "@/lib/format";
+import { hasIcon } from "@/lib/icons";
+import type { EngineInfo, Skill, StepEvent, Tool } from "@/lib/types";
+
+/* ------------------------------------------------------------- composer -- */
+
+export const MAX_CHARS = 8000; // matches the server's Field(max_length=8000)
+
+/** What the empty input says, given the server's condition. */
+export function placeholderFor(info: Pick<EngineInfo, "status">): string {
+  if (info.status === "ready") return "Ask something…";
+  return info.status === "error"
+    ? "The model could not be loaded — nothing can be sent right now"
+    : "The model is still loading…";
+}
+
+export interface CharCount {
+  /** Only speak up near the ceiling — a permanent counter is noise. */
+  near: boolean;
+  /** At the ceiling. */
+  warn: boolean;
+  text: string;
+}
+
+export function charCount(length: number): CharCount {
+  const left = MAX_CHARS - length;
+  return {
+    near: left <= 500,
+    warn: left <= 0,
+    text: `${left.toLocaleString()} characters left`,
+  };
+}
+
+/* ------------------------------------------------------------- messages -- */
+
+// Past this a message is a pasted document, not a question, and is set as
+// text and folded rather than as the heading of the exchange.
+export const LONG_CHARS = 280;
+export const LONG_LINES = 4;
+
+export function isLongMessage(text: string): boolean {
+  return text.length > LONG_CHARS || text.split("\n").length > LONG_LINES;
+}
+
+/** What the queue line says, and the short form for the status line. */
+export function queueWording(position: number): { text: string; ahead: string } {
+  const text =
+    position > 1
+      ? `${position} requests ahead of yours — this server runs one generation at a time.`
+      : position === 1
+        ? "One request ahead of yours — this server runs one generation at a time."
+        : "Next in line — starting shortly.";
+  return { text, ahead: position > 0 ? `${position} ahead` : "next in line" };
+}
+
+export function trimmedWording(dropped: number): string {
+  return dropped > 1
+    ? `The ${dropped} oldest messages were dropped to fit the context window.`
+    : "The oldest message was dropped to fit the context window.";
+}
+
+/* ------------------------------------------------------- the route line -- */
+
+// How a tool came to be chosen, where that says something. A slash command
+// is not listed: the question above the answer already is one. Only "model"
+// costs a pass through the model; a pattern match is decided before the model
+// is touched.
+const ROUTE_WORDS: Record<string, string> = {
+  heuristic: "Pattern match",
+  model: "Model's choice",
+};
+
+/** One step of an answer's route, as the line draws it. */
+export interface StepRow {
+  id: string;
+  status: "running" | "ok" | "failed";
+  /** An icon name the set is known to have. */
+  icon: string;
+  label: string;
+  /** Said in a word as well as a colour; empty once the step is over. */
+  state: string;
+  ms: string;
+}
+
+/**
+ * Apply one `step` event to the route line.
+ *
+ * The line carries only what is said nowhere else. The answer step is the
+ * status line's job while it runs and the footer's once it has. A finished
+ * tool is named, timed and qualified by its own figure below. So a step is
+ * drawn here while it is running, and afterwards only if it was a routing
+ * decision worth knowing about.
+ */
+export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] {
+  if (data.kind === "model") return rows as StepRow[];
+  const status = data.status || "running";
+  const over = status !== "running";
+  if (over && (data.kind === "tool" || (data.kind === "route" && data.detail === "slash"))) {
+    return rows.filter((row) => row.id !== data.id);
+  }
+  let icon = data.tool && hasIcon(data.tool) ? data.tool : "tool";
+  let label = data.label || "";
+  if (data.kind === "route") {
+    icon = "route";
+    if (data.detail === "skill") label = `Skill: ${data.label}`;
+    else if (data.tool && data.detail && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
+  }
+  const row: StepRow = {
+    id: data.id,
+    status,
+    icon,
+    label,
+    state: over ? "" : "running",
+    ms: data.ms ? fmtMs(data.ms) : "",
+  };
+  return rows.some((r) => r.id === data.id)
+    ? rows.map((r) => (r.id === data.id ? row : r))
+    : [...rows, row];
+}
+
+/* -------------------------------------------------- what an answer cost -- */
+
+/** The figures an answer's footer is built from: a finished stream's `done`
+ *  event, or a stored message, which kept fewer of them. */
+export interface Cost {
+  gen_tps?: number | null;
+  ttft_ms?: number | null;
+  completion_tokens?: number | null;
+  total_ms?: number | null;
+  cancelled?: boolean;
+}
+
+export interface CostFigure {
+  /** The numeral, set fixed-width so a column of these lines up. */
+  value: string;
+  words: string;
+}
+
+export function costFigures(m: Cost): CostFigure[] {
+  const has = (v: unknown): v is number => v !== null && v !== undefined;
+  const figs: CostFigure[] = [];
+  if (has(m.gen_tps)) figs.push({ value: fmt(m.gen_tps, 1), words: "tok/s" });
+  if (has(m.ttft_ms)) figs.push({ value: fmtMs(m.ttft_ms), words: "to first token" });
+  if (has(m.completion_tokens)) figs.push({ value: fmtInt(m.completion_tokens), words: "tokens" });
+  if (has(m.total_ms)) figs.push({ value: fmtMs(m.total_ms), words: "to answer" });
+  return figs;
+}
+
+/* --------------------------------------------------------- the palette -- */
+
+export interface PaletteRow {
+  kind: "tool" | "skill";
+  id: string;
+  /** What the row shows: a tool's example command, or a skill's name. */
+  cmd: string;
+  desc: string;
+}
+
+/**
+ * What the input's text asks the palette for: the word after the slash, or
+ * null when the palette should be closed (no slash, a second line, or
+ * arguments already being typed).
+ */
+export function paletteQuery(value: string): string | null {
+  if (!value.startsWith("/") || value.includes("\n")) return null;
+  if (value.slice(1).includes(" ")) return null; // arguments being typed
+  return value.slice(1).split(" ")[0] ?? "";
+}
+
+/**
+ * The rows for a query. On the empty sheet the skills are already listed, as
+ * rows, directly under the input this palette opens over. Listing them again
+ * would put the same six names on screen twice, so there it offers the tools.
+ */
+export function paletteRows(
+  query: string,
+  tools: readonly Tool[],
+  skills: readonly Skill[],
+  emptySheet: boolean,
+): PaletteRow[] {
+  const q = query.toLowerCase();
+  const toolRows: PaletteRow[] = tools
+    .filter((t) => t.name.includes(q) || (t.example || "").toLowerCase().includes(q))
+    .map((t) => ({
+      kind: "tool",
+      id: t.name,
+      cmd: t.example || `/${t.name}`,
+      desc: t.description,
+    }));
+  const skillRows: PaletteRow[] = skills
+    .filter((s) => s.id.includes(q) || s.name.toLowerCase().includes(q))
+    .map((s) => ({ kind: "skill", id: s.id, cmd: s.name, desc: s.blurb }));
+  return emptySheet ? toolRows : [...skillRows, ...toolRows];
+}
+
+/**
+ * A tool's example, as the input should hold it once chosen: the command, a
+ * space, and the example's arguments selected so typing replaces them.
+ */
+export function completeCommand(cmd: string): { value: string; select: [number, number] | null } {
+  const [head, ...rest] = cmd.split(" ");
+  const value = `${head} `;
+  if (!rest.length) return { value, select: null };
+  const full = value + rest.join(" ");
+  return { value: full, select: [value.length, full.length] };
+}
+
+/** The tools a skill runs through, in order, as plain words. */
+export function pipeWords(pipeline: readonly string[]): string[] {
+  return pipeline.map((node) => (node === "model" ? "answer" : node.replace(/_/g, " ")));
+}

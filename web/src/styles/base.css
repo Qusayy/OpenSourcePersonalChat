@@ -1,0 +1,125 @@
+/* Element rules. Imported into Tailwind's base layer, after Preflight, so a
+   rule here replaces Preflight's for the same element and a utility class on
+   an element still wins over both. */
+
+html {
+  height: 100%;
+  /* thin, and from the palette — the standard properties, not a hand-drawn bar */
+  scrollbar-color: var(--rule) transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--sheet);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--t-3);
+  font-weight: var(--w-text);
+  /* MONO and CASL are unregistered axes and only reachable here. slnt and
+     wght are left to font-style and font-weight so the fallback stack still
+     gets its own italic and bold. */
+  font-variation-settings:
+    "MONO" 0,
+    "CASL" 0;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+#root {
+  display: contents;
+}
+
+/* A border utility draws in the rule colour unless it names another. */
+*,
+::before,
+::after,
+::backdrop {
+  border-color: var(--rule);
+}
+
+/* An author rule that sets `display` beats the UA's [hidden] rule, which is how
+   an element can be created hidden and still be drawn. Hidden means hidden. */
+[hidden] {
+  display: none !important;
+}
+
+/* Preflight makes these block-level. The interface sets icons and the trace
+   in running text, so they keep the browser's own inline behaviour. */
+svg,
+canvas {
+  display: inline;
+  vertical-align: baseline;
+}
+
+/* Selected text is tinted with ink. It is something chosen, not something
+   happening, so it does not take the live colour. */
+::selection {
+  background: color-mix(in oklch, var(--ink) 18%, var(--sheet));
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  font-variation-settings: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ink-2);
+  text-underline-offset: 3px;
+}
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+em,
+i,
+cite {
+  font-style: oblique 15deg;
+}
+
+b,
+strong {
+  font-weight: 600;
+}
+
+/* Figures and code: the same face, fixed-width. Numbers that change every
+   frame must not reflow the line around them. The `num` utility is the same
+   rule for an element that is neither. */
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-fixed);
+  font-variation-settings:
+    "MONO" 1,
+    "CASL" 0;
+  font-variant-numeric: tabular-nums;
+  /* Preflight sets 4; the browser's 8 is what tab-indented code was drawn at. */
+  tab-size: 8;
+}
+
+kbd {
+  font-size: var(--t-1);
+  padding: 1px 5px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-1);
+  color: var(--ink-2);
+}

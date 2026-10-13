@@ -35,3 +35,10 @@ bench.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# front-end: installed packages, build and test output. The built files are
+# published on the `release` branch, not kept here.
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/

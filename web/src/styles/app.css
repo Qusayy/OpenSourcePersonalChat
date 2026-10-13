@@ -1,0 +1,8 @@
+/* The one stylesheet. Order is the cascade: tokens and theme, then element
+   rules, then the parts of the interface that are written as CSS rather than
+   as utility classes, each in Tailwind's components layer so a utility on the
+   same element still wins. */
+
+@import "tailwindcss";
+@import "./theme.css";
+@import "./base.css" layer(base);

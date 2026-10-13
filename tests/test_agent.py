@@ -25,7 +25,7 @@ except ImportError as exc:  # pragma: no cover - only without the requirements
 NONE = '{"tool": "none"}'
 WEATHER = '{"tool": "weather", "args": {"location": "Paris"}}'
 PARIS = ToolResult(True, "Paris, France: overcast, 17.9°C.", card="weather", data={"place": "Paris"})
-ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done"]
+ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done", "run"]
 
 
 class AgentCase(unittest.IsolatedAsyncioTestCase):
@@ -109,7 +109,11 @@ class RunTests(AgentCase):
             "/calc 2+2", persona=get_persona("explainer"), history=[], engine=engine,
             call_tool=broken,
         ))
-        self.assertEqual(stream[-1], ("error", {"message": "RuntimeError: the dispatcher itself broke"}))
+        self.assertEqual(
+            stream[-2], ("error", {"message": "RuntimeError: the dispatcher itself broke"})
+        )
+        self.assertEqual(stream[-1][0], "run")
+        self.assertEqual(stream[-1][1]["outcome"], "failed")
         self.assertEqual(engine.passes, [])
 
 
@@ -144,7 +148,9 @@ class StopTests(AgentCase):
         engine.release()
         stream = await reading
 
-        self.assertEqual(shape(stream), ["step:route:running", "step:route:stopped", "done"])
+        self.assertEqual(
+            shape(stream), ["step:route:running", "step:route:stopped", "done", "run"]
+        )
         done = only(stream, "done")[0]
         self.assertIs(done["cancelled"], True)
         self.assertEqual(done["tool_calls"], 0)
@@ -181,7 +187,7 @@ class StopTests(AgentCase):
 
         self.assertEqual(
             shape(stream),
-            ["step:route:ok", "step:tool-0:running", "step:tool-0:stopped", "done"],
+            ["step:route:ok", "step:tool-0:running", "step:tool-0:stopped", "done", "run"],
         )
         self.assertEqual(
             support.step(stream, "tool-0", "stopped"),
@@ -209,7 +215,7 @@ class StopTests(AgentCase):
         ))
         self.assertEqual(
             shape(stream),
-            ["step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card", "done"],
+            ["step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card", "done", "run"],
         )
         self.assertEqual(seen, [{"query": "Python"}])
         done = only(stream, "done")[0]
@@ -254,7 +260,7 @@ class StopTests(AgentCase):
         # Whether a notice of its place got out first is a matter of timing.
         self.assertEqual(
             [word for word in shape(stream) if word != "queue"],
-            ["step:answer:running", "step:answer:ok", "done"],
+            ["step:answer:running", "step:answer:ok", "done", "run"],
         )
         self.assertIs(only(stream, "done")[0]["cancelled"], True)
         self.assertEqual(trace.answer, "")
@@ -324,6 +330,250 @@ class LeavingTests(AgentCase):
         await engine.settled()
         self.assertLess(engine.passes[0].yielded, 8)
         self.assertTrue(engine.free)
+
+
+class TraceTests(AgentCase):
+    """What a run writes down about itself: each thing it did, in order, and
+    what each cost. The last event of every stream adds it up."""
+
+    async def traced(self, message: str, engine: ScriptedEngine, **more):
+        trace = agent.Trace()
+        stream = await collect(self.run_message(message, engine, trace=trace, **more))
+        return stream, trace
+
+    async def test_every_kind_of_message_leaves_steps_that_add_up_to_its_total(self) -> None:
+        support.played_tools(self, {"weather": PARIS})
+        cases = (
+            # what it is, the message, how it is sent, what the model says, the steps, how it ends
+            ("a plain answer", "Why is the sky blue?", {"persona": "explainer"},
+             ["Light scatters."], ["answer"], "answered"),
+            ("a command", "/calc 2+2", {"persona": "explainer"},
+             ["Four."], ["route", "tool", "answer"], "answered"),
+            ("a pattern", "15% of 200", {}, ["Thirty."], ["route", "tool", "answer"], "answered"),
+            ("the model's choice", "Do I need a coat in Paris", {},
+             [WEATHER, "Yes."], ["route", "tool", "answer"], "answered"),
+            ("the model declining", "Suggest a name for my boat", {},
+             [NONE, "Wren."], ["route", "answer"], "answered"),
+            ("a skill", "2+2", {"skill": "do_maths"},
+             ["Four."], ["route", "tool", "answer"], "answered"),
+            ("a failed tool", "/calc 1/0", {"persona": "explainer"},
+             ["It cannot be done."], ["route", "tool", "answer"], "answered"),
+            ("a model that raises", "Hello", {"persona": "explainer"},
+             [ValueError("boom")], ["answer"], "failed"),
+        )
+        for name, message, how, script, kinds, outcome in cases:
+            with self.subTest(name):
+                stream, trace = await self.traced(message, self.scripted(*script), **how)
+                self.assertEqual(stream[-1][0], "run")
+                totals = stream[-1][1]
+                self.assertEqual([s.kind for s in trace.steps], kinds)
+                self.assertEqual(totals["steps"], len(kinds))
+                self.assertEqual(totals["passes"], sum(s.model for s in trace.steps))
+                self.assertEqual(totals["passes"], len(script))
+                self.assertEqual(totals["outcome"], outcome)
+                self.assertEqual(totals["id"], trace.run_id)
+                self.assertAlmostEqual(
+                    totals["total_ms"], sum(s.total_ms for s in trace.steps), delta=0.06
+                )
+                # The stopwatch started before the first step and stopped after the last.
+                self.assertGreater(totals["wall_ms"], totals["total_ms"] - 1)
+
+    async def test_a_pass_is_its_wait_its_reading_and_its_writing(self) -> None:
+        engine = self.scripted("one two three", prefill=0.03, delay=0.01)
+        stream, trace = await self.traced("Hello", engine, persona="explainer")
+        done = only(stream, "done")[0]
+        (step,) = trace.steps
+        self.assertEqual((step.kind, step.model, step.ok), ("answer", True, True))
+        self.assertEqual(step.prompt_tokens, done["prompt_tokens"])
+        self.assertEqual(step.output_tokens, done["completion_tokens"])
+        self.assertEqual(step.queue_ms, done["queue_wait_ms"])
+        self.assertEqual(step.first_token_ms, done["ttft_ms"])
+        self.assertAlmostEqual(step.total_ms, done["queue_wait_ms"] + done["total_ms"])
+        self.assertGreaterEqual(step.first_token_ms, 30)
+        # Nothing here can say how much of the prompt the model had cached.
+        self.assertIsNone(step.new_tokens)
+
+    async def test_the_wait_for_the_slot_is_part_of_what_a_pass_cost(self) -> None:
+        engine = self.scripted("Somebody else's answer.", "Ours.", gated=True)
+        other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
+        await engine.entered(1)
+        trace = agent.Trace()
+        ours = asyncio.create_task(
+            collect(self.run_message("Hello again", engine, persona="explainer", trace=trace))
+        )
+        await until(lambda: engine.info()["queued"] == 1)
+        engine.release()
+        await other
+        stream = await ours
+        done = only(stream, "done")[0]
+        (step,) = trace.steps
+        # It waited behind the other run, and that wait is in its cost.
+        self.assertGreater(step.queue_ms, 0)
+        self.assertEqual(step.queue_ms, done["queue_wait_ms"])
+        self.assertAlmostEqual(step.total_ms, step.queue_ms + done["total_ms"])
+
+    async def test_the_stopwatch_and_the_steps_agree_to_within_the_time_between_them(self) -> None:
+        engine = self.scripted(NONE, "one two three four", prefill=0.02, delay=0.01)
+        stream, _ = await self.traced("Suggest a name for my boat", engine)
+        totals = stream[-1][1]
+        self.assertGreater(totals["total_ms"], 60)  # two passes that each waited 20 ms and more
+        gap = totals["wall_ms"] - totals["total_ms"]
+        self.assertGreater(gap, -1)
+        self.assertLess(gap, 2000)  # generous: a busy test machine, not a claim about speed
+
+    async def test_a_choice_the_model_made_is_written_down_whole(self) -> None:
+        support.played_tools(self, {"weather": PARIS})
+        engine = self.scripted(WEATHER, "Yes.")
+        _, trace = await self.traced("Do I need a coat in Paris", engine)
+        step = trace.steps[0]
+        self.assertEqual((step.kind, step.model, step.via, step.name),
+                         ("route", True, "model", "weather"))
+        self.assertEqual(step.input, {"text": "Do I need a coat in Paris"})
+        self.assertEqual(step.output, WEATHER)
+        self.assertEqual(step.prompt_tokens, engine.prompt_tokens(engine.passes[0].messages))
+        self.assertEqual(step.output_tokens, len(engine.passes[0].pieces))
+        self.assertIs(step.ok, True)
+        self.assertIsNone(step.error)
+
+    async def test_a_choice_that_could_not_be_used_says_what_was_wrong_with_it(self) -> None:
+        cut = '{"tool": "wikipedia", "args": {"query": "the long'
+        for said, error in (
+            ('{"tool": "telescope", "args": {}}', "model picked an unknown tool: telescope"),
+            (cut, "the reply was not a complete JSON object"),
+            (ValueError("boom"), "ValueError: boom"),
+        ):
+            with self.subTest(said=str(said)):
+                _, trace = await self.traced(
+                    "Suggest a name for my boat", self.scripted(said, "Wren.")
+                )
+                step = trace.steps[0]
+                self.assertEqual((step.kind, step.via, step.name), ("route", "model", None))
+                self.assertIs(step.ok, False)
+                self.assertEqual(step.error, error)
+                # It is still "no tool": the run goes on to answer.
+                self.assertEqual(trace.outcome, "answered")
+
+    async def test_a_choice_made_without_the_model_costs_nothing_and_says_how(self) -> None:
+        for message, how, via, name, given, why in (
+            ("/calc 2+2", {"persona": "explainer"}, "slash", "calculator",
+             {"expression": "2+2"}, None),
+            ("15% of 200", {}, "heuristic", "calculator",
+             {"expression": "15/100*200"}, "looks like arithmetic"),
+            ("2+2", {"skill": "do_maths"}, "skill", "do_maths",
+             {"calls": [{"tool": "calculator", "args": {"expression": "2+2"}}]}, None),
+        ):
+            with self.subTest(via=via):
+                _, trace = await self.traced(message, self.scripted("Four."), **how)
+                step = trace.steps[0]
+                self.assertEqual((step.kind, step.model, step.via, step.name),
+                                 ("route", False, via, name))
+                self.assertEqual(step.input, given)
+                self.assertEqual(step.output, why)
+                self.assertEqual(step.total_ms, 0.0)
+                self.assertIsNone(step.prompt_tokens)
+
+    async def test_a_message_that_was_never_routed_has_no_routing_step(self) -> None:
+        _, trace = await self.traced("15% of 200", self.scripted("Thirty."), persona="explainer")
+        self.assertEqual([s.kind for s in trace.steps], ["answer"])
+
+    async def test_a_tool_is_written_down_with_what_it_was_given_and_what_came_back(self) -> None:
+        _, trace = await self.traced("/calc 2+2", self.scripted("Four."), persona="explainer")
+        step = trace.steps[1]
+        (_, result), = trace.calls
+        self.assertEqual((step.kind, step.model, step.name, step.via),
+                         ("tool", False, "calculator", "slash"))
+        self.assertEqual(step.input, {"expression": "2+2"})
+        self.assertEqual(step.output, "2+2 = 4")
+        self.assertEqual(step.total_ms, result.ms)
+        self.assertIs(step.ok, True)
+
+        _, trace = await self.traced("/calc 1/0", self.scripted("No."), persona="explainer")
+        failed = trace.steps[1]
+        self.assertIs(failed.ok, False)
+        self.assertEqual(failed.error, "division by zero")
+        self.assertTrue(failed.output.startswith("That is not something this calculator handles."))
+
+    async def test_a_prompt_that_lost_its_oldest_turns_says_how_many(self) -> None:
+        from app.config import settings
+
+        tight = settings.model_copy(update={"mock": True, "mock_delay": 0.0, "n_ctx": 700})
+        engine = ScriptedEngine(["Short."], cfg=tight)
+        self.addAsyncCleanup(engine.settled)
+        history = []
+        for i in range(6):
+            history += [{"role": "user", "content": f"Question {i}? " * 12},
+                        {"role": "assistant", "content": f"Answer {i}. " * 12}]
+        stream, trace = await self.traced("And now?", engine, persona="concise", history=history)
+        dropped = only(stream, "trimmed")[0]["dropped"]
+        self.assertGreater(dropped, 0)
+        self.assertEqual(trace.steps[-1].input, {"dropped": dropped})
+
+    async def test_a_run_stopped_while_choosing_writes_down_one_stopped_pass(self) -> None:
+        engine = self.scripted(WEATHER, gated=True)
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "Do I need a coat in Paris", persona=get_persona("agent"), history=[], trace=trace,
+            engine=engine, request_id="run",
+        )))
+        await engine.entered(1)
+        engine.cancel("run")
+        engine.release()
+        stream = await reading
+        (step,) = trace.steps
+        self.assertEqual((step.kind, step.model, step.ok, step.error),
+                         ("route", True, False, "stopped"))
+        totals = stream[-1][1]
+        self.assertEqual((totals["outcome"], totals["steps"], totals["passes"]), ("stopped", 1, 1))
+        self.assertEqual(totals["id"], "run")
+
+    async def test_a_tool_that_was_called_off_is_written_down_as_stopped(self) -> None:
+        engine = self.scripted()
+        out = asyncio.Event()
+
+        async def slow(name: str, args: dict) -> ToolResult:
+            out.set()
+            await asyncio.Event().wait()
+            return PARIS
+
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "/weather Paris", persona=get_persona("explainer"), history=[], trace=trace,
+            engine=engine, call_tool=slow, request_id="run",
+        )))
+        await asyncio.wait_for(out.wait(), 5)
+        engine.cancel("run")
+        stream = await asyncio.wait_for(reading, 5)
+        self.assertEqual([s.kind for s in trace.steps], ["route", "tool"])
+        self.assertEqual((trace.steps[1].ok, trace.steps[1].error), (False, "stopped"))
+        self.assertEqual(stream[-1][1]["outcome"], "stopped")
+        self.assertEqual(stream[-1][1]["passes"], 0)
+
+    async def test_an_answer_stopped_part_way_is_a_stopped_run_with_its_tokens_counted(self) -> None:
+        engine = self.scripted("one two three four five six seven eight", delay=0.02)
+        trace = agent.Trace()
+        run = agent.run("Count", persona=get_persona("explainer"), history=[], trace=trace,
+                        engine=engine, request_id="run")
+        stream = []
+        async for item in run:
+            stream.append(item)
+            if sum(name == "token" for name, _ in stream) == 2:
+                engine.cancel("run")
+        (step,) = trace.steps
+        self.assertEqual((step.kind, step.ok, step.error), ("answer", False, "stopped"))
+        self.assertEqual(step.output_tokens, only(stream, "done")[0]["completion_tokens"])
+        self.assertEqual(stream[-1][1]["outcome"], "stopped")
+
+    async def test_a_reader_that_has_gone_is_not_sent_a_total(self) -> None:
+        engine = self.scripted("one two three four five six seven eight", delay=0.02)
+        trace = agent.Trace()
+        run = self.run_message("Count", engine, persona="explainer", trace=trace)
+        async for name, _ in run:
+            if name == "token":
+                break
+        await run.aclose()
+        await engine.settled()
+        self.assertIsNone(trace.outcome)
+        self.assertIsNone(trace.wall_ms)
 
 
 if __name__ == "__main__":

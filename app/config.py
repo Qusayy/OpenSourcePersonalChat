@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     # How pages name the machine in prose ("running on a …"). Empty means
     # describe it from what is measured at runtime; see telemetry.describe().
     hardware_label: str = ""
+    # Days to keep the record of what each message did step by step: which
+    # tool, what it was given, what came back, what each pass cost. It is a
+    # copy of what visitors typed, so it does not live for ever. Zero keeps
+    # none of it.
+    steps_keep_days: float = 30.0
     mock: bool = False
     # Seconds between fake tokens in mock mode. The default imitates this
     # hardware; drop it to near zero to drive the UI quickly in tests.

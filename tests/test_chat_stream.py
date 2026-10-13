@@ -22,7 +22,7 @@ except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
 # The end of every stream that reaches an answer.
-ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done"]
+ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done", "run"]
 
 # What follows a tool's output in the question the model reads.
 INSTRUCTION = (
@@ -106,7 +106,8 @@ class PlainAnswerTests(ChatCase):
         self.assertEqual(
             step(stream, "answer", "ok"),
             {"id": "answer", "kind": "model", "status": "ok", "label": "Answer",
-             "glyph": "✦", "ms": done["total_ms"]},
+             "glyph": "✦", "ms": done["total_ms"],
+             "tokens_in": done["prompt_tokens"], "tokens_out": done["completion_tokens"]},
         )
 
     def test_start_says_which_request_this_is_and_how_full_the_window_is(self) -> None:
@@ -284,7 +285,7 @@ class SlashCommandTests(ChatCase):
         self.assertEqual(
             shape(stream),
             ["conversation", "step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card",
-             "step:answer:running", "start", "step:answer:ok", "done"],
+             "step:answer:running", "start", "step:answer:ok", "done", "run"],
         )
         self.assertEqual(only(stream, "done")[0]["completion_tokens"], 0)
         convo = self.conversation(stream)
@@ -334,7 +335,9 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "No tool needed",
-             "detail": "model", "glyph": "◇", "tool": None, "ms": support.ROUTE_MS},
+             "detail": "model", "glyph": "◇", "tool": None, "ms": support.ROUTE_MS,
+             "tokens_in": self.engine.prompt_tokens(self.engine.route_prompts[0]),
+             "tokens_out": support.ROUTE_TOKENS},
         )
         self.assertEqual(
             self.engine.answer_prompts[0],
@@ -379,7 +382,9 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "Weather",
-             "detail": "model", "glyph": "☁", "tool": "weather", "ms": support.ROUTE_MS},
+             "detail": "model", "glyph": "☁", "tool": "weather", "ms": support.ROUTE_MS,
+             "tokens_in": self.engine.prompt_tokens(self.engine.route_prompts[0]),
+             "tokens_out": support.ROUTE_TOKENS},
         )
         self.assertEqual(asked["weather"], [{"location": "Paris"}])
         self.assertEqual(
@@ -580,7 +585,7 @@ class NotReadyTests(ChatCase):
     def test_a_model_still_loading_ends_the_stream_with_an_error_and_no_done(self) -> None:
         self.use_engine(PlayedEngine(ready=False))
         stream = self.chat("Why is the sky blue?", persona="explainer")
-        self.assertEqual(shape(stream), ["conversation", "step:answer:running", "error"])
+        self.assertEqual(shape(stream), ["conversation", "step:answer:running", "error", "run"])
         self.assertEqual(
             only(stream, "error")[0],
             {"message": "The model is still loading. Give it a moment, then send again."},
@@ -597,7 +602,7 @@ class NotReadyTests(ChatCase):
         self.assertEqual(
             shape(stream),
             ["conversation", "step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card",
-             "step:answer:running", "error"],
+             "step:answer:running", "error", "run"],
         )
         self.assertEqual(len(self.conversation(stream)["orphan_tool_calls"]), 1)
 
@@ -607,6 +612,110 @@ class CancelTests(ChatCase):
         res = self.client.post("/api/cancel/no-such-request")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"cancelled": False})
+
+
+class StoredTraceTests(ChatCase):
+    """What is left in the database about how each message was answered."""
+
+    def rows(self, stream: list) -> list[dict]:
+        return db.run_steps(only(stream, "conversation")[0]["request_id"])
+
+    def test_every_message_stores_steps_in_order_that_sum_to_the_run_total(self) -> None:
+        support.played_tools(self, {"weather": WEATHER})
+        cases = (
+            ("a plain answer", "Why is the sky blue?", {"persona": "explainer"}, None,
+             ["answer"]),
+            ("a command", "/calc 2+2", {"persona": "explainer"}, None,
+             ["route", "tool", "answer"]),
+            ("a pattern", "15% of 200", {"persona": "agent"}, None, ["route", "tool", "answer"]),
+            ("the model declining", "Suggest a name for my boat", {"persona": "agent"},
+             ['{"tool": "none"}', "Wren."], ["route", "answer"]),
+            ("the model's choice", "Do I need a coat in Paris", {"persona": "agent"},
+             ['{"tool": "weather", "args": {"location": "Paris"}}', "Take a coat."],
+             ["route", "tool", "answer"]),
+            ("a skill", "2+2", {"skill": "do_maths"}, None, ["route", "tool", "answer"]),
+            ("a failed tool", "/calc 1/0", {"persona": "explainer"}, None,
+             ["route", "tool", "answer"]),
+        )
+        for name, message, how, script, kinds in cases:
+            with self.subTest(name):
+                # Where the model is asked to choose, the engine is one whose
+                # routing pass really takes the time it reports.
+                self.use_engine(ScriptedEngine(script) if script else PlayedEngine())
+                stream = self.chat(message, **how)
+                self.assertEqual(stream[-1][0], "run")
+                totals = stream[-1][1]
+                rows = self.rows(stream)
+                self.assertEqual([r["kind"] for r in rows], kinds)
+                self.assertEqual([r["idx"] for r in rows], list(range(len(rows))))
+                self.assertEqual(totals["steps"], len(rows))
+                self.assertEqual(totals["id"], only(stream, "conversation")[0]["request_id"])
+                self.assertEqual(totals["outcome"], "answered")
+                self.assertAlmostEqual(
+                    sum(r["total_ms"] for r in rows), totals["total_ms"], delta=0.06
+                )
+                self.assertGreater(totals["wall_ms"], totals["total_ms"] - 1)
+
+    def test_the_run_is_reported_last_and_as_six_figures(self) -> None:
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        self.assertEqual([name for name, _ in stream].count("run"), 1)
+        self.assertEqual(
+            set(stream[-1][1]), {"id", "outcome", "steps", "passes", "total_ms", "wall_ms"}
+        )
+        self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (1, 1))
+
+    def test_the_steps_of_an_answered_run_hang_off_its_answer(self) -> None:
+        stream = self.chat("/calc 2+2", persona="explainer")
+        answer = self.conversation(stream)["messages"][1]
+        rows = self.rows(stream)
+        self.assertEqual({r["message_id"] for r in rows}, {answer["id"]})
+        self.assertEqual({r["conversation_id"] for r in rows}, {self.conversation(stream)["id"]})
+
+    def test_the_stored_step_of_a_pass_has_what_the_stream_reported(self) -> None:
+        stream = self.chat("Suggest a name for my boat", persona="agent")
+        route, answer = self.rows(stream)
+        routed = step(stream, "route", "ok")
+        self.assertEqual((route["via"], route["name"]), ("model", None))
+        self.assertEqual(route["input"], {"text": "Suggest a name for my boat"})
+        self.assertEqual(route["output_text"], '{"tool": "none"}')
+        self.assertEqual(route["prompt_tokens"], routed["tokens_in"])
+        self.assertEqual(route["output_tokens"], routed["tokens_out"])
+        done = only(stream, "done")[0]
+        self.assertEqual(answer["prompt_tokens"], done["prompt_tokens"])
+        self.assertEqual(answer["output_tokens"], done["completion_tokens"])
+        self.assertEqual(answer["first_token_ms"], done["ttft_ms"])
+        self.assertIsNone(answer["new_tokens"])
+        # The answer's own text is in `messages`, not copied here.
+        self.assertIsNone(answer["output_text"])
+
+    def test_a_run_that_failed_leaves_its_steps_tied_to_no_answer(self) -> None:
+        self.use_engine(PlayedEngine(ready=False))
+        stream = self.chat("/calc 2+2", persona="explainer")
+        self.assertEqual(stream[-1][1]["outcome"], "failed")
+        rows = self.rows(stream)
+        self.assertEqual([r["kind"] for r in rows], ["route", "tool", "answer"])
+        self.assertEqual({r["message_id"] for r in rows}, {None})
+        self.assertIs(rows[-1]["ok"], False)
+        self.assertIn("still loading", rows[-1]["error"])
+
+    def test_an_answer_with_nothing_in_it_leaves_steps_tied_to_no_answer(self) -> None:
+        self.use_engine(PlayedEngine(""))
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        self.assertEqual({r["message_id"] for r in self.rows(stream)}, {None})
+
+    def test_deleting_the_conversation_deletes_what_was_kept_of_its_runs(self) -> None:
+        stream = self.chat("/calc 2+2", persona="explainer")
+        self.assertEqual(len(self.rows(stream)), 3)
+        self.client.delete(f"/api/conversations/{only(stream, 'conversation')[0]['id']}")
+        self.assertEqual(self.rows(stream), [])
+
+    def test_with_a_retention_of_zero_the_run_is_still_reported_and_nothing_is_kept(self) -> None:
+        self.db_settings.steps_keep_days = 0
+        stream = self.chat("/calc 2+2", persona="explainer")
+        self.assertEqual(stream[-1][1]["steps"], 3)
+        self.assertEqual(self.rows(stream), [])
+        # The answer itself is kept as it always was.
+        self.assertEqual(len(self.conversation(stream)["messages"]), 2)
 
 
 if __name__ == "__main__":

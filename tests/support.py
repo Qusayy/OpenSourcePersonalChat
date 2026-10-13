@@ -35,6 +35,8 @@ from app.tools.base import ToolResult
 # What a played routing pass reports as its time. Fixed, so a test can tell the
 # figure on the page came from the pass and not from somewhere else.
 ROUTE_MS = 12.5
+# And as the number of tokens it wrote.
+ROUTE_TOKENS = 7
 
 
 # ------------------------------------------------------------- the stream ---
@@ -154,7 +156,11 @@ class PlayedEngine(Engine):
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             parsed = None
-        return Completion(parsed=parsed, raw=raw, ms=ROUTE_MS)
+        return Completion(
+            parsed=parsed, raw=raw, ms=ROUTE_MS,
+            prompt_tokens=self.prompt_tokens(messages), completion_tokens=ROUTE_TOKENS,
+            queue_wait_ms=0.0, ttft_ms=ROUTE_MS, total_ms=ROUTE_MS,
+        )
 
 
 # ------------------------------------------------------- the surroundings ---

@@ -153,7 +153,7 @@ async def offline(name: str, args: dict):
 
 async def main() -> None:
     db.init()
-    for table in ("tool_calls", "messages", "conversations", "runs"):
+    for table in ("steps", "tool_calls", "messages", "conversations", "runs"):
         db._write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
     # 3. Right-to-left, oldest so it sorts last.

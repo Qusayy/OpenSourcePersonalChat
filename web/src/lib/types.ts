@@ -190,11 +190,30 @@ export interface StepEvent {
   status: "running" | "ok" | "failed";
   label: string;
   glyph?: string;
-  /** For a route: how it was decided ("skill", "slash", "pattern", "model", "direct"). For a failed tool: why. */
+  /** For a route: how it was decided ("skill", "slash", "heuristic", "model", "direct"). For a failed tool: why. */
   detail?: string | null;
   tool?: string | null;
   args?: Record<string, unknown>;
   ms?: number;
+  /** On a step that was a pass through the model, once it has ended: the
+   *  tokens it read and the tokens it wrote. Null if the pass never ran. */
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+}
+
+/** The whole run in a line, sent last, after `done` or `error`. */
+export interface RunEvent {
+  /** The run's name: the `request_id` it was announced under. */
+  id: string;
+  outcome: "answered" | "stopped" | "failed";
+  /** Everything it did: routing, each tool, the answer. */
+  steps: number;
+  /** How many of those were passes through the model. */
+  passes: number;
+  /** What the steps cost, added up. */
+  total_ms: number;
+  /** First step to last by the clock; a little more than `total_ms`. */
+  wall_ms: number | null;
 }
 
 /** What the answer cost, sent when it ends. */
@@ -232,6 +251,7 @@ export type ChatEvents = {
   token: { t: string; ttft_ms?: number };
   done: DoneEvent;
   error: { message: string };
+  run: RunEvent;
 };
 
 /* -------------------------------------------------------------- benchmark -- */

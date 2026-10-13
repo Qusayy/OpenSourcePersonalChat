@@ -207,7 +207,7 @@ async def api_chat(payload: ChatRequest):
                 },
             )
 
-            trace = agent.Trace()
+            trace = agent.Trace(run_id=run_id)
             keeper = _Keeper(cid, persona.id, trace)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
@@ -242,6 +242,7 @@ class _Keeper:
         self.persona_id = persona_id
         self.trace = trace
         self.call_ids: list[str] = []
+        self.steps_kept = 0
         self.answered = False
 
     def keep(self) -> None:
@@ -252,6 +253,17 @@ class _Keeper:
                 data=result.data, summary=result.summary or result.error or "",
                 ms=result.ms, ok=result.ok,
             ))
+
+        for step in self.trace.steps[self.steps_kept:]:
+            db.add_step(
+                self.trace.run_id, self.cid, self.steps_kept, step.kind,
+                name=step.name, via=step.via, input=step.input, output=step.output,
+                prompt_tokens=step.prompt_tokens, new_tokens=step.new_tokens,
+                output_tokens=step.output_tokens, queue_ms=step.queue_ms,
+                first_token_ms=step.first_token_ms, total_ms=step.total_ms,
+                ok=step.ok, error=step.error, created_at=step.at,
+            )
+            self.steps_kept += 1
 
         if self.trace.answer is None or self.answered:
             return
@@ -269,6 +281,7 @@ class _Keeper:
             completion_tokens=usage.get("completion_tokens"),
         )
         db.attach_tool_calls(mid, self.call_ids)
+        db.attach_steps(mid, self.trace.run_id)
         db.touch_conversation(self.cid)
         db.add_run(
             "chat",

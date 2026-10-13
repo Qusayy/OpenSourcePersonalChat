@@ -140,7 +140,8 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_pass_itself_goes_back_with_what_it_cost(self) -> None:
         engine = PlayedEngine()
         _, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertEqual(set(told), {"tier", "ms", "raw", "completion"})
+        self.assertEqual(set(told), {"tier", "ms", "raw", "text", "completion"})
+        self.assertEqual(told["text"], "Suggest a name for my boat")
         self.assertEqual(told["completion"].raw, '{"tool": "none"}')
         self.assertEqual(told["completion"].ms, support.ROUTE_MS)
 

@@ -264,13 +264,19 @@ async def route(
         {"role": "user", "content": text[:600]},
     ]
     said = await engine.complete_json(messages, tools_to_gbnf(tools), request_id=request_id)
-    # The whole pass goes back with its figures; `raw` is cut short because it
-    # is only ever looked at, and a reply that ran away can be long.
-    telemetry.update(
-        {"tier": "model", "ms": round(said.ms, 1), "raw": said.raw[:200], "completion": said}
-    )
+    # The whole pass goes back with its figures and with the text it was asked
+    # about; `raw` is cut short because it is only ever looked at, and a reply
+    # that ran away can be long.
+    telemetry.update({
+        "tier": "model", "ms": round(said.ms, 1), "raw": said.raw[:200],
+        "text": messages[-1]["content"], "completion": said,
+    })
 
     parsed = said.parsed
+    if parsed is None and said.raw and said.error is None:
+        # The grammar makes this impossible unless the reply ran out of tokens
+        # before it closed. It is "no tool", and it is worth knowing it happened.
+        telemetry["note"] = "the reply was not a complete JSON object"
     if not parsed or parsed.get("tool") in (None, "none"):
         return None, telemetry
     name = parsed.get("tool")

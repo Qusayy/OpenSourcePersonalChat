@@ -12,10 +12,12 @@ skipped rather than broken.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,6 +84,20 @@ def step(stream: list[tuple[str, Any]], step_id: str, status: str) -> dict:
     found = [d for d in only(stream, "step") if d["id"] == step_id and d["status"] == status]
     assert len(found) == 1, f"expected one {step_id}:{status} step, found {len(found)}"
     return found[0]
+
+
+async def collect(stream) -> list[tuple[str, Any]]:
+    """Everything an async stream yields, once it has ended."""
+    return [item async for item in stream]
+
+
+async def until(done, timeout: float = 5.0) -> None:
+    """Wait for something another task or thread is about to make true."""
+    deadline = time.monotonic() + timeout
+    while not done():
+        if time.monotonic() > deadline:
+            raise TimeoutError("gave up waiting")
+        await asyncio.sleep(0.001)
 
 
 # ------------------------------------------------------------- the engine ---

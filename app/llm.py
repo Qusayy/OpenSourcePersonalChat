@@ -78,7 +78,13 @@ class EngineState:
     started_at: float = field(default_factory=time.time)
 
 
+SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repeat_penalty", "max_tokens")
+
+
 class Engine:
+    # Seconds between the notices a waiting request is sent about its place.
+    QUEUE_TICK = 0.75
+
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or default_settings
         self.state = EngineState()
@@ -220,7 +226,15 @@ class Engine:
 
     # -- generation ---------------------------------------------------------
 
-    def _iter_chunks(self, messages: list[dict], sampling: dict) -> Iterator[str]:
+    def _iter_chunks(
+        self,
+        messages: list[dict],
+        sampling: dict,
+        *,
+        grammar: str | None = None,
+        seed: int | None = None,
+        stop: list[str] | None = None,
+    ) -> Iterator[str]:
         """Yield text deltas from llama.cpp (or the mock generator)."""
         if self.cfg.mock:
             for i, word in enumerate(MOCK_VOCAB):
@@ -228,15 +242,16 @@ class Engine:
                 yield ("" if i == 0 else " ") + word
             return
 
-        stream = self._llm.create_chat_completion(
-            messages=messages,
-            stream=True,
-            temperature=sampling["temperature"],
-            top_p=sampling["top_p"],
-            top_k=sampling["top_k"],
-            repeat_penalty=sampling["repeat_penalty"],
-            max_tokens=sampling["max_tokens"],
-        )
+        # Only what the caller named is passed on. A pass that sets two of
+        # these gets the library's own defaults for the rest, not ours.
+        kwargs: dict[str, Any] = {k: sampling[k] for k in SAMPLING_KEYS if k in sampling}
+        if grammar is not None:
+            kwargs["grammar"] = self._grammar(grammar)
+        if seed is not None:
+            kwargs["seed"] = seed
+        if stop:
+            kwargs["stop"] = stop
+        stream = self._llm.create_chat_completion(messages=messages, stream=True, **kwargs)
         try:
             for chunk in stream:
                 delta = chunk["choices"][0].get("delta") or {}
@@ -311,30 +326,42 @@ class Engine:
         messages: list[dict],
         sampling: dict,
         request_id: str | None = None,
+        *,
+        grammar: str | None = None,
+        seed: int | None = None,
+        stop: list[str] | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
-        """Yield (event, payload) tuples: queue | start | token | done | error."""
+        """Yield (event, payload) tuples: queue | start | token | done | error.
+
+        One pass through the model, whatever it is for. ``grammar`` holds the
+        output to a GBNF grammar, ``seed`` makes the sampling repeatable and
+        ``stop`` ends the output at any of the given strings.
+        """
         request_id = request_id or uuid.uuid4().hex
         cancel_ev = threading.Event()
         self._cancels[request_id] = cancel_ev
 
-        if not self.ready:
-            self._cancels.pop(request_id, None)
-            yield "error", {
-                "message": self.state.error
-                or "The model is still loading. Give it a moment, then send again."
-            }
-            return
-
-        loop = asyncio.get_running_loop()
-        queued_at = time.perf_counter()
-
-        # --- wait for the one inference slot, reporting position while we wait
-        self._waiting.append(request_id)
-        acquire = asyncio.ensure_future(self._lock.acquire())
+        # Who hands the slot back. Until a worker thread exists it can only be
+        # this coroutine; from then on it is the thread and nobody else.
+        acquire: asyncio.Future | None = None
+        started = False
         try:
+            if not self.ready:
+                yield "error", {
+                    "message": self.state.error
+                    or "The model is still loading. Give it a moment, then send again."
+                }
+                return
+
+            loop = asyncio.get_running_loop()
+            queued_at = time.perf_counter()
+
+            # --- wait for the one inference slot, reporting position while we wait
+            self._waiting.append(request_id)
+            acquire = asyncio.ensure_future(self._lock.acquire())
             first_notice = True
             while True:
-                done, _ = await asyncio.wait({acquire}, timeout=0.75)
+                done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
                 if acquire in done:
                     break
                 try:
@@ -343,99 +370,105 @@ class Engine:
                     ahead = 0
                 yield "queue", {"position": ahead, "first": first_notice}
                 first_notice = False
-        except (asyncio.CancelledError, GeneratorExit):
-            # If the acquire had already won the race, hand the slot straight
-            # back — nothing else will release it for us.
-            if not acquire.cancel() and acquire.done() and not acquire.cancelled():
-                if self._lock.locked():
-                    self._lock.release()
-            if request_id in self._waiting:
-                self._waiting.remove(request_id)
-            self._cancels.pop(request_id, None)
-            raise
-        finally:
-            if request_id in self._waiting:
-                self._waiting.remove(request_id)
+            self._waiting.remove(request_id)
 
-        queue_wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
-        self._busy = True
+            queue_wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
+            self._busy = True
 
-        events: asyncio.Queue = asyncio.Queue()
-        SENTINEL = object()
+            events: asyncio.Queue = asyncio.Queue()
+            SENTINEL = object()
 
-        prompt_tok = self.prompt_tokens(messages)
+            prompt_tok = self.prompt_tokens(messages)
 
-        def emit(item) -> None:
-            loop.call_soon_threadsafe(events.put_nowait, item)
+            def emit(item) -> None:
+                loop.call_soon_threadsafe(events.put_nowait, item)
 
-        def worker() -> None:
-            t_start = time.perf_counter()
-            t_first: float | None = None
-            produced = 0
-            pieces: list[str] = []
-            try:
-                for text in self._iter_chunks(messages, sampling):
-                    if cancel_ev.is_set():
-                        break
-                    payload = {"t": text}
-                    if t_first is None:
-                        t_first = time.perf_counter()
-                        # The same figure "done" reports, sent as soon as it is
-                        # known, so the page can show it while the answer is
-                        # still being written instead of after it has ended.
-                        payload["ttft_ms"] = round((t_first - t_start) * 1000, 1)
-                    produced += 1
-                    pieces.append(text)
-                    emit(("token", payload))
+            def worker() -> None:
+                t_start = time.perf_counter()
+                t_first: float | None = None
+                produced = 0
+                pieces: list[str] = []
+                try:
+                    for text in self._iter_chunks(
+                        messages, sampling, grammar=grammar, seed=seed, stop=stop
+                    ):
+                        if cancel_ev.is_set():
+                            break
+                        payload = {"t": text}
+                        if t_first is None:
+                            t_first = time.perf_counter()
+                            # The same figure "done" reports, sent as soon as it
+                            # is known, so the page can show it while the answer
+                            # is still being written instead of after it has
+                            # ended.
+                            payload["ttft_ms"] = round((t_first - t_start) * 1000, 1)
+                        produced += 1
+                        pieces.append(text)
+                        emit(("token", payload))
 
-                now = time.perf_counter()
-                ttft_ms = round(((t_first or now) - t_start) * 1000, 1)
-                gen_s = max(now - (t_first or now), 1e-6)
-                emit(
-                    (
-                        "done",
-                        {
-                            "text": "".join(pieces),
-                            "cancelled": cancel_ev.is_set(),
-                            "ttft_ms": ttft_ms,
-                            "queue_wait_ms": queue_wait_ms,
-                            "prompt_tokens": prompt_tok,
-                            "completion_tokens": produced,
-                            # prefill covers the prompt plus the first token
-                            "prefill_tps": round(prompt_tok / max(ttft_ms / 1000, 1e-6), 1),
-                            "gen_tps": round(max(produced - 1, 0) / gen_s, 2),
-                            "total_ms": round((now - t_start) * 1000, 1),
-                            "rss_mb": process_rss_mb(),
-                        },
+                    now = time.perf_counter()
+                    ttft_ms = round(((t_first or now) - t_start) * 1000, 1)
+                    gen_s = max(now - (t_first or now), 1e-6)
+                    emit(
+                        (
+                            "done",
+                            {
+                                "text": "".join(pieces),
+                                "cancelled": cancel_ev.is_set(),
+                                "ttft_ms": ttft_ms,
+                                "queue_wait_ms": queue_wait_ms,
+                                "prompt_tokens": prompt_tok,
+                                "completion_tokens": produced,
+                                # prefill covers the prompt plus the first token
+                                "prefill_tps": round(prompt_tok / max(ttft_ms / 1000, 1e-6), 1),
+                                "gen_tps": round(max(produced - 1, 0) / gen_s, 2),
+                                "total_ms": round((now - t_start) * 1000, 1),
+                                "rss_mb": process_rss_mb(),
+                            },
+                        )
                     )
-                )
-            except Exception as exc:  # noqa: BLE001 - surfaced to the client
-                emit(("error", {"message": f"{type(exc).__name__}: {exc}"}))
-            finally:
-                emit(SENTINEL)
-                # The thread owns the lock until it has truly left llama.cpp.
-                loop.call_soon_threadsafe(self._release_slot)
+                except Exception as exc:  # noqa: BLE001 - surfaced to the client
+                    emit(("error", {"message": f"{type(exc).__name__}: {exc}"}))
+                finally:
+                    # The thread owns the slot until it has truly left
+                    # llama.cpp. It hands it back before it sends its last
+                    # event, so whoever sees the stream end finds the slot free.
+                    loop.call_soon_threadsafe(self._release_slot)
+                    emit(SENTINEL)
 
-        thread = threading.Thread(target=worker, name=f"gen-{request_id[:8]}", daemon=True)
-        thread.start()
+            thread = threading.Thread(target=worker, name=f"gen-{request_id[:8]}", daemon=True)
+            thread.start()
+            started = True
 
-        yield "start", {
-            "request_id": request_id,
-            "queue_wait_ms": queue_wait_ms,
-            "prompt_tokens": prompt_tok,
-            "n_ctx": self.cfg.n_ctx,
-        }
+            yield "start", {
+                "request_id": request_id,
+                "queue_wait_ms": queue_wait_ms,
+                "prompt_tokens": prompt_tok,
+                "n_ctx": self.cfg.n_ctx,
+            }
 
-        try:
             while True:
                 item = await events.get()
                 if item is SENTINEL:
                     break
                 yield item
         finally:
-            # Client vanished or the caller stopped iterating: stop the thread.
+            # Reached however the pass ends: it finished, the client vanished,
+            # the caller stopped iterating, or something failed on the way in.
+            # A thread that is writing is told to stop.
             cancel_ev.set()
             self._cancels.pop(request_id, None)
+            if request_id in self._waiting:
+                self._waiting.remove(request_id)
+            if acquire is not None and not started:
+                # No thread exists to hand the slot back. Either the wait for
+                # it is still going and is called off, or it was won and
+                # nothing reached the model, so it is returned from here.
+                won = not acquire.cancel() and not acquire.cancelled() and acquire.exception() is None
+                if won:
+                    self._busy = False
+                    if self._lock.locked():
+                        self._lock.release()
 
     def _release_slot(self) -> None:
         self._busy = False

@@ -16,12 +16,16 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
 }
 
+/* Centred, like the chat column, but wider: charts and tables want the room.
+   Running text inside it still stops at a reading measure. */
 .wrap {
-  max-width: calc(56rem + var(--pad) + var(--edge));
+  max-width: calc(56rem + var(--edge) * 2);
+  margin-inline: auto;
   padding: var(--s-7) max(var(--edge), env(safe-area-inset-right)) var(--s-9)
-    max(var(--pad), env(safe-area-inset-left));
+    max(var(--edge), env(safe-area-inset-left));
 }
 
 .page-head h1 {

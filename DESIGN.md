@@ -187,7 +187,7 @@ The system refuses gradients, glass and backdrop blur, glow, pills, message bubb
 
 **Key Characteristics:**
 - Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
-- One left edge shared by the wordmark, the reading column and the composer; the status line alone runs the full width.
+- Everything is centred: the top bar and the reading column share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
 - One typeface. Numerals and units fixed-width, words proportional.
@@ -257,7 +257,7 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 The body is a three-row grid: a 56px top bar, the sheet taking the rest, the status line at its natural height. The page itself does not scroll; the sheet does.
 
-One left edge, `--pad`, is shared by the wordmark, the reading column and the composer. It sits a third of the spare width in from the left: `max(24px, (100vw - 42rem) / 3)`. The column is therefore neither jammed against the window edge nor centred like a card. The right edge of everything is `--edge` (24px). The chat column measures 42rem; the long-form pages allow charts 56rem and hold their text to 40rem.
+Everything is centred. The top bar's content sits in a container `--page` wide (76rem), inset `max(24px, (100vw - 76rem) / 2)` each side, so it starts and ends on the same two lines at any window width. The reading column, `--col` (42rem), is centred in the window; the long-form pages centre a 56rem block for charts and hold their text to 40rem inside it. `--edge` (24px) is the least space anything keeps from the window. Columns inside a scroller are centred with auto margins, not viewport arithmetic, and each scroller reserves a scrollbar gutter on both sides so a scrollbar cannot pull the column off the axis.
 
 Spacing is a nine-step scale: 4, 8, 12, 16, 24, 32, 48, 64, 96px. Sections on the long-form pages are parted by 64px; a question takes 48px above and 12px below, like any heading.
 
@@ -265,7 +265,7 @@ The chat page has two views. Empty: headline, one paragraph, the composer direct
 
 Responsive behaviour is by need rather than by device. Below 1440px the rate trace narrows. Below 1340px the chat page's status line gives its figures a row of their own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, skill rows stack, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
 
-**The One Left Edge Rule.** The wordmark, the column and the composer hang from `--pad`. The status line is the single exception: it runs the full width of the window, `--edge` in from each side, on every page, because what the machine is and what a request is costing do not fit one row from the column's edge, and the same line on every page should start in the same place.
+**The One Axis Rule.** The top bar, the column and the composer are centred on one axis, with equal margins left and right. Nothing hangs from a left edge of its own. The status line is the single exception: it runs the full width of the window, `--edge` in from each side, on every page, because what the machine is and what a request is costing do not fit one row from the column's edge, and the same line on every page should start in the same place.
 
 ## Elevation & Depth
 
@@ -309,7 +309,7 @@ Controls are words first. A box appears only where position alone would not say 
 - **Beneath it:** personas as plain words, the chosen one inked with a 2px underline at the same weight so choosing never shifts its neighbours; a `/` keyboard hint; a character count that turns fault-coloured at the limit.
 
 ### Navigation
-- **Top bar:** the wordmark (17px, 700) on the shared left edge, three page links in the second ink at 15px, then the page's word buttons at the right. The current page is inked with a 2px underline offset 7px. No filled tab.
+- **Top bar:** the wordmark (17px, 700) at the container's left edge, three page links in the second ink at 15px, then the page's word buttons at the right. The current page is inked with a 2px underline offset 7px. No filled tab.
 - **History:** a real `<dialog>` that slides in from the right (min(88vw, 24rem)), with a scrim behind it. Conversations are ruled rows: a title, a count, and a sibling delete button. The current one is weight 600.
 - **Contents list:** on long-form pages, a wrapped row of second-ink links under the page head.
 
@@ -358,7 +358,7 @@ State changes only: 120ms for colour, 200ms for position, on `cubic-bezier(0.16,
 ## Do's and Don'ts
 
 ### Do:
-- **Do** hang new content from the shared left edge (`--pad`) and stop it at the column measure (42rem for chat, 40rem for long-form text).
+- **Do** centre new content and stop it at the column measure (42rem for chat, 40rem for long-form text).
 - **Do** run the status line the full width of the window, 24px in from each side, on every page.
 - **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar.
 - **Do** mark selection and location in ink with a 2px underline.

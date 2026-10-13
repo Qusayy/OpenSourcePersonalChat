@@ -10,17 +10,23 @@
    DOM order is the visual order in both, so nothing is reordered with CSS and
    the tab order never disagrees with what is on screen. */
 
-/* Every block on this page hangs from the same left edge and stops at the
-   same measure. */
+/* Every block on this page is the same measure, centred. Centred by auto
+   margins rather than viewport arithmetic: inside a scroller the available
+   width is not the window's. */
 .col {
   width: 100%;
-  max-width: calc(var(--col) + var(--pad) + var(--edge));
-  padding-left: max(var(--pad), env(safe-area-inset-left));
+  max-width: calc(var(--col) + var(--edge) * 2);
+  margin-inline: auto;
+  padding-left: max(var(--edge), env(safe-area-inset-left));
   padding-right: max(var(--edge), env(safe-area-inset-right));
 }
 
+/* A scrollbar that takes room on one side only would pull a centred column
+   off the axis the top bar and status line keep. Room is reserved on both
+   sides, whether or not anything scrolls. */
 .center[data-view="empty"] {
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
 }
 /* <main> is a flex column so the thread can take the spare height. On the
    empty sheet nothing should give: a flex item may shrink below its content,
@@ -42,6 +48,7 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
 }
 
 /* ------------------------------------------------------------ empty state */
@@ -138,9 +145,15 @@
 .center[data-view="thread"] .composer-wrap {
   max-width: none;
   border-top: 1px solid var(--rule);
+  /* The composer is beside the scroller here, not inside it, so it does not
+     get the scroller's gutters. --sbw is the measured scrollbar width
+     (app.js); adding it keeps the input exactly as wide as the thread. */
+  padding-left: calc(max(var(--edge), env(safe-area-inset-left)) + var(--sbw, 0px));
+  padding-right: calc(max(var(--edge), env(safe-area-inset-right)) + var(--sbw, 0px));
 }
 .center[data-view="thread"] .composer {
   max-width: var(--col);
+  margin-inline: auto;
 }
 
 .composer {

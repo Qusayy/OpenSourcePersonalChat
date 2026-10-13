@@ -5,11 +5,9 @@
    line. There is no sidebar and no metrics column: history opens on demand,
    and every fact about the machine lives once, in the status line.
 
-   One left edge (--pad) is shared by the wordmark, the reading column and
-   the composer. The status line is the exception: it runs the full width of
-   the window, --edge in from each side, because what the machine is and what
-   a request is costing do not fit one row from the column's edge, and the
-   same line on every page should start in the same place.
+   Everything is centred. The top bar and the status line share one
+   container (--page), so they start and end on the same two lines whatever
+   the window width; the reading column sits centred between them.
    ========================================================================= */
 
 body {
@@ -87,8 +85,8 @@ body {
   align-items: center;
   gap: var(--s-5);
   min-width: 0;
-  padding-left: max(var(--pad), env(safe-area-inset-left));
-  padding-right: max(var(--edge), env(safe-area-inset-right));
+  padding-left: max(var(--inset), env(safe-area-inset-left));
+  padding-right: max(var(--inset), env(safe-area-inset-right));
   border-bottom: 1px solid var(--rule);
 }
 

@@ -124,6 +124,17 @@ more?.addEventListener("click", () => {
   more.textContent = open ? "Hide" : "Details";
 });
 
+// How wide a classic scrollbar is here; zero where scrollbars overlay. The
+// thread's scroller reserves this much on both sides so its column stays
+// centred, and the composer beside it needs the same amount to match.
+{
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;top:-999px;width:80px;height:80px;overflow:scroll";
+  document.body.appendChild(probe);
+  document.documentElement.style.setProperty("--sbw", `${probe.offsetWidth - probe.clientWidth}px`);
+  probe.remove();
+}
+
 // Toasts sit just above the line, which is one row or two depending on width.
 if (bar && "ResizeObserver" in window) {
   new ResizeObserver(() => {

@@ -421,9 +421,12 @@ body {
   font-weight: 400;
 }
 
+/* A baseline under the trace, so a steady rate reads as a line on a chart and
+   not as a stray rule floating beside the number. */
 .spark {
-  width: 72px;
+  width: 64px;
   height: 18px;
+  border-bottom: 1px solid var(--rule);
   overflow: visible;
 }
 /* No trace yet means no gap held open for one. */
@@ -517,6 +520,17 @@ body {
   display: none;
 }
 
+/* Below this width the identity and the figures cannot share one row once an
+   answer has filled the figures in. Rather than let the line wrap at that
+   moment and shove the composer up, the chat page gives the figures their own
+   row from the start. */
+@media (max-width: 1499px) {
+  :root[data-page="chat"] .status-figs {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+}
+
 /* ----------------------------------------------------------------- toasts */
 
 .toasts {
@@ -587,7 +601,9 @@ body {
   .status-figs > * {
     display: none;
   }
-  .status-figs {
+  .status-figs,
+  :root[data-page="chat"] .status-figs {
+    flex-basis: auto;
     margin-left: 0;
   }
   .status-figs > .st-ctx,

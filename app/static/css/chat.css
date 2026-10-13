@@ -1,536 +1,639 @@
-/* Chat column, message cards, composer, and the metrics HUD. */
+/* The chat page: the empty sheet, the thread, and the composer.
 
-.stream-wrap {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scroll-behavior: smooth;
+   Two views, switched by data-view on <main>:
+
+     empty   headline, paragraph, the composer directly under them, then the
+             skills. Nothing is pinned; the page scrolls as one sheet.
+     thread  the composer sits above the status line and the thread scrolls
+             above it.
+
+   DOM order is the visual order in both, so nothing is reordered with CSS and
+   the tab order never disagrees with what is on screen. */
+
+/* Every block on this page hangs from the same left edge and stops at the
+   same measure. */
+.col {
+  width: 100%;
+  max-width: calc(var(--col) + var(--pad) + var(--edge));
+  padding-left: max(var(--pad), env(safe-area-inset-left));
+  padding-right: max(var(--edge), env(safe-area-inset-right));
 }
 
-.thread {
-  width: 100%;
-  max-width: var(--col-max);
-  margin: 0 auto;
-  padding: 26px 22px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+.center[data-view="empty"] {
+  overflow-y: auto;
+}
+.center[data-view="empty"] .thread,
+.center[data-view="thread"] .hero,
+.center[data-view="thread"] .skills {
+  display: none;
+}
+
+.stream-wrap {
+  min-height: 0;
+}
+.center[data-view="thread"] .stream-wrap {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* ------------------------------------------------------------ empty state */
 
 .hero {
-  max-width: var(--col-max);
-  margin: 0 auto;
-  padding: min(9vh, 84px) 22px 30px;
-  text-align: center;
-  transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-out);
-}
-/* The empty state gives way to the first exchange. Exits are quicker than
-   entrances — the answer is what matters now. */
-.hero[data-leaving="true"] {
-  opacity: 0;
-  transform: translateY(-10px) scale(0.99);
-  pointer-events: none;
+  padding-top: clamp(var(--s-6), 9vh, var(--s-9));
+  padding-bottom: var(--s-5);
 }
 
 .hero h1 {
-  margin: 0 0 10px;
-  font-size: clamp(30px, 5.2vw, var(--t-3xl));
-  line-height: 1.12;
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-7);
+  font-weight: 700;
+  line-height: 1.04;
   letter-spacing: -0.03em;
-  /* Solid, and the weight carries it. A gradient across a headline is
-     decoration standing in for hierarchy. */
-  font-weight: 650;
-  color: var(--ink-0);
+  text-wrap: balance;
 }
 
 .hero p {
-  margin: 0 auto 22px;
-  max-width: 46ch;
-  color: var(--ink-1);
-  font-size: var(--t-lg);
-}
-
-.spec-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  margin-bottom: 26px;
-}
-
-.hero-lead {
-  margin: 0 0 14px;
-  font-size: var(--t-sm);
-  /* Directly on the aurora, so it cannot use --ink-3. */
-  color: var(--ink-2);
-}
-
-/* the armed-skill chip above the composer */
-.skill-active {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 12px 0;
-  padding: 5px 6px 5px 10px;
-  border-radius: 99px;
-  align-self: flex-start;
-  width: fit-content;
-  font-size: var(--t-xs);
-  color: #ede9fe;
-  border: 1px solid rgba(168, 85, 247, 0.45);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(168, 85, 247, 0.22));
-}
-.skill-active[hidden] { display: none; }
-.skill-active .g { font-size: 12px; }
-.skill-active .x {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.12);
-  color: inherit;
-  font-size: 10px;
-  cursor: pointer;
-}
-.skill-active .x:hover { background: rgba(255, 255, 255, 0.24); }
-
-/* ---------------------------------------------------------------- messages */
-
-.msg {
-  display: flex;
-  gap: 12px;
-  animation: rise var(--dur-3) var(--ease-out) both;
-}
-
-.msg.user {
-  justify-content: flex-end;
-}
-
-.msg.user .body {
-  max-width: 78%;
-  padding: 11px 16px;
-  border-radius: var(--r-lg) var(--r-lg) 5px var(--r-lg);
-  border: 1px solid var(--glass-brd);
-  background: rgba(99, 102, 241, 0.16);
-  color: var(--ink-0);
-  /* A pasted URL is one unbroken word; without this it pushes the column
-     wider than the viewport instead of wrapping. */
-  overflow-wrap: anywhere;
-}
-
-/* dir="auto" flips the bubble's own corner for right-to-left text. */
-.msg.user .body[dir="auto"]:dir(rtl) {
-  border-radius: var(--r-lg) var(--r-lg) var(--r-lg) 5px;
-}
-
-.avatar {
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  margin-top: 3px;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  color: #fff;
-  background: linear-gradient(140deg, var(--aur-indigo), var(--aur-violet) 60%, var(--aur-cyan));
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
-}
-
-.msg.bot .body {
-  flex: 1;
-  min-width: 0;
-  padding: 14px 18px 10px;
-  border-radius: 5px var(--r-lg) var(--r-lg) var(--r-lg);
-  /* Translucent fill, not backdrop-filter: hundreds of blurred cards is the
-     fastest way to make a scrolling thread stutter on a weak client. Alpha is
-     high enough that the answer's ground is bounded whatever the shader does. */
-  border: 1px solid transparent;
-  background:
-    linear-gradient(180deg, rgba(23, 27, 52, 0.93), rgba(11, 13, 26, 0.92)) padding-box,
-    linear-gradient(140deg, rgba(99, 102, 241, 0.5), rgba(34, 211, 238, 0.22) 50%,
-      rgba(168, 85, 247, 0.4)) border-box;
-  box-shadow: var(--sh-sm);
-}
-
-.prose { overflow-wrap: anywhere; }
-.prose > :first-child { margin-top: 0; }
-.prose > :last-child { margin-bottom: 0; }
-/* A streaming answer is rendered as two containers — settled blocks and the
-   one still being written — so the margin resets have to reach through them. */
-.prose > div > :first-child { margin-top: 0; }
-.prose > div:last-child > :last-child { margin-bottom: 0; }
-.prose p { margin: 0 0 0.85em; }
-.prose h1, .prose h2, .prose h3 {
-  margin: 1.1em 0 0.5em;
-  line-height: 1.28;
-  letter-spacing: -0.01em;
-}
-.prose h1 { font-size: var(--t-xl); }
-.prose h2 { font-size: var(--t-lg); }
-.prose h3 { font-size: var(--t-md); color: var(--ink-1); }
-.prose ul, .prose ol { margin: 0 0 0.85em; padding-left: 1.35em; }
-.prose li { margin: 0.22em 0; }
-.prose blockquote {
-  margin: 0 0 0.85em;
-  padding: 2px 0 2px 14px;
-  border-left: 2px solid rgba(99, 102, 241, 0.5);
-  color: var(--ink-1);
-}
-.prose hr {
-  border: 0;
-  border-top: 1px solid var(--glass-brd);
-  margin: 1.2em 0;
-}
-.prose a { color: #a5b4fc; }
-.prose code {
-  font-family: var(--font-mono);
-  font-size: 0.88em;
-  padding: 1.5px 5px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--glass-brd);
-}
-.prose table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0 0 0.85em;
-  font-size: var(--t-sm);
-}
-.prose th, .prose td {
-  border: 1px solid var(--glass-brd);
-  padding: 6px 10px;
-  text-align: left;
-}
-.prose th { background: var(--glass); }
-
-.codeblock {
-  margin: 0 0 0.85em;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--glass-brd);
-  background: rgba(4, 5, 12, 0.66);
-  overflow: hidden;
-}
-.codeblock header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 8px 5px 12px;
-  border-bottom: 1px solid var(--glass-brd);
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.codeblock pre {
   margin: 0;
-  padding: 12px 14px;
-  overflow-x: auto; /* the block scrolls, never the page */
-  font-family: var(--font-mono);
-  font-size: var(--t-sm);
-  line-height: 1.55;
+  max-width: 38rem;
+  font-size: var(--t-3);
+  text-wrap: pretty;
 }
-.codeblock pre code {
-  background: none;
-  border: 0;
+
+.skills {
+  padding-top: var(--s-6);
+  padding-bottom: var(--s-7);
+}
+.skills h2 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--t-2);
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+/* Six rows, not six cards: a name, what it does, and the tools it runs
+   through. Reads as a list because it is one. */
+.skill-list {
+  list-style: none;
+  margin: 0;
   padding: 0;
-  font-size: inherit;
+  border-top: 1px solid var(--rule);
 }
-.copy-btn {
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--ink-2);
-  font-size: var(--t-xs);
-  padding: 3px 8px;
-  border-radius: 6px;
+.skill-list li {
+  border-bottom: 1px solid var(--rule);
+}
+
+.skill {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--s-4);
+  width: 100%;
+  padding: var(--s-3) 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: var(--t-2);
+  text-align: start;
   cursor: pointer;
+  /* The hover tint runs past the text on both sides, so the row reads as one
+     target rather than a highlight hugging the words. */
+  box-shadow: 0 0 0 0 var(--sheet-2);
+  transition: background var(--dur-1), box-shadow var(--dur-1);
 }
-.copy-btn:hover { background: var(--glass); color: var(--ink-0); }
-.copy-btn.ok { color: var(--aur-green); }
-
-/* streaming caret */
-.caret {
-  display: inline-block;
-  width: 7px;
-  height: 1.05em;
-  margin-left: 2px;
-  vertical-align: -0.18em;
-  border-radius: 2px;
-  background: var(--aur-cyan);
-  box-shadow: 0 0 10px rgba(34, 211, 238, 0.7);
-  animation: caret 1s steps(2, start) infinite;
+.skill:hover {
+  background: var(--sheet-2);
+  box-shadow: calc(var(--s-3) * -1) 0 0 0 var(--sheet-2), var(--s-3) 0 0 0 var(--sheet-2);
 }
-.caret.done { animation: none; opacity: 0; transition: opacity 200ms; }
-@keyframes caret {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
+.skill .name {
+  font-weight: 600;
 }
-
-/* per-message metrics footer */
-.msg-foot {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 9px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
+.skill .blurb {
   color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
 }
-.msg-foot .sep { color: var(--ink-3); }
-.msg-foot .act {
-  margin-left: auto;
-  display: flex;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity var(--dur-1);
-}
-.msg.bot:hover .msg-foot .act,
-.msg-foot .act:focus-within { opacity: 1; }
-
-/* Copy and ask-again were reachable only by hovering, which touch cannot do.
-   Without this they simply do not exist on a phone. */
-@media (hover: none) {
-  .msg-foot .act { opacity: 1; }
-}
-
-/* notices */
-.notice {
-  align-self: center;
-  max-width: 92%;
-  padding: 9px 15px;
-  border-radius: 99px;
-  font-size: var(--t-sm);
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
-  color: var(--ink-1);
-  display: flex;
+.skill .pipe {
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: var(--t-1);
+  white-space: nowrap;
 }
-.notice.queue {
-  border-color: rgba(251, 191, 36, 0.4);
-  background: rgba(251, 191, 36, 0.1);
-  color: #ffe6ad;
-}
-.notice.err {
-  border-color: rgba(244, 114, 182, 0.45);
-  background: rgba(244, 114, 182, 0.1);
-  color: #ffd9ec;
-}
-/* The queue card is answering "when do I start?", so when the answer arrives
-   it should resolve rather than vanish. */
-.notice[data-leaving="true"] {
-  opacity: 0;
-  transform: scale(0.96);
-  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
-}
-.notice-retry {
-  margin-left: 4px;
-  padding: 3px 12px;
-  border-radius: 99px;
-  border: 1px solid currentColor;
-  background: transparent;
-  color: inherit;
-  font-size: var(--t-xs);
-  cursor: pointer;
-}
-.notice-retry:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-#char-count.warn {
-  color: var(--aur-rose);
-}
-
-.notice .spin {
-  width: 12px;
-  height: 12px;
-  border-radius: 99px;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: currentColor;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
 /* --------------------------------------------------------------- composer */
 
 .composer-wrap {
   flex: 0 0 auto;
-  padding: 10px 22px max(18px, env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, rgba(6, 7, 15, 0), rgba(6, 7, 15, 0.55) 45%);
+  padding-top: var(--s-3);
+  padding-bottom: var(--s-4);
+}
+/* Pinned under a scrolling thread, the composer needs an edge to scroll
+   against. On the empty sheet it sits in the flow and needs none. */
+.center[data-view="thread"] .composer-wrap {
+  max-width: none;
+  border-top: 1px solid var(--rule);
+}
+.center[data-view="thread"] .composer {
+  max-width: var(--col);
 }
 
 .composer {
   position: relative; /* anchors the "/" palette */
-  max-width: var(--col-max);
-  margin: 0 auto;
-  border-radius: var(--r-xl);
-  border: 1px solid var(--glass-brd);
-  background: rgba(11, 13, 26, 0.6);
-  backdrop-filter: blur(var(--blur));
-  -webkit-backdrop-filter: blur(var(--blur));
-  box-shadow: var(--sh-md);
-  transition: border-color var(--dur-2), box-shadow var(--dur-2);
-}
-.composer:focus-within {
-  border-color: rgba(99, 102, 241, 0.55);
-  box-shadow: var(--sh-glow);
-}
-
-.persona-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 12px 3px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.persona-row::-webkit-scrollbar { display: none; }
-
-.persona {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 11px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: transparent;
-  color: var(--ink-2);
-  font-size: var(--t-xs);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
-}
-.persona:hover { color: var(--ink-0); background: var(--glass); }
-.persona[aria-pressed="true"] {
-  color: #fff;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.5), rgba(168, 85, 247, 0.4));
-  border-color: rgba(168, 85, 247, 0.5);
+  /* The one authored move on the page: when the first question is sent the
+     composer travels from under the headline to the foot of the sheet. */
+  view-transition-name: composer;
 }
 
 .input-row {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
-  padding: 4px 10px 10px 16px;
+  gap: var(--s-3);
+  padding-bottom: var(--s-2);
+  border-bottom: 2px solid var(--ink);
+  transition: box-shadow var(--dur-1);
+}
+/* The rule under the input is its boundary; it thickens to say the input has
+   focus, since a textarea with no box has no ring to draw. */
+.composer:focus-within .input-row {
+  box-shadow: 0 1px 0 var(--ink);
 }
 
 #input {
   flex: 1;
   min-width: 0;
-  min-height: 26px;
+  min-height: 2.5rem;
   max-height: 208px;
-  padding: 8px 0;
+  padding: var(--s-2) 0;
   border: 0;
   background: transparent;
   resize: none;
   outline: none;
   /* Never below 16px: iOS Safari force-zooms a focused input under that and
      leaves the page scrolled sideways. */
-  font-size: max(16px, var(--t-lg));
+  font-size: max(16px, var(--t-3));
   line-height: 1.5;
   overflow-wrap: anywhere;
+  caret-color: var(--live);
 }
-#input::placeholder { color: var(--ink-3); }
+#input::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
+}
+/* On the empty sheet the input is the thing to do, and is set like it. */
+.center[data-view="empty"] #input {
+  font-size: var(--t-4);
+}
 
 .send {
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 0;
-  cursor: pointer;
-  color: #fff;
-  background: linear-gradient(135deg, var(--aur-indigo), var(--aur-violet));
-  box-shadow: 0 6px 22px rgba(99, 102, 241, 0.4);
-  transition: transform var(--dur-1) var(--ease-out), filter var(--dur-1),
-    background var(--dur-2);
+  min-width: 4.5rem;
 }
-.send:hover { filter: brightness(1.1); }
-.send:active { transform: scale(0.94); }
-.send[disabled] { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 .send[data-mode="stop"] {
-  background: linear-gradient(135deg, var(--aur-rose), #fb7185);
-  box-shadow: 0 6px 22px rgba(244, 114, 182, 0.4);
+  border-color: var(--fault);
+  background: transparent;
+  color: var(--fault);
 }
-.send svg { display: block; overflow: visible; }
-.send .glyph {
-  transform-origin: 12px 12px;
-  transition: opacity 140ms var(--ease-out), transform 240ms var(--ease-out);
-}
-.send[data-mode="send"] .stop,
-.send[data-mode="stop"] .go {
-  opacity: 0;
-  transform: rotate(-90deg) scale(0.6);
-}
-.send[data-mode="send"] .go,
-.send[data-mode="stop"] .stop {
-  opacity: 1;
-  transform: none;
+.send[data-mode="stop"]:hover {
+  background: color-mix(in oklch, var(--fault) 10%, var(--sheet));
 }
 
 .composer-foot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px 10px;
-  font-size: var(--t-xs);
-  color: var(--ink-3);
-}
-.kbd {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--glass-brd);
-  background: var(--glass);
+  gap: var(--s-4);
+  min-width: 0;
+  padding-top: var(--s-2);
   color: var(--ink-2);
+  font-size: var(--t-1);
+}
+
+.persona-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  margin-left: calc(var(--s-2) * -1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.persona-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Plain words. The chosen one is inked and ruled; weight stays the same so
+   choosing never shifts its neighbours. */
+.persona {
+  appearance: none;
+  padding: var(--s-1) var(--s-2);
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--t-2);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-1), background var(--dur-1);
+}
+.persona:hover {
+  color: var(--ink);
+  background: var(--sheet-2);
+}
+.persona[aria-pressed="true"] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+#char-count.warn {
+  color: var(--fault);
+}
+
+/* the armed skill, named above the input */
+.skill-active {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-bottom: var(--s-1);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
+.skill-active b {
+  color: var(--ink);
+}
+
+/* -------------------------------------------------------- command palette */
+
+.palette {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--s-2));
+  z-index: var(--z-pop);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--s-1);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  background: var(--sheet);
+  box-shadow: var(--sh-pop);
+}
+/* Under the headline there is no room above the input, and a list opening
+   upward would be cut off by the top bar. It opens downward there. */
+.center[data-view="empty"] .palette {
+  top: calc(100% + var(--s-2));
+  bottom: auto;
+}
+.palette .group {
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
+.palette .row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-1);
+  color: var(--ink);
+  font-size: var(--t-2);
+  cursor: pointer;
+}
+.palette .row:hover,
+.palette .row[aria-selected="true"] {
+  background: var(--sheet-2);
+}
+.palette .row .g {
+  color: var(--ink-2);
+}
+.palette .row .desc {
+  margin-left: auto;
+  max-width: 52%;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--t-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- messages */
+
+.thread {
+  padding-top: var(--s-6);
+  padding-bottom: var(--s-6);
+}
+
+.msg {
+  animation: msg-in var(--dur-2) var(--ease) both;
+}
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+/* The question heads its exchange: more room above it than below, like any
+   heading, and no bubble — weight and size already say whose line it is. */
+.msg.user {
+  margin-top: var(--s-7);
+}
+.msg.user:first-child {
+  margin-top: 0;
+}
+.msg.user .body {
+  font-size: var(--t-4);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  /* A pasted URL is one unbroken word; without this it pushes the column
+     wider than the viewport instead of wrapping. */
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+/* A pasted page is not a heading. It is set as text and folded until asked for. */
+.msg.user.long .body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+  font-size: var(--t-3);
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+.msg.user.long.expanded .body {
+  display: block;
+}
+.msg-more {
+  margin: var(--s-1) 0 0 calc(var(--s-2) * -1);
+}
+
+.msg.bot {
+  margin-top: var(--s-3);
+}
+
+.prose {
+  max-width: 68ch;
+  overflow-wrap: anywhere;
+}
+.prose > :first-child {
+  margin-top: 0;
+}
+.prose > :last-child {
+  margin-bottom: 0;
+}
+/* A streaming answer is rendered as two containers — settled blocks and the
+   one still being written — so the margin resets have to reach through them. */
+.prose > div > :first-child {
+  margin-top: 0;
+}
+.prose > div:last-child > :last-child {
+  margin-bottom: 0;
+}
+.prose p {
+  margin: 0 0 0.9em;
+}
+.prose h1,
+.prose h2,
+.prose h3 {
+  margin: 1.5em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.prose h1 {
+  font-size: var(--t-5);
+}
+.prose h2 {
+  font-size: var(--t-4);
+}
+.prose h3 {
+  font-size: var(--t-3);
+}
+.prose ul,
+.prose ol {
+  margin: 0 0 0.9em;
+  padding-inline-start: 1.4em;
+}
+.prose li {
+  margin: 0.25em 0;
+}
+.prose li::marker {
+  color: var(--ink-2);
+}
+.prose blockquote {
+  margin: 0 0 0.9em;
+  padding-inline-start: var(--s-4);
+  border-inline-start: 1px solid var(--ink-2);
+  color: var(--ink-2);
+}
+.prose hr {
+  margin: 1.4em 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+.prose code {
+  padding: 1px 4px;
+  border-radius: var(--r-1);
+  background: var(--sheet-2);
+  font-size: 0.94em;
+}
+.prose table {
+  width: 100%;
+  margin: 0 0 0.9em;
+  border-collapse: collapse;
+  font-size: var(--t-2);
+}
+.prose th,
+.prose td {
+  padding: var(--s-2) var(--s-3) var(--s-2) 0;
+  border-bottom: 1px solid var(--rule);
+  text-align: start;
+}
+.prose th {
+  border-bottom-color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* Code is always left-to-right, whatever direction the answer around it runs. */
+.codeblock {
+  margin: 0 0 0.9em;
+  border-radius: var(--r-1);
+  background: var(--sheet-2);
+  direction: ltr;
+  text-align: left;
+  overflow: hidden;
+}
+.codeblock header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-1) var(--s-2) var(--s-1) var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
+.codeblock pre {
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  overflow-x: auto; /* the block scrolls, never the page */
+  font-size: var(--t-2);
+  line-height: 1.55;
+}
+.codeblock pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+.copy-btn {
+  padding: var(--s-1) var(--s-2);
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--t-1);
+  cursor: pointer;
+}
+.copy-btn:hover {
+  background: var(--sheet);
+  color: var(--ink);
+}
+.copy-btn.ok {
+  color: var(--live);
+}
+
+/* The writing position. It is the one thing in the thread that is live, so it
+   is the one thing in the thread that takes the live colour. */
+.caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: var(--live);
+  animation: caret 1s steps(2, start) infinite;
+}
+@keyframes caret {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* what this answer cost */
+.msg-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-3);
+  max-width: 68ch;
+  margin-top: var(--s-3);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
+.msg-foot .act {
+  display: flex;
+  gap: var(--s-1);
+  margin-left: auto;
+}
+
+/* notices: a line in the thread, with a mark that says what kind */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: 68ch;
+  margin-top: var(--s-4);
+  color: var(--ink-2);
+  font-size: var(--t-2);
+  transition: opacity var(--dur-1);
+}
+.notice.queue {
+  color: var(--caution);
+}
+.notice.err {
+  align-items: flex-start;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-1);
+  background: color-mix(in oklch, var(--fault) 8%, var(--sheet));
+  color: var(--ink);
+}
+.notice.err .icon {
+  margin-top: 3px;
+  color: var(--fault);
+}
+/* The queue line is answering "when do I start?", so when the answer arrives
+   it should resolve rather than vanish. */
+.notice[data-leaving="true"] {
+  opacity: 0;
+}
+.notice-retry {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.notice .spin {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in oklch, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------- narrower */
+
+@media (max-width: 760px) {
+  /* Keyboard hints are for keyboards; the row is for the personas here. */
+  .hint {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .hero {
+    padding-top: var(--s-6);
+  }
+  .hero h1 {
+    font-size: 2.25rem;
+  }
+  .skill {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
+  .msg.user {
+    margin-top: var(--s-6);
+  }
 }
 
 @media (pointer: coarse) {
   .persona {
     min-height: 44px;
-    padding: 0 16px;
-  }
-  .persona-row {
-    gap: 8px;
-    padding-bottom: 6px;
+    padding-inline: var(--s-3);
   }
   .copy-btn {
     min-height: 44px;
-    padding: 0 14px;
+    padding-inline: var(--s-3);
   }
   .send {
-    width: 48px;
-    height: 48px;
+    min-height: 44px;
   }
-  .skill-active {
-    min-height: 40px;
+  .skill {
+    min-height: 56px;
   }
-  .skill-active .x {
-    width: 32px;
-    height: 32px;
+  .palette .row {
+    min-height: 48px;
   }
-  /* The composer is in the thumb zone; give the row a little more room. */
-  .input-row {
-    padding-bottom: 12px;
-  }
-}
-
-@media (max-width: 620px) {
-  .suggestions { grid-template-columns: 1fr; }
-  .thread { padding: 18px 14px 6px; }
-  .composer-wrap { padding: 8px 12px 12px; }
-  .msg.user .body { max-width: 88%; }
 }

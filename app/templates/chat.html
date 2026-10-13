@@ -45,59 +45,58 @@
 </dialog>
 {% endblock %}
 
+{% block main_attrs %}data-view="empty"{% endblock %}
+
 {% block main %}
 <div class="stream-wrap" id="stream-wrap">
-  <section class="hero" id="hero">
+  <section class="hero col" id="hero">
     <h1>A small model,<br>hosted honestly.</h1>
     <p>
       {{ info.model }} runs entirely on this server — no API, no upstream provider.
       Every answer shows what it actually cost to produce.
     </p>
-    <p class="hero-lead">Pick a skill, or just type. Press <span class="kbd">/</span> for tools.</p>
-    <div class="skill-grid" id="skill-grid"></div>
   </section>
 
   {# Not a live region — see #sr-status in base.html for why. #}
-  <div class="thread" id="thread"></div>
+  <div class="thread col" id="thread"></div>
 </div>
 
-<div class="composer-wrap">
+<div class="composer-wrap col">
   <form class="composer" id="composer">
     <div class="palette" id="palette" hidden role="listbox" aria-label="Tools and skills"></div>
     <div class="skill-active" id="skill-active" hidden></div>
-    <div class="persona-row" id="persona-row" role="group" aria-label="Persona">
-      {% for p in personas %}
-      <button type="button" class="persona" data-persona="{{ p.id }}"
-              aria-pressed="{{ 'true' if p.id == default_persona else 'false' }}"
-              title="{{ p.blurb }}">
-        <span aria-hidden="true">{{ p.glyph }}</span>{{ p.name }}
-      </button>
-      {% endfor %}
-    </div>
     <div class="input-row">
       <label class="sr-only" for="input">Message {{ info.model }}</label>
-      <textarea id="input" rows="1" placeholder="Ask {{ info.model }} something…"
+      <textarea id="input" rows="1" placeholder="Ask something…"
                 autocomplete="off" spellcheck="true"
                 maxlength="8000" aria-describedby="input-hint"
                 aria-controls="palette" aria-expanded="false"></textarea>
-      <button class="send" id="send" type="submit" data-mode="send" aria-label="Send message">
-        {# Both marks are present and crossfade; swapping one path's `d` gives
-           an instant snap, which reads as a glitch rather than a state change. #}
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-             aria-hidden="true">
-          <path class="glyph go" d="M5 12h13M12 5l7 7-7 7"/>
-          <path class="glyph stop" d="M8 8h8v8H8z"/>
-        </svg>
-      </button>
+      <button class="btn btn-primary send" id="send" type="submit" data-mode="send"
+              aria-label="Send message"><span id="send-label">Send</span></button>
     </div>
     <div class="composer-foot">
-      <span id="input-hint"><span class="kbd">Enter</span> send · <span class="kbd">Shift ↵</span> newline</span>
+      <div class="persona-row" id="persona-row" role="group" aria-label="Persona">
+        {% for p in personas %}
+        <button type="button" class="persona" data-persona="{{ p.id }}"
+                aria-pressed="{{ 'true' if p.id == default_persona else 'false' }}"
+                title="{{ p.blurb }}">{{ p.name }}</button>
+        {% endfor %}
+      </div>
       <span class="spacer"></span>
-      <span id="char-count" class="mono" hidden></span>
+      <span id="char-count" class="num" hidden></span>
+      {# The whole hint is there for a screen reader; only the part a sighted
+         visitor would not guess is shown. #}
+      <span class="hint" id="input-hint">
+        <kbd>/</kbd> for tools<span class="sr-only">. Enter sends, Shift and Enter adds a line.</span>
+      </span>
     </div>
   </form>
 </div>
+
+<section class="skills col" id="skills" aria-labelledby="skills-label">
+  <h2 id="skills-label">Pick a skill, or just type.</h2>
+  <ul class="skill-list" id="skill-grid"></ul>
+</section>
 {% endblock %}
 
 {% block scripts %}<script type="module" src="/static/js/chat.js?v={{ version }}"></script>{% endblock %}

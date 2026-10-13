@@ -1,83 +1,46 @@
 /* The answer timeline and the tool cards it contains. */
 
-/* Inline SVG icons (icons.js) sit on the text baseline by default, which
-   nudges every badge they live in. Blocks them instead. */
-.icon {
-  display: block;
-  flex: 0 0 auto;
-}
+/* -------------------------------------------------------------- route -- */
 
-/* ------------------------------------------------------------- timeline -- */
-
+/* How the answer was reached, as one line of text: each step, how it was
+   chosen, and how long it took. Steps are separated by a hairline, not boxed. */
 .timeline {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  max-width: 68ch;
+  margin-bottom: var(--s-3);
+  color: var(--ink-2);
+  font-size: var(--t-1);
 }
 
 .tl-step {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px 6px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  /* the timings inside are --ink-3, so this must darken, not lighten */
-  background: var(--surface);
-  font-size: var(--t-xs);
-  color: var(--ink-2);
-  align-self: flex-start;
-  max-width: 100%;
+  gap: 0.5em;
+  min-width: 0;
 }
-.tl-step .g {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  background: rgba(99, 102, 241, 0.2);
-  color: #c7d2fe;
-  font-size: 11px;
+.tl-step + .tl-step {
+  padding-left: var(--s-4);
+  border-left: 1px solid var(--rule);
 }
 .tl-step .label {
-  color: var(--ink-1);
-  white-space: nowrap;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.tl-step .detail {
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.tl-step span:empty {
+  display: none;
 }
-.tl-step .ms {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-3);
-  padding-left: 8px;
+/* The step that is running is the live thing in this line. */
+.tl-step[data-status="running"] .g,
+.tl-step[data-status="running"] .st {
+  color: var(--live);
 }
-.tl-step[data-status="running"] .g {
-  animation: tl-pulse 1.1s var(--ease-in-out) infinite;
-}
-.tl-step[data-status="ok"] .g {
-  background: rgba(52, 211, 153, 0.18);
-  color: #6ee7b7;
-}
-.tl-step[data-status="failed"] {
-  border-color: rgba(244, 114, 182, 0.4);
-}
-.tl-step[data-status="failed"] .g {
-  background: rgba(244, 114, 182, 0.2);
-  color: #f9a8d4;
-}
-@keyframes tl-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.92); }
+.tl-step[data-status="failed"] .g,
+.tl-step[data-status="failed"] .st {
+  color: var(--fault);
 }
 
 /* ----------------------------------------------------------- card shell -- */
@@ -395,147 +358,7 @@
 }
 .card-fail p { margin: 0; color: #ffd9ec; font-size: var(--t-sm); }
 
-/* ------------------------------------------------------------- skills -- */
-
-.skill-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  text-align: left;
-}
-
-.skill {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: var(--surface);
-  color: var(--ink-1);
-  cursor: pointer;
-  overflow: hidden;
-  transition: border-color var(--dur-1), transform var(--dur-2) var(--ease-out),
-    background var(--dur-1);
-}
-.skill:hover {
-  transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, 0.55);
-  background: var(--surface-2);
-}
-.skill .top { display: flex; align-items: center; gap: 8px; }
-.skill .g {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: linear-gradient(140deg, rgba(99, 102, 241, .55), rgba(168, 85, 247, .45));
-  color: #fff;
-  font-size: 13px;
-}
-.skill .name { color: var(--ink-0); font-weight: 550; font-size: var(--t-md); }
-.skill .blurb { font-size: var(--t-sm); color: var(--ink-2); }
-
-/* the little pipeline graph on each tile */
-.pipe {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 2px;
-}
-.pipe .node {
-  padding: 1px 7px;
-  border-radius: 99px;
-  border: 1px solid var(--glass-brd);
-  background: var(--surface-inset);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--ink-3);
-  white-space: nowrap;
-}
-.pipe .link {
-  flex: 0 0 10px;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(99, 102, 241, 0.7), rgba(34, 211, 238, 0.35));
-}
-
-/* --------------------------------------------------------- command palette */
-
-.palette {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% + 8px);
-  z-index: 30;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 6px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  background: rgba(11, 13, 26, 0.96);
-  backdrop-filter: blur(var(--blur));
-  -webkit-backdrop-filter: blur(var(--blur));
-  box-shadow: var(--sh-lg);
-}
-.palette[hidden] { display: none; }
-.palette .group {
-  padding: 6px 10px 4px;
-  font-size: 10px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-.palette .row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--ink-1);
-  cursor: pointer;
-  text-align: left;
-}
-.palette .row:hover,
-.palette .row[aria-selected="true"] {
-  background: var(--accent-soft);
-  color: var(--ink-0);
-}
-.palette .row .g { width: 18px; text-align: center; color: #a5b4fc; }
-.palette .row .cmd { font-family: var(--font-mono); font-size: var(--t-sm); }
-.palette .row .desc {
-  margin-left: auto;
-  font-size: var(--t-xs);
-  color: var(--ink-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 52%;
-}
-
-@media (pointer: coarse) {
-  .palette .row {
-    min-height: 48px;
-    padding: 8px 12px;
-  }
-  .tl-step {
-    min-height: 36px;
-    padding: 6px 14px 6px 10px;
-  }
-  .skill {
-    min-height: 96px;
-  }
-}
-
-@media (max-width: 900px) {
-  .skill-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 620px) {
-  .skill-grid { grid-template-columns: 1fr; }
   .card-weather .days { grid-template-columns: repeat(3, 1fr); }
   .card-stats .stat-row { grid-template-columns: repeat(2, 1fr); }
 }

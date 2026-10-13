@@ -1,43 +1,41 @@
 /* Skill gallery and the "/" command palette. */
 
 import { escapeHtml } from "./md.js";
-import { stagger } from "./motion.js";
 import { icon, hasIcon } from "./icons.js";
 
-const glyphFor = (name, fallback, size = 15) =>
-  hasIcon(name) ? icon(name, size) : escapeHtml(fallback || "◆");
+// Every row gets a drawn icon. A tool or skill the set has no picture for
+// takes the generic one rather than a Unicode glyph, which is tofu on half
+// the machines that will ever load this.
+const glyphFor = (name, size = 15) => icon(hasIcon(name) ? name : "tool", size);
 
 const SKILLS = window.AURORA.skills || [];
 const TOOLS = window.AURORA.tools || [];
 
 /* -------------------------------------------------------------- gallery -- */
 
+/** The tools a skill runs through, in order, as plain words. */
 function pipeGraph(pipeline) {
   return pipeline
-    .map((node, i) => {
-      const label = node === "model" ? "answer" : node.replace(/_/g, " ");
-      const link = i ? '<span class="link"></span>' : "";
-      return `${link}<span class="node">${escapeHtml(label)}</span>`;
-    })
-    .join("");
+    .map((node) => escapeHtml(node === "model" ? "answer" : node.replace(/_/g, " ")))
+    .join(icon("arrow", 12));
 }
 
 export function mountSkills(host, onSelect) {
   if (!host) return;
   if (!SKILLS.length) {
-    host.remove();
+    // The heading goes with the list it introduces.
+    (host.closest(".skills") || host).remove();
     return;
   }
   host.innerHTML = SKILLS.map(
     (s) => `
-    <button class="skill" type="button" data-skill="${escapeHtml(s.id)}">
-      <span class="top">
-        <span class="g" aria-hidden="true">${glyphFor(s.id, s.glyph)}</span>
+    <li>
+      <button class="skill" type="button" data-skill="${escapeHtml(s.id)}">
         <span class="name">${escapeHtml(s.name)}</span>
-      </span>
-      <span class="blurb">${escapeHtml(s.blurb)}</span>
-      <span class="pipe">${pipeGraph(s.pipeline)}</span>
-    </button>`
+        <span class="blurb">${escapeHtml(s.blurb)}</span>
+        <span class="pipe">${pipeGraph(s.pipeline)}</span>
+      </button>
+    </li>`
   ).join("");
 
   host.querySelectorAll(".skill").forEach((btn) =>
@@ -46,7 +44,6 @@ export function mountSkills(host, onSelect) {
       if (skill) onSelect(skill);
     })
   );
-  stagger(host.querySelectorAll(".skill"), 40);
 }
 
 export function getSkill(id) {
@@ -79,7 +76,6 @@ export function setupPalette(input, host, { onSkill }) {
     ).map((t) => ({
       kind: "tool",
       id: t.name,
-      glyph: t.glyph,
       cmd: t.example || `/${t.name}`,
       desc: t.description,
     }));
@@ -88,7 +84,6 @@ export function setupPalette(input, host, { onSkill }) {
     ).map((s) => ({
       kind: "skill",
       id: s.id,
-      glyph: s.glyph,
       cmd: s.name,
       desc: s.blurb,
     }));
@@ -106,8 +101,8 @@ export function setupPalette(input, host, { onSkill }) {
       html += `
         <div class="row" role="option" id="pal-opt-${i}" data-i="${i}"
              aria-selected="${i === index}">
-          <span class="g">${glyphFor(row.id, row.glyph, 14)}</span>
-          <span class="cmd">${escapeHtml(row.cmd)}</span>
+          <span class="g">${glyphFor(row.id, 14)}</span>
+          <span class="cmd${row.kind === "tool" ? " num" : ""}">${escapeHtml(row.cmd)}</span>
           <span class="desc">${escapeHtml(row.desc)}</span>
         </div>`;
     });

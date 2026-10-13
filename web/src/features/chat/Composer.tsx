@@ -328,7 +328,12 @@ export function Composer() {
           </span>
           {/* The whole hint is there for a screen reader; only the part a
               sighted visitor would not guess is shown. Keyboard hints are for
-              keyboards: on a narrow screen the row is for the personas. */}
+              keyboards: on a narrow screen the row is for the personas.
+
+              The space after the hidden sentence is not stray. It is a flex
+              item of no width, so the row's gap falls after "for tools" and
+              holds the hint that far in from the end of the rule above. That
+              is where it has always sat; take the space out and it moves. */}
           <span
             id="input-hint"
             className="inline-flex items-center gap-[6px] whitespace-nowrap le-760:hidden"

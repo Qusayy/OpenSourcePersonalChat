@@ -522,6 +522,236 @@ class MockModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(engine._lock.locked())
 
 
+async def take(engine, request_id: str) -> dict:
+    """Take the slot for a run. Returns what the engine said about it."""
+    said = {}
+    async for name, payload in engine.take_slot(request_id):
+        if name == "slot":
+            said = payload
+    return said
+
+
+class HeldSlotTests(EngineCase):
+    """A run of several passes takes the slot once and keeps it between them.
+
+    The rule the rest of this file is about still holds: while a thread is
+    inside the model the slot is taken, whoever lets go of what.
+    """
+
+    async def test_taking_the_slot_takes_it_and_says_how_long_the_wait_was(self) -> None:
+        engine = self.scripted()
+        said = await take(engine, "run")
+        self.assertIs(said["held"], True)
+        self.assertGreaterEqual(said["queue_wait_ms"], 0)
+        self.assertTrue(engine._lock.locked())
+        self.assertIs(engine.info()["busy"], True)
+        self.assertEqual(engine.info()["queued"], 0)
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+    async def test_the_passes_of_the_run_do_not_wait_and_do_not_give_it_back(self) -> None:
+        engine = self.scripted(NONE, EIGHT)
+        await take(engine, "run")
+        said = await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
+        self.assertEqual(said.queue_wait_ms, 0.0)
+        # Between two passes of the run the slot is still the run's.
+        self.assertTrue(engine._lock.locked())
+        self.assertIs(engine.info()["busy"], True)
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        self.assertEqual(names(stream), ["start", "token", "done"])
+        self.assertEqual(stream[-1][1]["queue_wait_ms"], 0.0)
+        self.assertTrue(engine._lock.locked())
+        self.assertEqual(engine.info()["completed"], 2)
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+    async def test_another_request_waits_for_the_whole_run_not_for_one_pass(self) -> None:
+        engine = self.scripted(NONE, EIGHT, "nine ten")
+        await take(engine, "run")
+        other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await until(lambda: engine.info()["queued"] == 1)
+
+        await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
+        await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        # Two passes of the run have come and gone, and the other is still waiting.
+        self.assertFalse(other.done())
+        self.assertEqual(len(engine.passes), 2)
+
+        engine.give_slot("run")
+        stream = await other
+        self.assertEqual(stream[-1][1]["text"], "nine ten")
+        self.assertGreater(stream[-1][1]["queue_wait_ms"], 0)
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+
+    async def test_a_second_run_queues_behind_the_first_and_is_told_its_place(self) -> None:
+        engine = self.scripted()
+        await take(engine, "first")
+        seen: list = []
+
+        async def wait_for_it() -> None:
+            async for item in engine.take_slot("second"):
+                seen.append(item)
+
+        second = asyncio.create_task(wait_for_it())
+        await until(lambda: any(name == "queue" for name, _ in seen))
+        self.assertEqual(seen[0], ("queue", {"position": 0, "first": True}))
+        self.assertIs(engine.others_waiting(), True)
+
+        engine.give_slot("first")
+        await second
+        self.assertEqual(seen[-1][0], "slot")
+        self.assertIs(seen[-1][1]["held"], True)
+        self.assertGreater(seen[-1][1]["queue_wait_ms"], 0)
+        self.assertIs(engine.others_waiting(), False)
+        engine.give_slot("second")
+        self.assertTrue(engine.free)
+
+    async def test_letting_go_while_a_thread_is_inside_frees_nothing_until_it_leaves(self) -> None:
+        engine = self.scripted(EIGHT, "nine ten", gated=True)
+        await take(engine, "run")
+        reader = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True)))
+        await engine.entered(1)
+
+        # The run goes away mid-pass: its reader is cancelled and it lets go.
+        reader.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await reader
+        engine.give_slot("run")
+        self.assertTrue(engine._lock.locked())
+        self.assertIs(engine.info()["busy"], True)
+
+        # Somebody else asks. They wait; they do not join the thread in there.
+        other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await until(lambda: engine.info()["queued"] == 1)
+        self.assertEqual(len(engine.passes), 1)
+
+        engine.release()
+        stream = await other
+        self.assertEqual(stream[-1][1]["text"], "nine ten")
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+
+    async def test_a_reader_that_leaves_a_pass_does_not_cost_the_run_its_slot(self) -> None:
+        engine = self.scripted(EIGHT, "nine ten", gated=True)
+        await take(engine, "run")
+        reader = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True)))
+        await engine.entered(1)
+        reader.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await reader
+        engine.release()
+        await until(lambda: not engine._inside)
+        # The thread is out, and the slot is still with the run that took it.
+        self.assertTrue(engine._lock.locked())
+        self.assertEqual(engine._holder, "run")
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        self.assertEqual(stream[-1][1]["text"], "nine ten")
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+    async def test_a_failure_on_the_way_into_a_pass_leaves_the_slot_with_the_run(self) -> None:
+        engine = self.scripted(EIGHT)
+        await take(engine, "run")
+        with mock.patch.object(engine, "prompt_tokens", side_effect=RuntimeError("tokenizer broke")):
+            with self.assertRaises(RuntimeError):
+                await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        self.assertTrue(engine._lock.locked())
+        self.assertEqual(engine._holder, "run")
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+    async def test_a_run_stopped_while_it_waits_for_the_slot_does_not_get_it(self) -> None:
+        engine = self.scripted()
+        await take(engine, "first")
+        waiting = asyncio.create_task(take(engine, "second"))
+        await until(lambda: engine.info()["queued"] == 1)
+        self.assertIs(engine.cancel("second"), True)
+        said = await asyncio.wait_for(waiting, 5)
+        self.assertIs(said["held"], False)
+        self.assertEqual(engine.info()["queued"], 0)
+        self.assertEqual(engine._holder, "first")
+        engine.give_slot("first")
+        self.assertTrue(engine.free)
+
+    async def test_a_run_cancelled_while_it_waits_for_the_slot_gives_its_place_up(self) -> None:
+        engine = self.scripted(EIGHT)
+        await take(engine, "first")
+        waiting = asyncio.create_task(take(engine, "second"))
+        await until(lambda: engine.info()["queued"] == 1)
+        waiting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiting
+        self.assertEqual(engine.info()["queued"], 0)
+        engine.give_slot("first")
+        self.assertTrue(engine.free)
+        # Nothing was lost with it: the next request runs.
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING))
+        self.assertEqual(stream[-1][1]["text"], EIGHT)
+
+    async def test_only_the_run_that_holds_the_slot_can_give_it_back(self) -> None:
+        engine = self.scripted()
+        await take(engine, "run")
+        engine.give_slot("somebody-else")
+        self.assertTrue(engine._lock.locked())
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+        engine.give_slot("run")  # twice is nothing
+        self.assertTrue(engine.free)
+
+    async def test_taking_a_slot_already_held_by_the_run_is_immediate(self) -> None:
+        engine = self.scripted()
+        await take(engine, "run")
+        said = await asyncio.wait_for(take(engine, "run"), 5)
+        self.assertEqual(said, {"held": True, "queue_wait_ms": 0.0})
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+    async def test_a_pass_that_claims_a_slot_its_run_does_not_hold_waits_like_any_other(self) -> None:
+        engine = self.scripted(EIGHT, "nine ten")
+        # Nobody holds the slot: the pass takes it and gives it back itself.
+        await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        self.assertTrue(engine.free)
+        # Another run holds it: the pass queues behind that run.
+        await take(engine, "other")
+        reader = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True)))
+        await until(lambda: engine.info()["queued"] == 1)
+        self.assertEqual(len(engine.passes), 1)
+        engine.give_slot("other")
+        self.assertEqual((await reader)[-1][1]["text"], "nine ten")
+        self.assertTrue(engine.free)
+
+    async def test_whether_anybody_is_waiting_can_be_asked(self) -> None:
+        engine = self.scripted(EIGHT)
+        self.assertIs(engine.others_waiting(), False)
+        await take(engine, "run")
+        self.assertIs(engine.others_waiting(), False)
+        other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await until(engine.others_waiting)
+        engine.give_slot("run")
+        await other
+        self.assertIs(engine.others_waiting(), False)
+
+    async def test_giving_the_slot_up_between_passes_lets_one_request_in_and_then_waits_its_turn(self) -> None:
+        engine = self.scripted(NONE, "nine ten", EIGHT)
+        await take(engine, "run")
+        await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
+        other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await until(engine.others_waiting)
+
+        # As a run does while a tool of its own is out on the network.
+        engine.give_slot("run")
+        again = await take(engine, "run")
+        self.assertIs(again["held"], True)
+        self.assertTrue(other.done())  # the other went first
+        self.assertEqual(other.result()[-1][1]["text"], "nine ten")
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        self.assertEqual(stream[-1][1]["text"], EIGHT)
+        self.assertEqual(engine.most_at_once, 1)
+        engine.give_slot("run")
+        self.assertTrue(engine.free)
+
+
 class ScriptTests(EngineCase):
     """The stand-in itself: it must say what it was given, exactly."""
 

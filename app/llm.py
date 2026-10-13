@@ -148,6 +148,10 @@ class Engine:
         self._grammars: dict[int, Any] = {}
         self._busy = False
         self._completed = 0
+        # The run that is holding the slot across its passes, if one is, and
+        # whether a worker thread is inside the model at this moment.
+        self._holder: str | None = None
+        self._inside = False
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -366,6 +370,7 @@ class Engine:
         *,
         request_id: str | None = None,
         seed: int | None = None,
+        held: bool = False,
     ) -> AsyncIterator[tuple[str, Any]]:
         """One short grammar-constrained pass, with its wait made visible.
 
@@ -388,7 +393,9 @@ class Engine:
         result = Completion(error="the pass ended without saying anything")
         try:
             async with aclosing(
-                self.stream_chat(messages, sampling, request_id, grammar=grammar_text, seed=seed)
+                self.stream_chat(
+                    messages, sampling, request_id, grammar=grammar_text, seed=seed, held=held
+                )
             ) as stream:
                 async for event, data in stream:
                     if event == "queue":
@@ -423,11 +430,14 @@ class Engine:
         *,
         request_id: str | None = None,
         seed: int | None = None,
+        held: bool = False,
     ) -> Completion:
         """``stream_json`` for a caller with nowhere to show a queue."""
         result = Completion(error="the pass ended without saying anything")
         async with aclosing(
-            self.stream_json(messages, grammar_text, max_tokens, request_id=request_id, seed=seed)
+            self.stream_json(
+                messages, grammar_text, max_tokens, request_id=request_id, seed=seed, held=held
+            )
         ) as stream:
             async for event, data in stream:
                 if event == "completion":
@@ -443,12 +453,18 @@ class Engine:
         grammar: str | None = None,
         seed: int | None = None,
         stop: list[str] | None = None,
+        held: bool = False,
     ) -> AsyncIterator[tuple[str, dict]]:
         """Yield (event, payload) tuples: queue | start | token | done | error.
 
         One pass through the model, whatever it is for. ``grammar`` holds the
         output to a GBNF grammar, ``seed`` makes the sampling repeatable and
         ``stop`` ends the output at any of the given strings.
+
+        ``held`` says the run this pass belongs to took the slot with
+        ``take_slot`` and is keeping it. The pass then does not wait for the
+        slot and does not give it back. If the run is not in fact holding it,
+        the pass waits its turn like any other.
         """
         request_id = request_id or uuid.uuid4().hex
         # Two reasons to stop writing, kept apart. `stopped` is a person asking
@@ -472,21 +488,24 @@ class Engine:
                 loop = asyncio.get_running_loop()
                 queued_at = time.perf_counter()
 
-                # --- wait for the one inference slot, reporting position while we wait
-                self._waiting.append(request_id)
-                acquire = asyncio.ensure_future(self._lock.acquire())
-                first_notice = True
-                while not stopped.is_set():
-                    done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
-                    if acquire in done or stopped.is_set():
-                        break
-                    try:
-                        ahead = list(self._waiting).index(request_id)
-                    except ValueError:
-                        ahead = 0
-                    yield "queue", {"position": ahead, "first": first_notice}
-                    first_notice = False
-                self._waiting.remove(request_id)
+                # --- wait for the one inference slot, reporting position while
+                # we wait. A run that is holding the slot has done its waiting.
+                held = held and self._holder == request_id
+                if not held:
+                    self._waiting.append(request_id)
+                    acquire = asyncio.ensure_future(self._lock.acquire())
+                    first_notice = True
+                    while not stopped.is_set():
+                        done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
+                        if acquire in done or stopped.is_set():
+                            break
+                        try:
+                            ahead = list(self._waiting).index(request_id)
+                        except ValueError:
+                            ahead = 0
+                        yield "queue", {"position": ahead, "first": first_notice}
+                        first_notice = False
+                    self._waiting.remove(request_id)
 
                 queue_wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
                 if stopped.is_set():
@@ -565,14 +584,16 @@ class Engine:
                         emit(("error", {"message": f"{type(exc).__name__}: {exc}"}))
                     finally:
                         # The thread owns the slot until it has truly left
-                        # llama.cpp. It hands it back before it sends its last
-                        # event, so whoever sees the stream end finds the slot free.
-                        loop.call_soon_threadsafe(self._release_slot)
+                        # llama.cpp. It says so before it sends its last event,
+                        # so whoever sees the stream end finds the slot where it
+                        # belongs: free, or back with the run that is holding it.
+                        loop.call_soon_threadsafe(self._worker_left)
                         emit(SENTINEL)
 
                 thread = threading.Thread(target=worker, name=f"gen-{request_id[:8]}", daemon=True)
                 thread.start()
                 started = True
+                self._inside = True
 
                 yield "start", {
                     "request_id": request_id,
@@ -603,11 +624,98 @@ class Engine:
                         if self._lock.locked():
                             self._lock.release()
 
-    def _release_slot(self) -> None:
-        self._busy = False
+    def _worker_left(self) -> None:
+        """Run on the event loop once a worker thread has left the model.
+
+        A pass that took the slot for itself gives it back here. A pass of a
+        run that is holding the slot leaves it with the run. And if that run
+        let go while its thread was still inside, this is when the slot goes
+        back: never before the thread is out.
+        """
+        self._inside = False
         self._completed += 1
+        if self._holder is None:
+            self._free()
+
+    def _free(self) -> None:
+        self._busy = False
         if self._lock.locked():
             self._lock.release()
+
+    # -- one run, several passes ----------------------------------------------
+
+    async def take_slot(self, request_id: str) -> AsyncIterator[tuple[str, dict]]:
+        """Wait for the slot on behalf of a whole run, and keep it.
+
+        A run of several passes that gave the slot up between them would let
+        another request in each time, and that request's prompt would replace
+        this run's in the model's cache: every pass would then re-read the
+        whole conversation. Holding the slot keeps each pass down to reading
+        what is new.
+
+        Yields ``("queue", payload)`` while it waits, then one
+        ``("slot", {"held": bool, "queue_wait_ms": float})``. It is not held
+        if the run was stopped while it waited. Whoever takes the slot gives
+        it back with ``give_slot``, whatever happens to the run.
+        """
+        queued_at = time.perf_counter()
+        if self._holder == request_id:
+            yield "slot", {"held": True, "queue_wait_ms": 0.0}
+            return
+
+        acquire: asyncio.Future | None = None
+        taken = False
+        with self.hold(request_id) as stopped:
+            try:
+                self._waiting.append(request_id)
+                acquire = asyncio.ensure_future(self._lock.acquire())
+                first_notice = True
+                while not stopped.is_set():
+                    done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
+                    if acquire in done or stopped.is_set():
+                        break
+                    try:
+                        ahead = list(self._waiting).index(request_id)
+                    except ValueError:
+                        ahead = 0
+                    yield "queue", {"position": ahead, "first": first_notice}
+                    first_notice = False
+                self._waiting.remove(request_id)
+
+                waited = round((time.perf_counter() - queued_at) * 1000, 1)
+                if stopped.is_set():
+                    yield "slot", {"held": False, "queue_wait_ms": waited}
+                    return
+                self._holder = request_id
+                self._busy = True
+                taken = True
+                yield "slot", {"held": True, "queue_wait_ms": waited}
+            finally:
+                if request_id in self._waiting:
+                    self._waiting.remove(request_id)
+                if acquire is not None and not taken:
+                    # The wait is called off; or it was won at the last moment
+                    # and is handed straight back.
+                    won = not acquire.cancel() and not acquire.cancelled() and acquire.exception() is None
+                    if won:
+                        self._free()
+
+    def give_slot(self, request_id: str) -> None:
+        """Hand back a slot taken with ``take_slot``. Does nothing if this run
+        is not holding it, so it is safe to call on every way out of a run.
+
+        If one of the run's passes is still inside the model, the slot is not
+        freed now. It goes back when that thread leaves.
+        """
+        if self._holder != request_id:
+            return
+        self._holder = None
+        if not self._inside:
+            self._free()
+
+    def others_waiting(self) -> bool:
+        """Whether anybody is queued for the slot."""
+        return bool(self._waiting)
 
 
 engine = Engine()

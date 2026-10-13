@@ -1,13 +1,15 @@
-/* Benchmark page.
- *
- * Chart palette validated against the dark chart surface (#11142a) for
- * lightness band, chroma floor, CVD separation, normal-vision separation and
- * 3:1 contrast. Every stacked segment is also direct-labelled, which is the
- * required secondary encoding for the tritan pair.
- */
+/* The benchmark and about pages: long-form, set on the same sheet as chat.
 
-/* --c1..--c4 and --grid now live in tokens.css so every surface can reach
-   them, not just the two pages that load this file. */
+   Chart colour does one job per chart. Single-series bars and the history line
+   wear --c1; the p50/p95 pair is the same hue at two steps, because the two
+   are ordered, not different things; the memory budget is the only place four
+   categories meet, and takes --c1..--c4 in that fixed order.
+
+   Validated against both sheets with the palette validator (adjacent pairs):
+   worst colour-blind separation ΔE 13.0 light / 15.9 dark, worst normal-vision
+   19.7. One slot, the light-scheme magenta, sits under 3:1 against the sheet,
+   which is why every stacked segment is also named with its value in the
+   legend beneath it. */
 
 .page {
   flex: 1;
@@ -16,146 +18,182 @@
 }
 
 .wrap {
-  max-width: 940px;
-  margin: 0 auto;
-  padding: 34px 24px 90px;
+  max-width: calc(56rem + var(--pad) + var(--edge));
+  padding: var(--s-7) max(var(--edge), env(safe-area-inset-right)) var(--s-9)
+    max(var(--pad), env(safe-area-inset-left));
 }
 
-.page-head {
-  margin-bottom: 26px;
-}
 .page-head h1 {
-  margin: 0 0 8px;
-  font-size: clamp(26px, 4vw, 36px);
+  margin: 0 0 var(--s-4);
+  max-width: 20ch;
+  font-size: var(--t-7);
+  font-weight: 700;
+  line-height: 1.04;
   letter-spacing: -0.03em;
-  font-weight: 600;
-  line-height: 1.1;
+  text-wrap: balance;
 }
 .page-head p {
   margin: 0;
-  max-width: 62ch;
-  color: var(--ink-1);
-  font-size: var(--t-lg);
+  max-width: 40rem;
+  text-wrap: pretty;
+}
+
+.toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-5);
+  margin-top: var(--s-5);
+  font-size: var(--t-2);
+}
+.toc a {
+  padding: var(--s-1) 0;
+  color: var(--ink-2);
+}
+.toc a:hover {
+  color: var(--ink);
 }
 
 .section {
-  margin-top: 34px;
+  margin-top: var(--s-8);
+  scroll-margin-top: var(--s-5);
 }
 .section > h2 {
-  margin: 0 0 4px;
-  font-size: var(--t-xl);
+  margin: 0 0 var(--s-2);
+  font-size: var(--t-5);
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: -0.015em;
 }
 .section > .sub {
-  margin: 0 0 16px;
+  margin: 0 0 var(--s-4);
+  max-width: 40rem;
   color: var(--ink-2);
-  font-size: var(--t-sm);
-  max-width: 68ch;
+  font-size: var(--t-2);
 }
 
+/* A panel is a ruled-off block, not a box. */
 .panel {
-  padding: 20px 22px;
-  border-radius: var(--r-lg);
-  border: 1px solid var(--glass-brd);
-  background: linear-gradient(180deg, rgba(17, 20, 42, 0.93), rgba(11, 13, 26, 0.92));
-  box-shadow: var(--sh-md);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+/* A short list of settings: term on the left, value on the right. */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  column-gap: var(--s-7);
+  margin: var(--s-3) 0 0;
+  border-top: 1px solid var(--rule);
+  font-size: var(--t-2);
+}
+.facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.facts dt {
+  color: var(--ink-2);
+}
+.facts dd {
+  margin: 0;
+  text-align: right;
 }
 
 /* ------------------------------------------------------------- run panel */
 
 .runbar {
   display: flex;
-  align-items: center;
-  gap: 16px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-4) var(--s-5);
+  margin-top: var(--s-7);
+  padding: var(--s-4) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
 }
-.runbar .grow { flex: 1; min-width: 220px; }
+.runbar .grow {
+  flex: 1;
+  min-width: 14rem;
+}
 
 .progress {
-  height: 6px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.08);
+  height: 4px;
+  background: var(--rule);
   overflow: hidden;
 }
+/* A run in progress is the live thing on this page. */
 .progress i {
   display: block;
   height: 100%;
-  width: 100%;
-  border-radius: 99px;
-  background: linear-gradient(90deg, var(--c1), var(--aur-cyan));
+  background: var(--live);
   /* scaleX, not width: this bar advances on every benchmark rep, and animating
      width relayouts the row each frame. */
   transform: scaleX(0);
   transform-origin: left center;
-  transition: transform var(--dur-3) var(--ease-out);
+  transition: transform var(--dur-2) var(--ease);
 }
 .run-status {
-  font-size: var(--t-sm);
+  margin-top: var(--s-2);
   color: var(--ink-2);
-  margin-top: 8px;
-  font-family: var(--font-mono);
+  font-size: var(--t-1);
 }
 
-/* ---------------------------------------------------------- stat tiles -- */
+/* ------------------------------------------------------- headline figures */
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 12px;
-}
-.tile {
-  padding: 16px 18px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--glass-brd);
-  /* the caption under each number is --ink-3 */
-  background: var(--surface);
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
 }
 .tile .k {
-  font-size: var(--t-xs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--ink-2);
+  font-size: var(--t-2);
 }
 .tile .v {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 30px;
+  font-size: var(--t-6);
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.25;
   letter-spacing: -0.02em;
 }
-.tile .u { font-size: var(--t-xs); color: var(--ink-2); margin-left: 4px; }
-.tile .n { font-size: var(--t-xs); color: var(--ink-3); }
+.tile .n {
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
 
 /* ------------------------------------------------------------ bar chart */
 
 .chart {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--s-3);
 }
 
 .bar-row {
   display: grid;
-  grid-template-columns: 130px minmax(0, 1fr) auto;
+  grid-template-columns: 9rem minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: var(--s-3);
 }
 .bar-row .lab {
-  font-size: var(--t-sm);
-  color: var(--ink-1);
+  font-size: var(--t-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bar-row .lab small { display: block; color: var(--ink-3); font-size: var(--t-xs); }
+.bar-row .lab small {
+  display: block;
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
 
 .track {
   position: relative;
-  height: 22px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.045);
+  height: 20px;
+  background: var(--sheet-2);
   overflow: hidden;
 }
 .track i {
@@ -166,28 +204,37 @@
   background: var(--c1);
   transform: scaleX(0);
   transform-origin: left center;
-  transition: transform 600ms var(--ease-out);
+  transition: transform var(--dur-2) var(--ease);
 }
-.track i.alt { background: var(--c3); }
+/* p95: the same hue, one step lighter — so "the lighter bar" is true. */
+.track i.alt {
+  background: var(--c1-step);
+}
 .bar-row .val {
-  font-family: var(--font-mono);
+  font-family: var(--font-fixed);
+  font-variation-settings: "MONO" 1, "CASL" 0;
   font-variant-numeric: tabular-nums;
-  font-size: var(--t-sm);
-  color: var(--ink-0);
+  font-size: var(--t-2);
   white-space: nowrap;
 }
-.bar-row .val small { color: var(--ink-3); }
+.bar-row .val small {
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
 
 /* Hardware names are longer than case names — give them room rather than
    truncating the one column a reader needs to identify the row. */
 #chart-ref .bar-row {
-  grid-template-columns: 196px minmax(0, 1fr) auto;
+  grid-template-columns: 13rem minmax(0, 1fr) auto;
+}
+#chart-ref .bar-row .lab {
+  white-space: normal;
 }
 
 /* range strip: where this machine sits against reference hardware */
 .strip {
   position: relative;
-  height: 22px;
+  height: 20px;
 }
 .strip::before {
   content: "";
@@ -196,37 +243,39 @@
   right: 0;
   top: 50%;
   height: 1px;
-  background: var(--grid);
+  background: var(--rule);
 }
+/* Other machines are context and stay neutral; this one takes the series hue. */
 .strip i {
   position: absolute;
   top: 50%;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--ink-2) 45%, var(--sheet));
   transform: translateY(-50%);
-  height: 9px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.16);
 }
-.strip.self i { background: linear-gradient(90deg, var(--c1), var(--aur-cyan)); }
+.strip.self i {
+  background: var(--c1);
+}
 .strip b {
   position: absolute;
   top: 50%;
-  width: 11px;
-  height: 11px;
-  margin-left: -5.5px;
-  transform: translateY(-50%);
-  border-radius: 99px;
-  background: #fff;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--ink);
   /* 2px surface ring so the marker stays legible over the band */
-  box-shadow: 0 0 0 2px #11142a, 0 0 12px rgba(34, 211, 238, 0.8);
+  box-shadow: 0 0 0 2px var(--sheet);
+  transform: translateY(-50%);
 }
 
 .axis {
   display: flex;
   justify-content: space-between;
-  margin-top: 2px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--ink-3);
+  margin-top: var(--s-2);
+  color: var(--ink-2);
+  font-size: var(--t-1);
 }
 
 /* --------------------------------------------------------- stacked bar -- */
@@ -234,88 +283,170 @@
 .stack {
   display: flex;
   gap: 2px; /* 2px surface gap between segments */
-  height: 30px;
-  margin-bottom: 14px;
+  height: 28px;
+  margin-bottom: var(--s-3);
 }
 .stack span {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
 }
-.stack span:first-child { border-radius: 6px 3px 3px 6px; }
-.stack span:last-child { border-radius: 3px 6px 6px 3px; }
+.stack span:first-child {
+  border-radius: 4px 2px 2px 4px;
+}
+.stack span:last-child {
+  border-radius: 2px 4px 4px 2px;
+}
 
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 18px;
+  gap: var(--s-2) var(--s-5);
 }
 .legend .item {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: var(--t-sm);
-  color: var(--ink-1);
+  gap: var(--s-2);
+  font-size: var(--t-2);
 }
 .legend .sw {
   width: 10px;
   height: 10px;
-  border-radius: 3px;
   flex: 0 0 auto;
-  transform: translateY(1px);
+  border-radius: 2px;
 }
-.legend .num { color: var(--ink-0); }
-.legend .note { color: var(--ink-3); font-size: var(--t-xs); }
+.legend .note {
+  color: var(--ink-2);
+  font-size: var(--t-1);
+}
 
 /* ------------------------------------------------------------ line chart */
 
+/* Drawn at the pixel width it is given (bench.js), so the labels are the
+   size the stylesheet says and not whatever a stretched viewBox makes them. */
 .linechart {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 720 / 190; /* uniform scaling — non-uniform would stretch labels */
   display: block;
+  width: 100%;
+  height: 190px;
   overflow: visible;
 }
-.linechart .grid { stroke: var(--grid); stroke-width: 1; }
-.linechart .lbl {
-  fill: var(--ink-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
+.linechart .grid {
+  stroke: var(--rule);
+  stroke-width: 1;
 }
-.linechart .series { fill: none; stroke: var(--c1); stroke-width: 2; stroke-linejoin: round; }
-.linechart .area { fill: url(#histfill); }
-.linechart .pt { fill: var(--c1); stroke: #11142a; stroke-width: 2; }
+.linechart .lbl {
+  fill: var(--ink-2);
+  font-family: var(--font-fixed);
+  font-variation-settings: "MONO" 1, "CASL" 0;
+  font-size: 13px;
+}
+.linechart .lbl.strong {
+  fill: var(--ink);
+}
+.linechart .series {
+  fill: none;
+  stroke: var(--c1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.linechart .area {
+  fill: color-mix(in oklch, var(--c1) 12%, transparent);
+}
+.linechart .pt {
+  fill: var(--c1);
+  stroke: var(--sheet);
+  stroke-width: 2;
+}
 
 /* ---------------------------------------------------------------- table */
 
 .tbl {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--t-sm);
+  font-size: var(--t-2);
 }
 .tbl th,
 .tbl td {
-  padding: 9px 12px;
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--rule);
   text-align: right;
-  border-bottom: 1px solid var(--glass-brd);
 }
 .tbl th:first-child,
-.tbl td:first-child { text-align: left; }
-.tbl thead th {
-  font-size: var(--t-xs);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  font-weight: 500;
+.tbl td:first-child {
+  padding-left: 0;
+  text-align: left;
 }
-.tbl td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-1); }
-.tbl td:first-child { font-family: var(--font-ui); color: var(--ink-0); }
-.tbl tr.self td { color: var(--ink-0); background: rgba(99, 102, 241, 0.1); }
-.tbl-scroll { overflow-x: auto; }
-.tbl-empty { text-align: center; color: var(--ink-3); }
+.tbl th:last-child,
+.tbl td:last-child {
+  padding-right: 0;
+}
+.tbl thead th {
+  border-bottom-color: var(--ink-2);
+  color: var(--ink-2);
+  font-size: var(--t-1);
+  font-weight: 600;
+}
+.tbl td {
+  font-family: var(--font-fixed);
+  font-variation-settings: "MONO" 1, "CASL" 0;
+  font-variant-numeric: tabular-nums;
+}
+.tbl td:first-child {
+  font-family: var(--font);
+  font-variation-settings: "MONO" 0, "CASL" 0;
+}
+.tbl-scroll {
+  overflow-x: auto;
+}
+.tbl td.tbl-empty {
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-variation-settings: "MONO" 0, "CASL" 0;
+  text-align: left;
+}
 
-/* An eight-column table does not survive a phone by scrolling sideways. Below
-   this width each row becomes a small card and every cell carries its own
-   heading, so the data is read rather than dragged. */
+.explain p {
+  margin: 0 0 0.9em;
+  max-width: 40rem;
+  text-wrap: pretty;
+}
+.explain p:last-child {
+  margin-bottom: 0;
+}
+.explain code {
+  padding: 1px 4px;
+  border-radius: var(--r-1);
+  background: var(--sheet-2);
+  font-size: 0.94em;
+}
+.explain.after-chart {
+  margin: var(--s-4) 0 0;
+  max-width: 40rem;
+  font-size: var(--t-2);
+}
+
+/* A warning about the data, set where it applies. The mark carries the
+   colour; the words stay in ink so they are read. */
+.caveat {
+  display: flex;
+  gap: var(--s-3);
+  max-width: 44rem;
+  margin-bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-1);
+  background: color-mix(in oklch, var(--caution) 9%, var(--sheet));
+  font-size: var(--t-2);
+}
+.caveat .icon {
+  margin-top: 2px;
+  color: var(--caution);
+}
+
+.empty {
+  padding: var(--s-2) 0;
+  color: var(--ink-2);
+  font-size: var(--t-2);
+}
+
 /* Three columns on one line leaves the bar with ~55px on a phone — the value
    text wins and the chart stops being a chart. Stack instead: label and value
    share a line, the bar gets the full width beneath them. */
@@ -326,8 +457,8 @@
     grid-template-areas:
       "lab val"
       "bar bar";
-    row-gap: 7px;
-    margin-bottom: 4px;
+    row-gap: var(--s-2);
+    margin-bottom: var(--s-1);
   }
   .bar-row .lab {
     grid-area: lab;
@@ -343,7 +474,21 @@
   }
 }
 
+/* An eight-column table does not survive a phone by scrolling sideways. Below
+   this width each row becomes a block and every cell carries its own heading,
+   so the data is read rather than dragged. */
 @media (max-width: 640px) {
+  .wrap {
+    padding-top: var(--s-6);
+    padding-bottom: var(--s-8);
+  }
+  .page-head h1 {
+    font-size: 2.25rem;
+  }
+  .section {
+    margin-top: var(--s-7);
+  }
+
   .tbl thead {
     position: absolute;
     width: 1px;
@@ -360,31 +505,30 @@
     width: 100%;
   }
   .tbl tr {
-    margin-bottom: 10px;
-    padding: 10px 12px;
-    border: 1px solid var(--glass-brd);
-    border-radius: var(--r-sm);
-    background: var(--surface-inset);
+    padding: var(--s-3) 0;
+    border-bottom: 1px solid var(--rule);
   }
-  .tbl td {
+  .tbl td,
+  .tbl td:first-child,
+  .tbl td:last-child {
     display: flex;
     justify-content: space-between;
-    gap: 14px;
-    padding: 4px 0;
+    gap: var(--s-4);
+    padding: 2px 0;
     border: 0;
     text-align: right;
   }
   .tbl td::before {
     content: attr(data-label);
-    font-family: var(--font-ui);
-    color: var(--ink-3);
+    color: var(--ink-2);
+    font-family: var(--font);
+    font-variation-settings: "MONO" 0, "CASL" 0;
     text-align: left;
   }
   .tbl td:first-child {
-    margin-bottom: 6px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--glass-brd);
-    font-size: var(--t-md);
+    margin-bottom: var(--s-1);
+    font-size: var(--t-3);
+    font-weight: 600;
   }
   .tbl td:first-child::before,
   .tbl td.tbl-empty::before {
@@ -392,46 +536,16 @@
   }
   .tbl td.tbl-empty {
     display: block;
-    text-align: center;
   }
 }
 
-.explain {
-  color: var(--ink-1);
-  font-size: var(--t-md);
-}
-.explain p { margin: 0 0 0.9em; max-width: 70ch; }
-.explain p:last-child { margin-bottom: 0; }
-.explain b { color: var(--ink-0); font-weight: 600; }
-.explain code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  padding: 1px 5px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.07);
-}
-
-.caveat {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: var(--r-md);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  background: rgba(251, 191, 36, 0.07);
-  color: #ffe6ad;
-  font-size: var(--t-sm);
-  margin-bottom: 16px;
-}
-
-.empty {
-  text-align: center;
-  padding: 26px 10px;
-  color: var(--ink-2);
-  font-size: var(--t-sm);
-}
-
-@media (max-width: 640px) {
-  .wrap { padding: 22px 14px 70px; }
-  .bar-row { grid-template-columns: 96px minmax(0, 1fr) auto; }
-  .panel { padding: 16px; }
+@media (pointer: coarse) {
+  .toc {
+    row-gap: 0;
+  }
+  .toc a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
 }

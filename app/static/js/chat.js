@@ -313,6 +313,14 @@ function inkIn(root, ranges, now) {
   }
 }
 
+/** Take the wrappers out again, leaving the text exactly where it was. */
+function inkDry(root) {
+  const spans = root.querySelectorAll(".fresh");
+  if (!spans.length) return;
+  for (const span of spans) span.replaceWith(...span.childNodes);
+  root.normalize();
+}
+
 function proseRenderer(host) {
   const stable = document.createElement("div");
   const tail = document.createElement("div");
@@ -322,6 +330,7 @@ function proseRenderer(host) {
   let settled = 0; // blocks already committed to `stable`
   let written = 0; // rendered length of the block being written, at the last tick
   let fresh = []; // {start, end, at}: stretches of that block still fading up
+  let finished = null; // the text the finished answer was rendered from
 
   /** Note what is new in a block `length` long, and return what is still fading. */
   const mark = (length, now) => {
@@ -337,6 +346,7 @@ function proseRenderer(host) {
 
   return {
     update(raw, caretOn) {
+      finished = null;
       const now = performance.now();
       const blocks = splitBlocks(raw);
       // Commit every block that is now finished, appending rather than
@@ -364,13 +374,37 @@ function proseRenderer(host) {
       else caret.remove();
     },
     finish(raw) {
-      // One clean pass at the end so the finished answer is a single tree.
       caret.remove();
+      // Called when the answer ends and again as the request is torn down. The
+      // second call has nothing new to render, and rendering anyway would cut
+      // short the fade the first one left running.
+      if (finished === raw) return;
+      finished = raw;
+      const now = performance.now();
+      // What was on screen at the last tick, as offsets into the whole answer,
+      // and which of it was still fading up.
+      const before = stable.textContent.length;
+      const shown = before + written;
+      const drying = fresh
+        .filter((r) => now - r.at < INK_MS)
+        .map((r) => ({ start: before + r.start, end: before + r.end, at: r.at }));
+      // One clean pass at the end so the finished answer is a single tree.
       stable.innerHTML = "";
       tail.innerHTML = renderMarkdown(raw);
       settled = 0;
       written = 0;
       fresh = [];
+      if (REDUCED) return;
+      // The last words. Those that arrived since the last tick fade up like
+      // any others, and those already fading carry on from where they were,
+      // instead of the clean render snapping all of them to full.
+      const length = tail.textContent.length;
+      if (length < shown) return; // the whole-answer render read it differently; leave it be
+      if (length > shown) drying.push({ start: shown, end: length, at: now });
+      if (!drying.length) return;
+      inkIn(tail, drying, now);
+      // Then the wrappers come out, so the finished answer is clean markup.
+      setTimeout(() => inkDry(tail), INK_MS + 80);
     },
   };
 }

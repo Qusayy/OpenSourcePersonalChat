@@ -44,7 +44,7 @@ EXPECTATIONS = {
     "answer_not_contains",
 }
 FIELDS = {"id", "category", "persona", "skill", "turns", "tools", "script", "scripted_only",
-          "expect", "pending"}
+          "loop", "expect", "pending"}
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,9 @@ class Task:
     # The script is the point of the task (it says something a model should
     # not say), so there is nothing to learn from running it with a real one.
     scripted_only: bool = False
+    # Run with the loop on, whatever the settings say: the task is about what
+    # happens after a tool the model chose.
+    loop: bool = False
     expect: dict[str, Any] = field(default_factory=dict)
     pending: str | None = None
 
@@ -115,6 +118,7 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
             tools=raw.get("tools") or {},
             script=tuple(raw["script"]) if raw.get("script") is not None else None,
             scripted_only=bool(raw.get("scripted_only")),
+            loop=bool(raw.get("loop")),
             expect=expect,
             pending=raw.get("pending"),
         ))

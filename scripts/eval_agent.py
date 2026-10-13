@@ -83,7 +83,8 @@ def show(report: dict, file=None) -> None:
     def pct(value) -> str:
         return "n/a" if value is None else f"{value:.0%}"
 
-    print(f"\n{report['engine']} engine, seed {report['seed']}", file=file)
+    loop = ", loop on for every task" if report.get("loop") else ""
+    print(f"\n{report['engine']} engine, seed {report['seed']}{loop}", file=file)
     print(
         f"  {s['passed']} passed, {s['failed']} failed, {s['pending']} known gaps, "
         f"{s['unexpected_passes']} passed that were marked as gaps, {s['skipped']} not run",
@@ -129,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write the report here as JSON")
     parser.add_argument("--compare", type=Path, help="an earlier report to set this one beside")
     parser.add_argument(
+        "--loop", action="store_true",
+        help="run every task with the loop on, not only the tasks that ask for it",
+    )
+    parser.add_argument(
         "--probe-routing", action="store_true",
         help="time one routing pass cold and warm instead of running the tasks (real engine only)",
     )
@@ -145,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = load_engine() if args.engine == "real" else None
     report = asyncio.run(run_suite(
         tasks, engine_kind=args.engine, engine=engine, seed=args.seed, categories=args.category,
+        loop=args.loop,
     ))
     if args.compare:
         report["compared"] = compare(report, json.loads(args.compare.read_text(encoding="utf-8")))

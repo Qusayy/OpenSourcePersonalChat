@@ -91,8 +91,13 @@ class Outcome:
         return row
 
 
-async def run_task(task: Task, *, engine: Engine, seed: int | None = None) -> Outcome:
-    """Play one task's messages through a run each, then score the last."""
+async def run_task(
+    task: Task, *, engine: Engine, seed: int | None = None, loop: bool = False
+) -> Outcome:
+    """Play one task's messages through a run each, then score the last.
+
+    ``loop`` turns the loop on for a task that does not ask for it itself.
+    """
     began = time.perf_counter()
     persona = get_persona(get_skill(task.skill).persona if get_skill(task.skill) else task.persona)
     history: list[dict] = []
@@ -107,7 +112,7 @@ async def run_task(task: Task, *, engine: Engine, seed: int | None = None) -> Ou
                 async for event in agent.run(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
-                    follows_ask=follows_ask,
+                    follows_ask=follows_ask, loop=task.loop or loop,
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
@@ -132,11 +137,14 @@ async def run_suite(
     engine: Engine | None = None,
     seed: int | None = 0,
     categories: Iterable[str] | None = None,
+    loop: bool = False,
 ) -> dict:
     """Run every task this engine can run, and return the report.
 
     ``engine`` is the loaded model for ``engine_kind="real"``. A scripted run
-    makes an engine per task from the task's own script.
+    makes an engine per task from the task's own script. ``loop`` runs every
+    task with the loop on, where only some ask for it: the way to see what
+    the loop does to the tasks that were written without it.
     """
     if engine_kind not in ("scripted", "real"):
         raise ValueError(f"unknown engine {engine_kind!r}")
@@ -152,11 +160,11 @@ async def run_suite(
             outcomes.append(Outcome(task, SKIPPED, [], []))
             continue
         if engine_kind == "real":
-            outcomes.append(await run_task(task, engine=engine, seed=seed))
+            outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
             continue
         scripted = ScriptedEngine(task.script or ())
         try:
-            outcomes.append(await run_task(task, engine=scripted, seed=seed))
+            outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
         finally:
             # No worker thread may outlive the loop it reports to.
             await scripted.settled()
@@ -165,6 +173,8 @@ async def run_suite(
     return {
         "engine": engine_kind,
         "seed": seed,
+        # Whether the loop was on for every task, or only for those that ask.
+        "loop": loop,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "model": _model(engine) if timed else None,
         # Without a tokenizer a token is counted as four characters.
@@ -215,6 +225,9 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     decisions = [s for o in ran for t in o.turns for s in t.trace.steps
                  if s.kind == "route" and s.model]
     repairs = [s for o in ran for t in o.turns for s in t.trace.steps if s.kind == "repair"]
+    # How each run's looking-up ended, read off the last line its answer pass
+    # was given.
+    cues = [(o.last.prompt or [{"content": ""}])[-1]["content"] for o in ran]
     rows = [o.row(timed) for o in ran]
 
     summary = {
@@ -237,6 +250,12 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         ),
         # Decisions whose call could not be made and was sent back once.
         "repair_rate": _share(len(repairs), len(decisions)),
+        # Runs that made a second tool call: what the loop is for.
+        "second_step_rate": _share(sum(r["steps"] >= 2 for r in rows), len(rows)),
+        # Runs whose looking-up was ended by a limit, and by the model asking
+        # for a lookup it had already made.
+        "limit_rate": _share(sum(agent.OUT_OF_LOOKUPS in cue for cue in cues), len(cues)),
+        "repeat_rate": _share(sum(agent.ALREADY_LOOKED_UP in cue for cue in cues), len(cues)),
         "steps": _spread([float(r["steps"]) for r in rows]),
         "passes": _spread([float(r["passes"]) for r in rows]),
         "prompt_tokens": _spread([float(r["prompt_tokens"]) for r in rows]),

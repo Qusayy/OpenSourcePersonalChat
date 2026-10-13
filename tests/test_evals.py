@@ -359,7 +359,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         report = await run_suite(load_tasks(), engine_kind="scripted")
         self.assertEqual(
             set(report),
-            {"engine", "seed", "created", "model", "tokens_are_estimates", "summary",
+            {"engine", "seed", "loop", "created", "model", "tokens_are_estimates", "summary",
              "by_category", "tasks"},
         )
         summary = report["summary"]
@@ -367,7 +367,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             set(summary),
             {"tasks", "ran", "passed", "failed", "pending", "unexpected_passes", "skipped",
              "task_success", "routing_accuracy", "argument_match", "invalid_output_rate",
-             "repair_rate", "steps", "passes", "prompt_tokens", "output_tokens"},
+             "repair_rate", "second_step_rate", "limit_rate", "repeat_rate",
+             "steps", "passes", "prompt_tokens", "output_tokens"},
         )
         self.assertEqual(summary["tasks"], summary["ran"] + summary["skipped"])
         self.assertEqual(
@@ -376,7 +377,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         for spread in ("steps", "passes", "prompt_tokens", "output_tokens"):
             self.assertEqual(set(summary[spread]), {"mean", "median", "p95", "max"})
-        self.assertLessEqual(summary["passes"]["max"], 3)  # choose, try once more, answer
+        # The loop's own tasks: one made a second lookup, one hit a limit, one repeated itself.
+        for rate in ("second_step_rate", "limit_rate", "repeat_rate"):
+            self.assertGreater(summary[rate], 0)
         # The one reply in the suite that is cut off before it closes.
         self.assertGreater(summary["invalid_output_rate"], 0)
         # And the one call that was sent back.
@@ -502,6 +505,49 @@ class OfflineTests(unittest.IsolatedAsyncioTestCase):
     async def test_nothing_in_the_suite_loads_llama_cpp(self) -> None:
         await run_suite(load_tasks(), engine_kind="scripted")
         self.assertNotIn("llama_cpp", sys.modules)
+
+
+class LoopTaskTests(unittest.IsolatedAsyncioTestCase):
+    """Tasks that are about what happens after a tool the model chose."""
+
+    def setUp(self) -> None:
+        support.no_network(self)
+
+    async def test_a_task_that_asks_for_the_loop_gets_it_whatever_the_settings_say(self) -> None:
+        support.with_settings(self, agent_loop=False)
+        report = await run_suite(load_tasks(), engine_kind="scripted", categories=["two-step"])
+        row = next(r for r in report["tasks"] if r["id"] == "loop-two-lookups-for-one-question")
+        self.assertEqual((row["status"], row["steps"], row["passes"]), (PASSED, 2, 4))
+
+    async def test_the_same_script_without_the_loop_makes_one_lookup_and_fails_the_task(self) -> None:
+        task_ = next(t for t in load_tasks() if t.id == "loop-two-lookups-for-one-question")
+        report = await run_suite([dataclasses.replace(task_, loop=False)], engine_kind="scripted")
+        self.assertEqual(report["tasks"][0]["status"], FAILED)
+        self.assertIn("calls: ['weather'], expected ['weather', 'weather']", report["tasks"][0]["failures"])
+
+    async def test_the_loop_can_be_turned_on_for_every_task(self) -> None:
+        report = await run_suite(load_tasks(), engine_kind="scripted", loop=True)
+        self.assertIs(report["loop"], True)
+        # A scripted task written for one choice and an answer has no line for
+        # a second choice, so with the loop on those that used a tool run out
+        # of script. What this shows is that the switch reaches every task.
+        by_id = {r["id"]: r for r in report["tasks"]}
+        self.assertEqual(by_id["slash-calc"]["status"], PASSED)      # a command never loops
+        self.assertEqual(by_id["skill-compare"]["status"], PASSED)   # nor does a skill
+        self.assertEqual(by_id["model-chooses-a-tool"]["status"], FAILED)
+
+    async def test_a_page_with_an_instruction_in_it_gets_nothing_fetched_for_it(self) -> None:
+        from evals.runner import run_task
+        from evals.scripted import ScriptedEngine
+
+        task_ = next(t for t in load_tasks() if t.id == "loop-page-cannot-send-the-reader-elsewhere")
+        engine = ScriptedEngine(task_.script)
+        self.addAsyncCleanup(engine.settled)
+        outcome = await run_task(task_, engine=engine)
+        self.assertEqual(outcome.status, PASSED, outcome.failures)
+        fetched = [s for s in outcome.last.steps if s.kind == "tool"]
+        self.assertEqual([(s.name, s.input) for s in fetched],
+                         [("read_url", {"url": "https://example.org/tides"})])
 
 
 if __name__ == "__main__":

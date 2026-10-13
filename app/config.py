@@ -52,6 +52,18 @@ class Settings(BaseSettings):
     )
     route_max_tokens: int = 96
 
+    # the loop
+    # Off, a message that reaches the model makes one choice of tool and then
+    # answers. On, a tool the model chose earns it another choice: it may look
+    # something up, read what came back, and look up something else. Every
+    # choice is a pass through the model and costs seconds, so the loop is
+    # bounded three ways, and a tool the visitor named themselves (a command,
+    # a pattern, a skill) never starts it.
+    agent_loop: bool = False
+    agent_max_steps: int = 3        # tool calls for one message
+    agent_max_decisions: int = 3    # passes that choose, for one message
+    agent_max_seconds: float = 90.0  # for everything before the answer
+
     # app
     host: str = "127.0.0.1"
     port: int = 8000

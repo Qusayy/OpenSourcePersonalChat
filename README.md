@@ -267,6 +267,10 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_AGENT_LOOP` | `false` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; see *Looking something up twice* |
+| `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
+| `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
+| `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
 | `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
 
@@ -328,6 +332,37 @@ The grammar cannot be compiled without llama.cpp, so where the tests run it is
 read instead: `tests/gbnf.py` understands the subset of GBNF the generator
 emits and says what a grammar accepts and what it refuses.
 
+### Looking something up twice
+
+As it ships, a message that reaches the model makes one choice of tool and
+then answers. It cannot look something up, read what came back, and decide to
+look up something else. `AURORA_AGENT_LOOP=true` lets it: a tool the model
+chose earns it another choice.
+
+The model is not trusted to know when to stop. A small one stops too early, or
+asks for the same thing again. So the code that runs the loop holds the limits:
+
+- at most three tool calls and three choices for one message, and ninety
+  seconds before the answer must begin (all three are settings);
+- a lookup that has already been made is not made again;
+- a tool the visitor named themselves, by a command, a pattern or a skill,
+  never starts the loop. Those cost exactly what they cost with it off.
+
+When something other than the model ends the looking-up, the pass that writes
+the answer is told so in one line, so the reply can say what was not found.
+
+Two things keep the extra passes cheap. The whole run is one transcript that
+only grows, and every pass reads it from the top, so each pass after the first
+is charged only for what is new. And the run takes the inference slot once and
+keeps it, so nobody else's prompt replaces it in the model's cache part-way
+through; if a tool goes out to the network while somebody is waiting, the slot
+is lent to them for that time.
+
+It is off by default because the one thing that decides its worth cannot be
+known without measuring it on the model: whether a second choice by a 1.5B
+model is good enough to be worth its seconds. `scripts/eval_agent.py --loop`
+is how to find out.
+
 ### Safety
 
 `read_url` is the only tool that makes the server fetch a user-supplied
@@ -336,6 +371,21 @@ link-local, CGNAT, reserved or multicast address — including
 `169.254.169.254`, the cloud metadata endpoint. Redirects are followed by hand,
 maximum three hops, re-validating at each one. Bodies are capped at 2 MB and
 only `text/html` / `text/plain` is read.
+
+That guard is about where an address points. It says nothing about an address
+that points somewhere public and was put there by a page the model read: "now
+open http://elsewhere/?q=" followed by something from the conversation. So when
+it is the model that chooses to read a page, the address must be one the user
+wrote themselves, in this message or an earlier one. The model may pass an
+address on; it may not make one up or lift one from what it has read. A longer
+path or a query string the user did not write is a different address. This is
+checked in code and does not depend on the model noticing anything.
+
+What a tool returns is given to the model as reading matter: wrapped in a
+`<data>` tag, with the model told once that what is inside one is material and
+never an instruction, and with anything in it that looks like that tag or like
+a control token of the chat format taken out first. That is a convention and
+not a wall, which is why the rule above is enforced in code.
 
 The calculator parses with `ast` and a node whitelist. It never calls `eval`,
 and rejects attribute access, comprehensions, lambdas and `__import__`.
@@ -619,6 +669,7 @@ database.
 python scripts/eval_agent.py                                   # scripted: no model needed
 python scripts/eval_agent.py --engine real --out evals/reports/today.json
 python scripts/eval_agent.py --engine real --compare evals/reports/before.json
+python scripts/eval_agent.py --engine real --loop              # every task with the loop on
 python scripts/eval_agent.py --engine real --probe-routing     # one routing pass, cold then warm
 ```
 
@@ -633,6 +684,13 @@ routing accuracy, argument match, steps and passes, tokens, and seconds per
 task split into waiting, reading and writing. Stop the web service first: a
 second process loads a second copy of the model and shares the cores, exactly
 as the benchmark would.
+
+A task that is about the loop asks for it itself, so it runs with the loop on
+whatever the settings say. `--loop` turns it on for all the others too. Run the
+suite both ways and compare: the report says how many runs made a second
+lookup, how many were ended by a limit and how many by asking for the same
+thing twice, beside task success and seconds per task. That comparison is what
+decides whether the loop stays on.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

@@ -720,11 +720,13 @@ class StoredTraceTests(ChatCase):
                 )
                 self.assertGreater(totals["wall_ms"], totals["total_ms"] - 1)
 
-    def test_the_run_is_reported_last_and_as_six_figures(self) -> None:
+    def test_the_run_is_reported_last_with_what_it_cost_and_where_the_time_went(self) -> None:
         stream = self.chat("Why is the sky blue?", persona="explainer")
         self.assertEqual([name for name, _ in stream].count("run"), 1)
         self.assertEqual(
-            set(stream[-1][1]), {"id", "outcome", "steps", "passes", "total_ms", "wall_ms"}
+            set(stream[-1][1]),
+            {"id", "outcome", "steps", "passes", "total_ms", "waiting_ms", "reading_ms",
+             "writing_ms", "tools_ms", "wall_ms"},
         )
         self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (1, 1))
 
@@ -839,6 +841,64 @@ class AskTests(ChatCase):
         self.chat("And tomorrow", persona="agent", conversation_id=cid)
         self.assertEqual(len(self.engine.route_prompts[0]), 4)
         self.assertEqual(len(self.engine.route_prompts[1]), 2)
+
+
+class LoopOverHttpTests(ChatCase):
+    """The loop, switched on by its setting, through the real app."""
+
+    PARIS = '{"tool": "weather", "args": {"location": "Paris"}}'
+    LISBON = '{"tool": "weather", "args": {"location": "Lisbon"}}'
+
+    def setUp(self) -> None:
+        super().setUp()
+        support.with_settings(self, agent_loop=True)
+
+    def test_two_lookups_and_an_answer_are_streamed_stored_and_added_up(self) -> None:
+        engine = self.use_engine(ScriptedEngine([self.PARIS, self.LISBON, '{"tool": "none"}', "Lisbon."]))
+        looked_up = support.played_tools(self, {"weather": WEATHER})
+        stream = self.chat("Is Paris or Lisbon warmer right now?", persona="agent")
+        self.assertEqual(
+            shape(stream),
+            ["conversation", "step:route:running", "step:route:ok", "step:tool-0:running",
+             "step:tool-0:ok", "card", "step:route-2:running", "step:route-2:ok",
+             "step:tool-1:running", "step:tool-1:ok", "card", "step:route-3:running",
+             "step:route-3:ok", *ANSWER],
+        )
+        self.assertEqual(looked_up["weather"], [{"location": "Paris"}, {"location": "Lisbon"}])
+        rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
+        self.assertEqual([r["kind"] for r in rows], ["route", "tool", "decide", "tool", "decide", "answer"])
+        totals = stream[-1][1]
+        self.assertEqual((totals["steps"], totals["passes"], totals["outcome"]), (6, 4, "answered"))
+        self.assertAlmostEqual(sum(r["total_ms"] for r in rows), totals["total_ms"], delta=0.06)
+        answered = self.conversation(stream)["messages"][1]
+        self.assertEqual(answered["content"], "Lisbon.")
+        self.assertEqual(len(answered["tool_calls"]), 2)
+        self.assertEqual({r["message_id"] for r in rows}, {answered["id"]})
+        self.assertEqual(only(stream, "done")[0]["tool_calls"], 2)
+        self.assertTrue(engine.free)
+
+    def test_a_later_message_reads_the_conversation_and_one_engine_serves_them_all(self) -> None:
+        engine = self.use_engine(ScriptedEngine(
+            [self.PARIS, '{"tool": "none"}', "Overcast.", '{"tool": "none"}', "You are welcome."]
+        ))
+        support.played_tools(self, {"weather": WEATHER})
+        first = self.chat("Do I need a coat in Paris", persona="agent")
+        cid = only(first, "conversation")[0]["id"]
+        self.chat("Thank you", persona="agent", conversation_id=cid)
+        read = [m["content"] for m in engine.passes[3].messages[1:]]
+        self.assertEqual(read, ["Do I need a coat in Paris", "Overcast.", "Thank you"])
+        self.assertTrue(engine.free)
+        self.assertEqual(engine.most_at_once, 1)
+
+    def test_a_command_and_a_plain_persona_are_untouched_by_the_setting(self) -> None:
+        for message, persona, kinds in (("/calc 2+2", "agent", ["route", "tool", "answer"]),
+                                        ("Why is the sky blue?", "explainer", ["answer"])):
+            with self.subTest(message=message):
+                self.use_engine(PlayedEngine())
+                stream = self.chat(message, persona=persona)
+                rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
+                self.assertEqual([r["kind"] for r in rows], kinds)
+                self.assertEqual(self.engine.route_prompts, [])
 
 
 if __name__ == "__main__":

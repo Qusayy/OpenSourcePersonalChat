@@ -18,6 +18,7 @@ Two things this module deliberately does not do:
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 import uuid
@@ -41,6 +42,7 @@ from .router import (
 from .skills import SAY_SO, Skill, build_prompt, did_not_work
 from .tools import REGISTRY, call_tool as default_call_tool
 from .tools.base import Rejection, ToolResult, available, check, was_given
+from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
 ToolCaller = Callable[[str, dict], Awaitable[ToolResult]]
@@ -56,7 +58,7 @@ class Step:
     is the tool's own time. A choice made without the model costs nothing.
     """
 
-    kind: str  # route | repair | tool | answer
+    kind: str  # route | decide | repair | tool | answer
     # Whether this step was a pass through the model.
     model: bool = False
     # The tool or skill, where there is one.
@@ -109,19 +111,47 @@ class Trace:
     wall_ms: float | None = None
 
     def totals(self) -> dict:
-        """The run in a line: what the page is told when it ends."""
+        """The run in a line: what the page is told when it ends.
+
+        The total is split four ways, and the four add up to it: waiting for
+        the slot, the model reading, the model writing, and tools.
+        """
+        passes = [s for s in self.steps if s.model]
+        waiting = sum(s.queue_ms or 0.0 for s in passes)
+        reading = sum(s.first_token_ms or 0.0 for s in passes)
+        tools = sum(s.total_ms for s in self.steps if not s.model)
+        total = sum(s.total_ms for s in self.steps)
         return {
             "id": self.run_id,
             "outcome": self.outcome,
             "steps": len(self.steps),
-            "passes": sum(1 for s in self.steps if s.model),
-            "total_ms": round(sum(s.total_ms for s in self.steps), 1),
+            "passes": len(passes),
+            "total_ms": round(total, 1),
+            "waiting_ms": round(waiting, 1),
+            "reading_ms": round(reading, 1),
+            # What is left of the passes once the waiting and reading are out.
+            "writing_ms": round(max(total - tools - waiting - reading, 0.0), 1),
+            "tools_ms": round(tools, 1),
             "wall_ms": None if self.wall_ms is None else round(self.wall_ms, 1),
         }
 
 
 # Where one sentence ends and the next begins.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s")
+
+# What the answer pass is told when the looking-up was ended for it and not by
+# its own choice. One plain line each, so the reply can be honest about what
+# was not found.
+OUT_OF_LOOKUPS = "No more lookups were possible; say what is still unknown."
+ALREADY_LOOKED_UP = (
+    "That lookup had already been made and was not repeated; answer from what is above."
+)
+
+# Tokens kept free, when a looping run's conversation is fitted to the window,
+# for what the run itself will add: its choices and what its tools return.
+# With that room left at the start, the beginning of the prompt does not have
+# to change part-way through the run.
+RUN_ROOM = 600
 
 
 def what_happened(result: ToolResult) -> str:
@@ -160,6 +190,7 @@ def run(
     request_id: str | None = None,
     seed: int | None = None,
     follows_ask: bool = False,
+    loop: bool | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -176,6 +207,9 @@ def run(
     ``follows_ask`` says the last thing in ``history`` is a question the model
     chose to ask the user. This message is then their answer to it, and is
     routed with that question in view.
+
+    ``loop`` lets a tool the model chose earn it another choice, within the
+    limits in the settings. Left unset, the setting decides.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -195,6 +229,10 @@ def run(
         request_id=trace.run_id,
         seed=seed,
         follows_ask=follows_ask,
+        loop=settings.agent_loop if loop is None else loop,
+        max_steps=settings.agent_max_steps,
+        max_decisions=settings.agent_max_decisions,
+        max_seconds=settings.agent_max_seconds,
     ).go()
 
 
@@ -211,6 +249,19 @@ class _Run:
     request_id: str
     seed: int | None = None
     follows_ask: bool = False
+    # Whether a tool the model chose earns it another choice, and the limits
+    # on that for one message.
+    loop: bool = False
+    max_steps: int = 3
+    max_decisions: int = 3
+    max_seconds: float = 90.0
+    # Set once the tools for this message have been chosen without the model:
+    # by a skill, a command or a pattern.
+    routed: bool = False
+    # What the last tool call came to; None if it was stopped.
+    last: ToolResult | None = None
+    # Time spent waiting for the slot that no pass has yet been charged for.
+    slot_wait: float = 0.0
     # A question the model chose to ask in place of an answer, and the pass
     # that wrote it.
     question: str | None = None
@@ -246,8 +297,19 @@ class _Run:
             yield "run", self.trace.totals()
 
     async def _stages(self) -> AsyncIterator[Event]:
-        async for event in self._route():
+        # What costs nothing comes first: a skill, a command, a pattern.
+        async for event in self._free():
             yield event
+        # What is left is the model's to decide, where the persona has tools.
+        tools = available() if (self.persona.tools and not self.routed) else []
+        if tools and self.loop:
+            async with aclosing(self._looping(tools)) as events:
+                async for event in events:
+                    yield event
+            return
+        if tools:
+            async for event in self._choose_once(tools):
+                yield event
         if self.question is not None and not self.stop.is_set():
             for event in self._ask():
                 yield event
@@ -318,8 +380,11 @@ class _Run:
 
     # ------------------------------------------------------------ routing --
 
-    async def _route(self) -> AsyncIterator[Event]:
+    async def _free(self) -> AsyncIterator[Event]:
+        """The choices that cost nothing. Sets ``routed`` if one of them was
+        made, or if there is no choosing to do at all."""
         if self.skill is not None:
+            self.routed = True
             self.calls = self.skill.prepare(self.message)
             self.trace.steps.append(Step(
                 "route", name=self.skill.id, via="skill",
@@ -332,23 +397,23 @@ class _Run:
             }
             return
         if not self.tools_enabled:
+            self.routed = True
             return
 
-        # The two tiers that cost nothing come first. A command works for
-        # every persona; a pattern only where the persona has tools.
+        # A command works for every persona; a pattern only where the persona
+        # has tools.
         call, tier = free_route(self.message, tools_enabled=self.persona.tools)
         if call is not None:
+            self.routed = True
             self.calls = [call]
             self.trace.steps.append(Step(
                 "route", name=call.name, via=tier, input=call.args, output=call.note,
             ))
             yield "step", self._routed(call, tier, ms=0)
-            return
 
-        tools = available() if self.persona.tools else []
-        if not tools:
-            return
-
+    async def _choose_once(self, tools: list) -> AsyncIterator[Event]:
+        """One choice by the model, and that is all: the run then acts on it
+        and answers."""
         # Only now is a pass about to be made, so only now is one announced.
         yield "step", {
             "id": "route", "kind": "route", "status": "running",
@@ -462,28 +527,224 @@ class _Run:
         return None
 
     async def _choose(
-        self, kind: str, messages: list[dict], tools: list, given: dict
+        self, kind: str, messages: list[dict], tools: list, given: dict, *, held: bool = False
     ) -> tuple[Action, Completion]:
         """One pass that chooses, read as an action and written down whole."""
         said = await self.engine.complete_json(
             messages, decision_grammar(tools), decision_limit(tools),
-            request_id=self.request_id, seed=self.seed,
+            request_id=self.request_id, seed=self.seed, held=held,
         )
         action = parse_action(said)
         stopped = said.cancelled or self.stop.is_set()
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
+        # A run that holds the slot waited for it before this pass, not in it.
+        # That wait is charged to the pass it was waited for.
+        waited, self.slot_wait = self.slot_wait, 0.0
+        queued = None if said.queue_wait_ms is None and not waited else (said.queue_wait_ms or 0.0) + waited
         # A pass that never reached the model still took the time it took.
         cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
         self.trace.steps.append(Step(
             kind, model=True, name=action.call.name if action.call else None, via="model",
             input=given, output=said.raw,
             prompt_tokens=said.prompt_tokens, output_tokens=said.completion_tokens,
-            queue_ms=said.queue_wait_ms, first_token_ms=said.ttft_ms, total_ms=cost,
+            queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
             ok=error is None, error=error,
         ))
         return action, said
+
+    # ------------------------------------------------------------- the loop --
+
+    async def _looping(self, tools: list) -> AsyncIterator[Event]:
+        """Choose, act, read what came back, and choose again, within limits.
+
+        The run takes the slot once and keeps it, and every pass reads the one
+        transcript, so each pass after the first reads only what is new.
+
+        The loop always ends. The model ends it by saying it needs no more; if
+        it does not, a limit does: so many tool calls, so many choices, so
+        many seconds. A call it has already made is not made again, which is
+        how a small model's commonest loop is cut. When something other than
+        the model ends the looking-up, the answer pass is told so in a line,
+        so that the reply can say what was not found.
+        """
+        transcript, dropped = self._transcript(tools)
+        if dropped:
+            yield "trimmed", {"dropped": dropped}
+        made: set[str] = set()
+        decisions = steps = 0
+        began = time.perf_counter()
+        note: str | None = None
+        try:
+            async for event in self._take():
+                yield event
+            while not self.stop.is_set():
+                if (decisions >= self.max_decisions or steps >= self.max_steps
+                        or time.perf_counter() - began >= self.max_seconds):
+                    # Not the first time round: a first choice is always allowed.
+                    if decisions:
+                        note = OUT_OF_LOOKUPS
+                        break
+                number = decisions + 1
+                step_id = "route" if number == 1 else f"route-{number}"
+                yield "step", {
+                    "id": step_id, "kind": "route", "status": "running",
+                    "label": "Choosing a tool", "glyph": "◇", "pass": number,
+                }
+                action, passes = await self._decision(
+                    transcript, tools, first=number == 1, room=self.max_decisions - decisions
+                )
+                decisions += len(passes)
+                ms = round(sum(said.ms for said in passes), 1)
+                if self.stop.is_set():
+                    yield "step", {
+                        "id": step_id, "kind": "route", "status": "stopped",
+                        "label": "Choosing a tool", "glyph": "◇", "ms": ms, "pass": number,
+                    }
+                    break
+                closing = self._routed(action.call, "model", ms=ms)
+                closing.update(
+                    id=step_id, **{"pass": number},
+                    tokens_in=_total(said.prompt_tokens for said in passes),
+                    tokens_out=_total(said.completion_tokens for said in passes),
+                )
+                if action.kind == "ask":
+                    closing["label"] = "Asking you first"
+                    self.question, self.asked_by = action.question, passes[-1]
+                    yield "step", closing
+                    for event in self._ask():
+                        yield event
+                    return
+                yield "step", closing
+                if action.kind != "tool":
+                    break  # the model has what it needs
+                key = self._key(action.call)
+                if key in made:
+                    note = ALREADY_LOOKED_UP
+                    break
+                made.add(key)
+                self.calls.append(action.call)
+                async for event in self._lookup(steps, action.call):
+                    yield event
+                steps += 1
+                if self.last is None:
+                    break  # stopped while the tool was out
+                transcript.observation(
+                    action.call.name,
+                    self.last.summary if self.last.ok else what_happened(self.last),
+                    ok=self.last.ok,
+                )
+            if self.stop.is_set():
+                yield self._stopped()
+                return
+            transcript.answer_cue(note)
+            async with aclosing(self._answer(transcript.messages(), held=True)) as events:
+                async for event in events:
+                    yield event
+        finally:
+            # On every way out, however it ends. If a pass of this run is
+            # still inside the model the slot goes back when it leaves.
+            self.engine.give_slot(self.request_id)
+
+    def _transcript(self, tools: list) -> tuple[Transcript, int]:
+        """The run's one prompt, with as much of the conversation as leaves
+        room for the run. Returns it and how many old turns did not fit."""
+        system = system_for(self.persona, tools)
+        base = [
+            {"role": "system", "content": system},
+            *({"role": m["role"], "content": m["content"]} for m in self.history),
+            {"role": "user", "content": self.message},
+        ]
+        fitted, _, dropped = self.engine.fit_context(base, self.persona.max_tokens + RUN_ROOM)
+        return Transcript(system, fitted[1:-1], self.message), dropped
+
+    async def _take(self) -> AsyncIterator[Event]:
+        """Take the slot for the whole run, passing on the notices of its
+        place in the queue. If the run is stopped while it waits, the slot is
+        not taken and the caller finds the run stopped."""
+        async with aclosing(self.engine.take_slot(self.request_id)) as waiting:
+            async for name, payload in waiting:
+                if name == "queue":
+                    yield name, payload
+                else:
+                    self.slot_wait += payload["queue_wait_ms"]
+
+    async def _decision(
+        self, transcript: Transcript, tools: list, *, first: bool, room: int
+    ) -> tuple[Action, list[Completion]]:
+        """One choice in the loop, read from the transcript and added to it.
+
+        Like a single choice, it may be sent back once if the call cannot be
+        made. A second try is itself a pass that chooses, so it is only made
+        while there is ``room`` for one; a call still refused is carried on as
+        refused and never run.
+        """
+        given = {"text": self.message} if first else {"read": transcript.messages()[-1]["content"]}
+        action, said = await self._choose(
+            "route" if first else "decide", transcript.messages(), tools, given, held=True
+        )
+        passes = [said]
+        if said.raw:
+            transcript.action(said.raw)
+        if action.kind != "tool" or self.stop.is_set():
+            return action, passes
+        rejection = self._refusal(action.call)
+        if rejection is None:
+            return action, passes
+
+        self.trace.steps[-1].ok = False
+        self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
+        if room < 2:
+            action.call.meta["refusal"] = rejection
+            return action, passes
+        transcript.rejection(rejection.reasons)
+        action, said = await self._choose(
+            "repair", transcript.messages(), tools, {"rejected": list(rejection.reasons)}, held=True
+        )
+        passes.append(said)
+        if said.raw:
+            transcript.action(said.raw)
+        if action.kind == "tool" and not self.stop.is_set():
+            still = self._refusal(action.call)
+            if still is not None:
+                self.trace.steps[-1].ok = False
+                self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
+                action.call.meta["refusal"] = still
+        return action, passes
+
+    def _key(self, call: ToolCall) -> str:
+        """A call as it is compared with the ones already made: the tool, and
+        its arguments as the tool would be run with them, without regard to
+        case or spacing. "Paris" and " paris" are one lookup."""
+        clean, _ = check(REGISTRY[call.name], call.args)
+        plain = {
+            name: " ".join(value.split()).casefold() if isinstance(value, str) else value
+            for name, value in clean.items()
+        }
+        return call.name + " " + json.dumps(plain, sort_keys=True, ensure_ascii=False)
+
+    async def _lookup(self, index: int, call: ToolCall) -> AsyncIterator[Event]:
+        """One tool call of a run that is holding the slot.
+
+        A tool that works here takes milliseconds, and the slot is kept. One
+        that goes out can take ten seconds with the model idle. If anybody is
+        waiting, the slot is lent to them for that time, and the run takes its
+        place in the queue again afterwards. The price is that the model may
+        have to read this run's prompt again, and it is paid only when
+        somebody did in fact go in.
+        """
+        tool = REGISTRY.get(call.name)
+        lend = bool(
+            tool and tool.network and "refusal" not in call.meta and self.engine.others_waiting()
+        )
+        if lend:
+            self.engine.give_slot(self.request_id)
+        async for event in self._act(index, call):
+            yield event
+        if lend and not self.stop.is_set():
+            async for event in self._take():
+                yield event
 
     # ---------------------------------------------------------- one tool --
 
@@ -505,6 +766,7 @@ class _Run:
             result = ToolResult(False, refusal.summary, error=refusal.code)
         else:
             result = await self._call(call)
+        self.last = result
         if result is None:
             self.trace.steps.append(Step(
                 "tool", name=call.name, via=call.via, input=call.args,
@@ -603,7 +865,7 @@ class _Run:
 
     # ---------------------------------------------------------- the answer --
 
-    async def _answer(self, messages: list[dict]) -> AsyncIterator[Event]:
+    async def _answer(self, messages: list[dict], *, held: bool = False) -> AsyncIterator[Event]:
         sampling = self.persona.sampling()
         fitted, _, dropped = self.engine.fit_context(messages, sampling["max_tokens"])
         # Kept with the step: a prompt that lost its oldest turns is not the
@@ -617,8 +879,9 @@ class _Run:
             "label": "Writing the answer", "glyph": "✦",
         }
         self.trace.prompt = fitted
+        waited, self.slot_wait = self.slot_wait, 0.0
         async with aclosing(
-            self.engine.stream_chat(fitted, sampling, self.request_id, seed=self.seed)
+            self.engine.stream_chat(fitted, sampling, self.request_id, seed=self.seed, held=held)
         ) as stream:
             async for event, data in stream:
                 if event == "error":
@@ -632,12 +895,14 @@ class _Run:
                     yield event, data
                     continue
                 stopped = bool(data.get("cancelled"))
+                queued = data.get("queue_wait_ms")
                 self.trace.steps.append(Step(
                     "answer", model=True, input=trimmed,
                     prompt_tokens=data.get("prompt_tokens"),
                     output_tokens=data.get("completion_tokens"),
-                    queue_ms=data.get("queue_wait_ms"), first_token_ms=data.get("ttft_ms"),
-                    total_ms=_pass_ms(data.get("queue_wait_ms"), data.get("total_ms")),
+                    queue_ms=queued if queued is None and not waited else (queued or 0.0) + waited,
+                    first_token_ms=data.get("ttft_ms"),
+                    total_ms=_pass_ms(queued, data.get("total_ms")) + waited,
                     ok=not stopped, error="stopped" if stopped else None,
                 ))
                 self.trace.outcome = "stopped" if stopped else "answered"

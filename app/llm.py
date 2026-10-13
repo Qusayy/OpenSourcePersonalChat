@@ -18,6 +18,7 @@ Design notes that matter on a 2 vCPU box:
 from __future__ import annotations
 
 import asyncio
+import logging
 import platform
 import threading
 import time
@@ -29,6 +30,8 @@ from typing import Any, AsyncIterator, Iterator
 
 from .config import Settings, settings as default_settings
 from .telemetry import describe, process_rss_mb, usable_cpu_count
+
+log = logging.getLogger("aurora.llm")
 
 # ---------------------------------------------------------------- ChatML ----
 
@@ -99,10 +102,14 @@ class Engine:
 
         path = self.cfg.resolved_model_path
         if not path.exists():
+            # `state.error` is shown to every visitor (the status line, the
+            # health endpoint, the page itself), so it says what is wrong and
+            # not where things are on this machine. The path goes to the log.
+            log.error("model not found at %s", path)
             self.state.status = "error"
             self.state.error = (
-                f"Model not found at {path}. Download the GGUF (see README) or "
-                f"set AURORA_MOCK=true to run the UI without it."
+                "The model file is missing on the server. Download the GGUF (see "
+                "README) or set AURORA_MOCK=true to run the UI without it."
             )
             return
 
@@ -132,8 +139,13 @@ class Engine:
             self.state.loaded_at = time.time()
             self.state.load_ms = round((time.perf_counter() - t0) * 1000, 1)
         except Exception as exc:  # noqa: BLE001 - surfaced in /api/health
+            # The exception's own text can carry the model path; see above.
+            log.exception("model failed to load")
             self.state.status = "error"
-            self.state.error = f"{type(exc).__name__}: {exc}"
+            self.state.error = (
+                f"The model could not be loaded ({type(exc).__name__}). "
+                "The server log has the detail."
+            )
 
     @property
     def ready(self) -> bool:

@@ -19,10 +19,11 @@
   scrollbar-gutter: stable both-edges;
 }
 
-/* Centred, like the chat column, but wider: charts and tables want the room.
-   Running text inside it still stops at a reading measure. */
+/* The same column as the chat page, by the same rule (see .col in chat.css),
+   so the left edge of the text does not move when the page changes. Text,
+   fact lists and bar charts all run its full width. */
 .wrap {
-  max-width: calc(56rem + var(--edge) * 2);
+  max-width: calc(var(--col) + var(--edge) * 2);
   margin-inline: auto;
   padding: var(--s-7) max(var(--edge), env(safe-area-inset-right)) var(--s-9)
     max(var(--edge), env(safe-area-inset-left));
@@ -39,7 +40,6 @@
 }
 .page-head p {
   margin: 0;
-  max-width: 40rem;
   text-wrap: pretty;
 }
 
@@ -71,7 +71,6 @@
 }
 .section > .sub {
   margin: 0 0 var(--s-4);
-  max-width: 40rem;
   color: var(--ink-2);
   font-size: var(--t-2);
 }
@@ -82,9 +81,22 @@
   border-top: 1px solid var(--rule);
 }
 
+/* Two things need more room than a reading column: the eight-column table
+   and the history chart. They break out of it by the same amount on each
+   side, to at most 56rem across, and so stay centred on the page's axis.
+   --sbw is the scrollbar gutter the scroller keeps on each side (app.js);
+   in a window too narrow to give anything, the amount is nought. */
+.breakout {
+  --out: clamp(
+    0px,
+    (100vw - 2 * var(--sbw, 0px) - var(--col)) / 2 - var(--edge),
+    (56rem - var(--col)) / 2
+  );
+  margin-inline: calc(var(--out) * -1);
+}
+
 /* A short list of settings: term on the left, value on the right. */
 .facts {
-  max-width: 34rem;
   margin: var(--s-3) 0 0;
   border-top: 1px solid var(--rule);
   font-size: var(--t-2);
@@ -396,7 +408,6 @@
 
 .explain p {
   margin: 0 0 0.9em;
-  max-width: 40rem;
   text-wrap: pretty;
 }
 .explain p:last-child {
@@ -410,7 +421,6 @@
 }
 .explain.after-chart {
   margin: var(--s-4) 0 0;
-  max-width: 40rem;
   font-size: var(--t-2);
 }
 
@@ -420,7 +430,6 @@
 .caveat {
   display: flex;
   gap: var(--s-3);
-  max-width: 44rem;
   padding: var(--s-3) 0;
   border-top: 1px solid var(--rule);
   font-size: var(--t-2);

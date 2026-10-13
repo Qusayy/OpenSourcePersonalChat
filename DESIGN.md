@@ -261,7 +261,7 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 The body is a three-row grid: a 56px top bar, the sheet taking the rest, the status line at its natural height. The page itself does not scroll; the sheet does.
 
-Everything is centred. The top bar's content and the status line's sit in one container `--page` wide (76rem), inset `max(24px, (100vw - 76rem) / 2)` each side, so both start and end on the same two lines at any window width. The reading column, `--col` (42rem), is centred in the window; the long-form pages centre a 56rem block for charts and hold their text to 40rem inside it. `--edge` (24px) is the least space anything keeps from the window. Columns inside a scroller are centred with auto margins, not viewport arithmetic, and each scroller reserves a scrollbar gutter on both sides so a scrollbar cannot pull the column off the axis.
+Everything is centred. The top bar's content and the status line's sit in one container `--page` wide (76rem), inset `max(24px, (100vw - 76rem) / 2)` each side, so both start and end on the same two lines at any window width. The reading column, `--col` (42rem), is centred in the window and is the same on all three pages, so the left edge of the text does not move between them. On the long-form pages text, fact lists and bar charts run the column's full width; the two things that need more (the eight-column table and the history chart) break out of it by the same amount on each side, to at most 56rem, and stay on the axis. `--edge` (24px) is the least space anything keeps from the window. Columns inside a scroller are centred with auto margins, not viewport arithmetic, and each scroller reserves a scrollbar gutter on both sides so a scrollbar cannot pull the column off the axis.
 
 Spacing is a nine-step scale: 4, 8, 12, 16, 24, 32, 48, 64, 96px. Sections on the long-form pages are parted by 64px; a question takes 48px above and 12px below, like any heading.
 
@@ -319,7 +319,7 @@ Controls are words first. A box appears only where position alone would not say 
 
 ### Lists and rows
 - **Skill rows:** six ruled rows, not six cards: a name at 600, what it does in the second ink, and the tools it runs through at 13px. Hover tints the row and extends 12px past the text on both sides so the row reads as one target.
-- **Fact lists:** term in the second ink at the left, value at the right, a hairline under each. The headline figures of a benchmark run are the same list with the numeral given weight.
+- **Fact lists:** term in the second ink at the left, value at the right, a hairline under each, the full width of the column. The headline figures of a benchmark run are the same list with the numeral given weight.
 - **Command palette:** the one floating panel (8px corners, hairline border, pop shadow). Rows are a fixed 36px (48px on touch), the list snaps to whole rows, and the highlighted command's description is set in full beneath the list.
 
 ### Cards / Containers
@@ -388,7 +388,7 @@ Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entra
 ## Do's and Don'ts
 
 ### Do:
-- **Do** centre new content and stop it at the column measure (42rem for chat, 40rem for long-form text).
+- **Do** centre new content and stop it at the column measure (42rem, on every page). What needs more width breaks out symmetrically, never to one side.
 - **Do** keep the status line on the same container as the top bar, on every page.
 - **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar, the aurora.
 - **Do** keep the aurora under its ceiling and behind the content, and check the second ink over it if either changes.

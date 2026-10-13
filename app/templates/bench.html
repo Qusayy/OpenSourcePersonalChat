@@ -24,12 +24,24 @@
       </nav>
     </header>
 
+    {% if info.mock %}
+    {# Said before anything is read as a result. #}
+    <div class="caveat mock-note" role="note">
+      <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><path d="M10.3 4.3 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/></svg>
+      <span>
+        This server is in mock mode: no model is loaded, and the suite times a
+        fake token stream paced by a timer. The figures it produces are not
+        measurements of this machine, and they are not stored.
+      </span>
+    </div>
+    {% endif %}
+
     <section class="runbar" id="measured">
       <button class="btn btn-primary" id="run-btn">Run the benchmark</button>
       <div class="grow">
         <div class="progress"><i id="progress"></i></div>
         <div class="run-status" id="run-status">
-          {% if latest %}Last run stored on this server.{% else %}No run recorded yet — takes about two minutes.{% endif %}
+          {% if latest %}Last run stored on this server.{% elif info.mock %}Nothing is stored in mock mode. A run takes about two minutes.{% else %}No run recorded yet — takes about two minutes.{% endif %}
         </div>
       </div>
     </section>

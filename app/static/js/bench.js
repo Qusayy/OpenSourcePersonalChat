@@ -282,8 +282,11 @@ els.run.addEventListener("click", async () => {
           els.status.textContent = `Finished in ${fmt(data.elapsed_s, 0)}s — median ${fmt(
             data.gen_tps,
             2
-          )} tok/s`;
-          load();
+          )} tok/s${data.stored === false ? ". Mock mode: not stored." : ""}`;
+          // A mock run is not kept on the server, so there is nothing to read
+          // back: draw what just arrived, over whatever history was there.
+          if (data.stored === false) paint(data, historyRuns);
+          else load();
         } else if (event === "error") {
           els.status.textContent = data.message;
           toast(data.message, "err");

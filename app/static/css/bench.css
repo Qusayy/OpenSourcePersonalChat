@@ -429,6 +429,13 @@
   margin-top: 2px;
   color: var(--caution);
 }
+/* At the head of the page, before the run bar, whose own top rule closes it. */
+.mock-note {
+  margin-top: var(--s-7);
+}
+.mock-note + .runbar {
+  margin-top: 0;
+}
 
 .empty {
   padding: var(--s-2) 0;

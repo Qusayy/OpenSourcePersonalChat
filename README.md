@@ -83,7 +83,9 @@ AURORA_MOCK=true uvicorn app.main:app --port 8000
 ```
 
 Mock mode fakes a generator at ~11 tok/s — the whole site works, including the
-benchmark, so you can develop the front-end anywhere. On Windows:
+benchmark, so you can develop the front-end anywhere. Its timings measure a
+sleep, not a model, so mock mode writes nothing to the `runs` table (neither
+chat nor benchmark runs) and the Benchmark page says so at the top. On Windows:
 
 ```powershell
 $env:AURORA_MOCK="true"; .venv\Scripts\python -m uvicorn app.main:app --port 8000
@@ -370,9 +372,12 @@ you and uvicorn is buffering — see the nginx note above.
 python -m unittest discover -s tests -t .
 ```
 
-Standard library only. They cover the parsers and the sampler in
-`app/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
-nested limits, quotas, missing files), so they run the same on any OS.
+The telemetry tests use the standard library only: they cover the parsers and
+the sampler in `app/telemetry.py` against fixture trees of `/proc` and cgroup
+files (v2, v1, nested limits, quotas, missing files), so they run the same on
+any OS. `tests/test_runs.py` checks what is kept in the `runs` table (real runs
+are, mock runs are not) and needs the app's requirements; without them it is
+skipped.
 
 ---
 

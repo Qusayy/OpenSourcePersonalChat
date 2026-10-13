@@ -163,6 +163,9 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
         else None,
         "info": engine.info(),
         "at": time.time(),
+        # False in mock mode, where db.add_run keeps nothing. The page then
+        # draws this summary itself instead of reading back what was stored.
+        "stored": not engine.cfg.mock,
     }
     yield "summary", overall
 

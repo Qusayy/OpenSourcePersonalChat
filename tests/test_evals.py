@@ -367,7 +367,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             set(summary),
             {"tasks", "ran", "passed", "failed", "pending", "unexpected_passes", "skipped",
              "task_success", "routing_accuracy", "argument_match", "invalid_output_rate",
-             "steps", "passes", "prompt_tokens", "output_tokens"},
+             "repair_rate", "steps", "passes", "prompt_tokens", "output_tokens"},
         )
         self.assertEqual(summary["tasks"], summary["ran"] + summary["skipped"])
         self.assertEqual(
@@ -376,9 +376,11 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         for spread in ("steps", "passes", "prompt_tokens", "output_tokens"):
             self.assertEqual(set(summary[spread]), {"mean", "median", "p95", "max"})
-        self.assertLessEqual(summary["passes"]["max"], 2)  # nothing today takes more than two
+        self.assertLessEqual(summary["passes"]["max"], 3)  # choose, try once more, answer
         # The one reply in the suite that is cut off before it closes.
         self.assertGreater(summary["invalid_output_rate"], 0)
+        # And the one call that was sent back.
+        self.assertGreater(summary["repair_rate"], 0)
         self.assertEqual(sum(c["tasks"] for c in report["by_category"].values()), summary["tasks"])
 
     async def test_a_scripted_report_claims_no_timings_and_says_its_tokens_are_estimates(self) -> None:

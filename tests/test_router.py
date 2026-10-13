@@ -22,8 +22,9 @@ try:
         heuristic,
         parse_action,
         parse_slash,
+        repair_messages,
     )
-    from app.tools.base import available, decision_ceiling, tool_menu
+    from app.tools.base import Rejection, available, decision_ceiling, tool_menu
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
@@ -176,6 +177,27 @@ class DecisionPromptTests(unittest.TestCase):
 
     def test_asking_the_user_is_not_on_offer(self) -> None:
         self.assertNotIn("t-ask", decision_grammar(available()))
+
+
+class RepairPromptTests(unittest.TestCase):
+    def test_a_second_try_is_the_first_prompt_the_reply_and_what_was_wrong(self) -> None:
+        first = [{"role": "system", "content": "menu"}, {"role": "user", "content": "question"}]
+        refused = Rejection(("a must be a number; got 'x'", "b is required and was not given"),
+                            "for a person", "bad input")
+        self.assertEqual(
+            repair_messages(first, '{"tool": "t"}', refused),
+            [
+                {"role": "system", "content": "menu"},
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": '{"tool": "t"}'},
+                {"role": "user", "content": (
+                    "That call was not made: a must be a number; got 'x'; "
+                    "b is required and was not given. Reply with one JSON object only."
+                )},
+            ],
+        )
+        # The first prompt is not touched: it is what the model has already read.
+        self.assertEqual(len(first), 2)
 
 
 def said(raw: str = "", **more) -> Completion:

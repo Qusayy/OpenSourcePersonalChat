@@ -211,6 +211,7 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     args_right = [args for _, args in routed if args is not None]
     decisions = [s for o in ran for t in o.turns for s in t.trace.steps
                  if s.kind == "route" and s.model]
+    repairs = [s for o in ran for t in o.turns for s in t.trace.steps if s.kind == "repair"]
     rows = [o.row(timed) for o in ran]
 
     summary = {
@@ -231,6 +232,8 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
             sum(s.error == "the reply was not a complete JSON object" for s in decisions),
             len(decisions),
         ),
+        # Decisions whose call could not be made and was sent back once.
+        "repair_rate": _share(len(repairs), len(decisions)),
         "steps": _spread([float(r["steps"]) for r in rows]),
         "passes": _spread([float(r["passes"]) for r in rows]),
         "prompt_tokens": _spread([float(r["prompt_tokens"]) for r in rows]),

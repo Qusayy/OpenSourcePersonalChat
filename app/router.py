@@ -286,6 +286,24 @@ def decision_limit(tools: list) -> int:
     return max(settings.route_max_tokens, decision_ceiling(tools, ask=ASK))
 
 
+def repair_messages(messages: list[dict], raw: str, rejection) -> list[dict]:
+    """What the model reads when a call it chose could not be made.
+
+    The first prompt, then its own reply, then what was wrong with it. The
+    start is the first prompt to the letter, so the model has already read it
+    and only the last two turns are new. What was wrong is stated as fact, one
+    reason per problem; the only instruction is the one the first prompt gave.
+    """
+    return [
+        *messages,
+        {"role": "assistant", "content": raw},
+        {"role": "user", "content": (
+            "That call was not made: " + "; ".join(rejection.reasons) + ". "
+            "Reply with one JSON object only."
+        )},
+    ]
+
+
 def parse_action(said) -> Action:
     """Read one grammar-constrained reply (a ``Completion``) as an action.
 

@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS steps (
     conversation_id  TEXT NOT NULL,
     message_id       TEXT,
     idx              INTEGER NOT NULL,
-    kind             TEXT NOT NULL,     -- route | tool | answer
+    kind             TEXT NOT NULL,     -- route | repair | tool | answer
     name             TEXT,              -- the tool or skill
     via              TEXT,              -- slash | heuristic | skill | model
     input_json       TEXT,

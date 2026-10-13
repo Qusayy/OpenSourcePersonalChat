@@ -576,5 +576,154 @@ class TraceTests(AgentCase):
         self.assertIsNone(trace.wall_ms)
 
 
+DOLLARS = '{"tool": "currency", "args": {"amount": 100, "from_currency": "dollars", "to_currency": "EUR"}}'
+USD = '{"tool": "currency", "args": {"amount": 100, "from_currency": "USD", "to_currency": "EUR"}}'
+RATE = ToolResult(True, "100.00 USD = 92.15 EUR (rate 0.9215, ECB 2026-10-13).", card="currency")
+REASON = (
+    "from_currency must be one of the 32 values it knows, such as AUD, BGN, BRL; got 'dollars'"
+)
+EUROS = "How many euros is 100 dollars"
+
+
+class RepairTests(AgentCase):
+    """The model chose a call its tool cannot take. It is told why, once.
+
+    The grammar keeps the real model from most of this; a script is not held
+    to the grammar, which is how these replies come to be said at all.
+    """
+
+    async def traced(self, message: str, engine: ScriptedEngine, **more):
+        trace = agent.Trace()
+        stream = await collect(self.run_message(message, engine, trace=trace, **more))
+        return stream, trace
+
+    async def test_a_call_the_tool_cannot_take_is_sent_back_once_with_the_reason(self) -> None:
+        engine = self.scripted(DOLLARS, USD, "About 92 euros.")
+        asked = support.played_tools(self, {"currency": RATE})
+        stream, trace = await self.traced(EUROS, engine)
+
+        # On the page it is one choice, then the tool, then the answer.
+        self.assertEqual(
+            shape(stream),
+            ["step:route:running", "step:route:ok", "step:tool-0:running", "step:tool-0:ok",
+             "card", *ANSWER],
+        )
+        self.assertEqual(support.step(stream, "route", "ok")["label"], "Currency")
+        self.assertEqual(
+            asked["currency"], [{"amount": 100, "from_currency": "USD", "to_currency": "EUR"}]
+        )
+        self.assertEqual(len(engine.passes), 3)
+        self.assertEqual(
+            [(s.kind, s.ok) for s in trace.steps],
+            [("route", False), ("repair", True), ("tool", True), ("answer", True)],
+        )
+        self.assertEqual(trace.steps[0].error, "rejected: " + REASON)
+        self.assertEqual((trace.steps[1].name, trace.steps[1].via), ("currency", "model"))
+        self.assertEqual(trace.steps[1].input, {"rejected": [REASON]})
+        self.assertEqual(trace.steps[1].output, USD)
+
+    async def test_the_second_try_reads_the_first_prompt_its_own_reply_and_the_reason(self) -> None:
+        engine = self.scripted(DOLLARS, USD, "About 92 euros.")
+        support.played_tools(self, {"currency": RATE})
+        await self.traced(EUROS, engine)
+        first, second = engine.passes[0], engine.passes[1]
+        self.assertEqual(second.messages[:2], first.messages)
+        self.assertEqual(
+            second.messages[2:],
+            [
+                {"role": "assistant", "content": DOLLARS},
+                {"role": "user", "content": (
+                    f"That call was not made: {REASON}. Reply with one JSON object only."
+                )},
+            ],
+        )
+        # What it has already read is what the second prompt begins with, to
+        # the letter, so only the two new turns have to be read.
+        self.assertTrue(second.prompt.startswith(first.prompt + DOLLARS))
+        self.assertEqual(second.grammar, first.grammar)
+        self.assertEqual(second.sampling, first.sampling)
+
+    async def test_the_step_on_the_page_says_what_both_passes_cost(self) -> None:
+        engine = self.scripted(DOLLARS, USD, "About 92 euros.", prefill=0.02)
+        support.played_tools(self, {"currency": RATE})
+        stream, trace = await self.traced(EUROS, engine)
+        routed = support.step(stream, "route", "ok")
+        first, second = trace.steps[0], trace.steps[1]
+        self.assertEqual(routed["tokens_in"], first.prompt_tokens + second.prompt_tokens)
+        self.assertEqual(routed["tokens_out"], first.output_tokens + second.output_tokens)
+        self.assertGreaterEqual(routed["ms"], 40)
+        self.assertEqual(stream[-1][1]["passes"], 3)
+
+    async def test_a_second_refusal_is_not_argued_with_and_is_shown_failing(self) -> None:
+        engine = self.scripted(DOLLARS, DOLLARS, "I could not convert that.")
+        asked = support.played_tools(self, {"currency": RATE})
+        stream, trace = await self.traced(EUROS, engine)
+        # Choose, try again, answer. Never a third choice.
+        self.assertEqual(len(engine.passes), 3)
+        self.assertEqual(
+            shape(stream),
+            ["step:route:running", "step:route:ok", "step:tool-0:running", "step:tool-0:failed",
+             "card", *ANSWER],
+        )
+        self.assertEqual(support.step(stream, "tool-0", "failed")["detail"], "bad input")
+        self.assertEqual(
+            only(stream, "card")[0]["data"],
+            {"message": "Currency does not know 'dollars' as a currency to convert from."},
+        )
+        self.assertEqual(asked["currency"], [])
+        self.assertEqual(
+            [(s.kind, s.ok) for s in trace.steps],
+            [("route", False), ("repair", False), ("tool", False), ("answer", True)],
+        )
+        self.assertEqual(trace.steps[1].error, "rejected: " + REASON)
+
+    async def test_a_second_try_that_gives_up_goes_on_to_answer_without_a_tool(self) -> None:
+        engine = self.scripted(DOLLARS, NONE, "I am not sure.")
+        asked = support.played_tools(self, {"currency": RATE})
+        stream, trace = await self.traced(EUROS, engine)
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:ok", *ANSWER])
+        self.assertEqual(support.step(stream, "route", "ok")["label"], "No tool needed")
+        self.assertEqual(asked["currency"], [])
+        self.assertEqual([s.kind for s in trace.steps], ["route", "repair", "answer"])
+        self.assertEqual((trace.steps[1].name, trace.steps[1].ok), (None, True))
+
+    async def test_a_call_that_can_be_made_is_not_second_guessed(self) -> None:
+        engine = self.scripted(USD, "About 92 euros.")
+        support.played_tools(self, {"currency": RATE})
+        _, trace = await self.traced(EUROS, engine)
+        self.assertEqual(len(engine.passes), 2)
+        self.assertEqual([s.kind for s in trace.steps], ["route", "tool", "answer"])
+
+    async def test_only_a_choice_the_model_made_is_ever_sent_back(self) -> None:
+        # A person typed this one. It is refused where they can see, and no
+        # pass is spent asking the model about it.
+        engine = self.scripted("I could not convert that.")
+        asked = support.played_tools(self, {"currency": RATE})
+        stream, trace = await self.traced("/fx 5 xyz eur", engine, persona="explainer")
+        self.assertEqual(len(engine.passes), 1)
+        self.assertEqual(support.step(stream, "tool-0", "failed")["detail"], "bad input")
+        self.assertEqual(asked["currency"], [])
+        self.assertEqual([s.kind for s in trace.steps], ["route", "tool", "answer"])
+
+    async def test_stopped_during_the_second_try_nothing_is_called(self) -> None:
+        # The first pass is let through; the second is held inside the model.
+        engine = self.scripted(DOLLARS, USD, "never said", gated=True, gate_from=1)
+        asked = support.played_tools(self, {"currency": RATE})
+        trace = agent.Trace()
+        run = agent.run(EUROS, persona=get_persona("agent"), history=[], trace=trace,
+                        engine=engine, request_id="run")
+        reading = asyncio.create_task(collect(run))
+        await engine.entered(2)
+        engine.cancel("run")
+        engine.release()
+        stream = await reading
+        self.assertEqual(
+            shape(stream), ["step:route:running", "step:route:stopped", "done", "run"]
+        )
+        self.assertEqual(asked["currency"], [])
+        self.assertEqual([(s.kind, s.error) for s in trace.steps][-1], ("repair", "stopped"))
+        self.assertEqual(len(engine.passes), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

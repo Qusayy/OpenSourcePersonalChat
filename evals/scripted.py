@@ -67,7 +67,9 @@ class ScriptedEngine(Engine):
     ``delay`` is the pause before each piece and ``prefill`` the pause before
     the first, in seconds. ``gated`` holds every pass inside "the model" until
     ``release()`` is called, which is how a test keeps the slot occupied for
-    exactly as long as it needs.
+    exactly as long as it needs. ``gate_from`` lets the first few through and
+    holds from that pass on (counting from zero), for a test that is about a
+    later pass of a run.
     """
 
     def __init__(
@@ -77,6 +79,7 @@ class ScriptedEngine(Engine):
         delay: float = 0.0,
         prefill: float = 0.0,
         gated: bool = False,
+        gate_from: int = 0,
         cfg: Settings | None = None,
     ) -> None:
         super().__init__(
@@ -93,6 +96,7 @@ class ScriptedEngine(Engine):
         self._inside = 0
         self._guard = threading.Lock()
         self._gate = threading.Event()
+        self._gate_from = gate_from
         if not gated:
             self._gate.set()
 
@@ -125,7 +129,8 @@ class ScriptedEngine(Engine):
         try:
             if self.prefill:
                 time.sleep(self.prefill)
-            self._gate.wait()
+            if index >= self._gate_from:
+                self._gate.wait()
             if isinstance(record.output, BaseException):
                 raise record.output
             for piece in record.pieces:

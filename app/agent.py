@@ -35,10 +35,11 @@ from .router import (
     decision_messages,
     free_route,
     parse_action,
+    repair_messages,
 )
 from .skills import Skill, build_prompt
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import ToolResult, available
+from .tools.base import Rejection, ToolResult, available, check
 
 Event = tuple[str, dict]
 ToolCaller = Callable[[str, dict], Awaitable[ToolResult]]
@@ -54,7 +55,7 @@ class Step:
     is the tool's own time. A choice made without the model costs nothing.
     """
 
-    kind: str  # route | tool | answer
+    kind: str  # route | repair | tool | answer
     # Whether this step was a pass through the model.
     model: bool = False
     # The tool or skill, where there is one.
@@ -120,6 +121,12 @@ class Trace:
 def _pass_ms(queue_wait_ms: float | None, total_ms: float | None) -> float:
     """What a pass cost: its wait for the slot and its time inside it."""
     return (queue_wait_ms or 0.0) + (total_ms or 0.0)
+
+
+def _total(figures) -> int | None:
+    """Token counts added up. None if none of the passes ever ran."""
+    known = [f for f in figures if f is not None]
+    return sum(known) if known else None
 
 
 def run(
@@ -282,21 +289,24 @@ class _Run:
             "id": "route", "kind": "route", "status": "running",
             "label": "Choosing a tool", "glyph": "◇",
         }
-        action, said = await self._decide(tools)
+        action, passes = await self._decide(tools)
+        # The choice is one step on the page however many passes it took, and
+        # says what all of them cost.
+        ms = round(sum(said.ms for said in passes), 1)
         if self.stop.is_set():
             # Stopped while the choice was being made. Whatever came back is
             # not acted on, and the step that was announced is closed.
             yield "step", {
                 "id": "route", "kind": "route", "status": "stopped",
-                "label": "Choosing a tool", "glyph": "◇", "ms": round(said.ms, 1),
+                "label": "Choosing a tool", "glyph": "◇", "ms": ms,
             }
             return
         if action.kind == "tool":
             self.calls = [action.call]
-        closing = self._routed(action.call, "model", ms=round(said.ms, 1))
-        # The choice cost a pass, and a pass is counted in tokens.
-        closing["tokens_in"] = said.prompt_tokens
-        closing["tokens_out"] = said.completion_tokens
+        closing = self._routed(action.call, "model", ms=ms)
+        # The choice cost passes, and a pass is counted in tokens.
+        closing["tokens_in"] = _total(said.prompt_tokens for said in passes)
+        closing["tokens_out"] = _total(said.completion_tokens for said in passes)
         yield "step", closing
 
     def _routed(self, call: ToolCall | None, tier: str, *, ms: float) -> dict:
@@ -311,9 +321,48 @@ class _Run:
             "ms": ms,
         }
 
-    async def _decide(self, tools: list) -> tuple[Action, Completion]:
-        """Ask the model which tool, if any. One pass, written down whole."""
+    async def _decide(self, tools: list) -> tuple[Action, list[Completion]]:
+        """Ask the model which tool, if any. Returns what it chose and every
+        pass that took.
+
+        Usually that is one pass. If the call it chose is one the tool cannot
+        take, it is told why and asked once more, and whatever it says then is
+        what the run goes on with: a call that can be made, no call at all, or
+        a call that still cannot be made. That last one is not argued with a
+        second time. It is handed to the dispatcher, which refuses it where the
+        visitor can see.
+        """
         messages = decision_messages(self.message, tools)
+        action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
+        passes = [said]
+        if action.kind != "tool" or self.stop.is_set():
+            return action, passes
+        rejection = self._refusal(action.call)
+        if rejection is None:
+            return action, passes
+
+        # The step just written down chose a call that was not made.
+        self.trace.steps[-1].ok = False
+        self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
+        action, said = await self._choose(
+            "repair", repair_messages(messages, said.raw, rejection), tools,
+            {"rejected": list(rejection.reasons)},
+        )
+        if action.kind == "tool" and not self.stop.is_set():
+            still = self._refusal(action.call)
+            if still is not None:
+                self.trace.steps[-1].ok = False
+                self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
+        return action, [*passes, said]
+
+    def _refusal(self, call: ToolCall) -> Rejection | None:
+        """Why a call the model chose cannot be made as it stands, if it cannot."""
+        return check(REGISTRY[call.name], call.args)[1]
+
+    async def _choose(
+        self, kind: str, messages: list[dict], tools: list, given: dict
+    ) -> tuple[Action, Completion]:
+        """One pass that chooses, read as an action and written down whole."""
         said = await self.engine.complete_json(
             messages, decision_grammar(tools), decision_limit(tools),
             request_id=self.request_id, seed=self.seed,
@@ -326,8 +375,8 @@ class _Run:
         # A pass that never reached the model still took the time it took.
         cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
         self.trace.steps.append(Step(
-            "route", model=True, name=action.call.name if action.call else None, via="model",
-            input={"text": messages[-1]["content"]}, output=said.raw,
+            kind, model=True, name=action.call.name if action.call else None, via="model",
+            input=given, output=said.raw,
             prompt_tokens=said.prompt_tokens, output_tokens=said.completion_tokens,
             queue_ms=said.queue_wait_ms, first_token_ms=said.ttft_ms, total_ms=cost,
             ok=error is None, error=error,

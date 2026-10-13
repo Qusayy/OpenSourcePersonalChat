@@ -97,7 +97,7 @@ register(Tool(
 
 # ---------------------------------------------------------------- weather ---
 
-# WMO weather interpretation codes. `icon` names a shape cards.js draws in SVG —
+# WMO weather interpretation codes. `icon` names a shape the weather card draws in SVG —
 # nothing is fetched from a weather provider's CDN.
 WMO = {
     0: ("Clear sky", "sun"), 1: ("Mainly clear", "sun"), 2: ("Partly cloudy", "cloud-sun"),

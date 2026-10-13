@@ -162,8 +162,9 @@ const meter = new Meter({
   },
 });
 
-// The request in flight. `requestId` is known only once the server has given
-// generation the engine; until then there is nothing to cancel, only a
+// The run in flight. Its id comes with the stream's first event, so from then
+// on Stop has something to name at every stage: queued, choosing a tool,
+// waiting on a page, writing. Before that first event there is only a
 // connection to close.
 let requestId: string | null = null;
 let connection: AbortController | null = null;
@@ -206,8 +207,8 @@ function errorNotice(message: string, retryText: string | null): void {
   announce(message);
 }
 
-/** Ask the engine to stop writing. Until the stream has said which request
- *  this is, there is nothing to name and this does nothing. */
+/** Ask the server to stop this run, whatever it is doing. Until the stream has
+ *  said which run this is, there is nothing to name and this does nothing. */
 export async function stopGeneration(): Promise<void> {
   if (!requestId) return;
   try {
@@ -219,9 +220,8 @@ export async function stopGeneration(): Promise<void> {
 
 /**
  * The page is being left with an answer in flight: stop it, and keep what was
- * written, the same as pressing Stop. A request the engine has not started on
- * yet (still queued, or waiting on a tool) has no id to stop by, so its
- * connection is closed instead.
+ * written, the same as pressing Stop. A request whose stream has not said
+ * anything yet has no id to stop by, so its connection is closed instead.
  */
 export function leave(): void {
   if (!useChat.getState().streaming) return;
@@ -286,6 +286,8 @@ export async function send(text: string): Promise<void> {
       signal: controller.signal,
       onEvent: (event, data) => {
         if (event === "conversation") {
+          // From here on the run can be stopped by name.
+          if (data.request_id) requestId = data.request_id;
           useChat.setState({ conversationId: data.id });
           if (data.created) void refreshList();
         } else if (event === "queue") {

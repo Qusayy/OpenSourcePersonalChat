@@ -14,6 +14,7 @@ import {
   push,
   question,
   START,
+  STOPPED,
   transitions,
 } from "./helpers";
 
@@ -353,12 +354,69 @@ test.describe("against a stream the test controls", () => {
     });
   });
 
-  test("leaving before the engine has started closes the connection", async ({ page }) => {
+  test("Stop while waiting in the queue asks the server to stop the run", async ({ page }) => {
+    const cancels: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/cancel/")) cancels.push(new URL(r.url()).pathname);
+    });
     await ask(page, "hello");
     await push(page, "conversation", CONVERSATION);
     await push(page, "queue", { position: 1, first: true });
     await expect(page.locator("#status")).toHaveAttribute("data-phase", "queued");
-    // Stop has nothing to name yet and does nothing.
+
+    // The first event named the run, so there is something to stop.
+    await page.locator("#send").click();
+    await expect.poll(() => cancels).toEqual(["/api/cancel/req-1"]);
+    // The connection is left open: the server ends the stream itself.
+    expect(await aborted(page)).toBe(false);
+
+    await push(page, "done", STOPPED);
+    await end(page);
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "ready");
+    await expect(page.locator("#sr-status")).toHaveText("Generation stopped.");
+    // Nothing was written, so nothing is left but the question.
+    await expect(question(page)).toHaveText("hello");
+    await expect(answerOf(page)).toHaveCount(0);
+    await expect(notice(page)).toHaveCount(0);
+  });
+
+  test("Stop while a tool is being chosen takes the step off the line", async ({ page }) => {
+    const cancels: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/cancel/")) cancels.push(new URL(r.url()).pathname);
+    });
+    await ask(page, "do I need a coat in Paris");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "step", {
+      id: "route",
+      kind: "route",
+      status: "running",
+      label: "Choosing a tool",
+    });
+    const route = answerOf(page).locator('[data-part="route"]');
+    await expect(route).toContainText("Choosing a tool");
+
+    await page.locator("#send").click();
+    await expect.poll(() => cancels).toEqual(["/api/cancel/req-1"]);
+    await push(page, "step", {
+      id: "route",
+      kind: "route",
+      status: "stopped",
+      label: "Choosing a tool",
+      ms: 310,
+    });
+    await expect(route.locator("[data-id]")).toHaveCount(0);
+    await push(page, "done", STOPPED);
+    await end(page);
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    await expect(answerOf(page)).toHaveCount(0);
+  });
+
+  test("leaving before the stream has said anything closes the connection", async ({ page }) => {
+    await ask(page, "hello");
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "stop");
+    // No event has arrived, so the run has no name yet: Stop does nothing.
     await page.locator("#send").click();
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "stop");
     expect(await aborted(page)).toBe(false);

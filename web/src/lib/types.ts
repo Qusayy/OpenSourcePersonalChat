@@ -187,7 +187,8 @@ export interface StepEvent {
   /** "route", "tool-0", "tool-1", …, "answer". */
   id: string;
   kind: "route" | "tool" | "model";
-  status: "running" | "ok" | "failed";
+  /** "stopped": the run was stopped while this step was under way. */
+  status: "running" | "ok" | "failed" | "stopped";
   label: string;
   glyph?: string;
   /** For a route: how it was decided ("skill", "slash", "heuristic", "model", "direct"). For a failed tool: why. */
@@ -216,16 +217,18 @@ export interface RunEvent {
   wall_ms: number | null;
 }
 
-/** What the answer cost, sent when it ends. */
+/** What the answer cost, sent when it ends. A run that was stopped before its
+ *  answer was begun still ends in this, with `cancelled` set and nothing in the
+ *  figures: no prompt was read and no token written. */
 export interface DoneEvent {
   cancelled: boolean;
-  ttft_ms: number;
-  queue_wait_ms: number;
-  prompt_tokens: number;
+  ttft_ms: number | null;
+  queue_wait_ms: number | null;
+  prompt_tokens: number | null;
   completion_tokens: number;
-  prefill_tps: number;
-  gen_tps: number;
-  total_ms: number;
+  prefill_tps: number | null;
+  gen_tps: number | null;
+  total_ms: number | null;
   rss_mb: number | null;
   tool_calls: number;
 }
@@ -239,13 +242,17 @@ export type ChatEvents = {
     created: boolean;
     skill: string | null;
     persona: string;
+    /** The run's name, known from the first event: what Stop asks the server
+     *  to stop, at whatever stage the run has reached. */
+    request_id?: string;
   };
   step: StepEvent;
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
   trimmed: { dropped: number };
   /** Waiting for the one engine. `position` is how many are ahead. */
   queue: { position: number; first: boolean };
-  /** Generation has the engine. Only now is there a request to cancel. */
+  /** The pass that writes the answer has the engine. `request_id` is the
+   *  run's, the same one `conversation` carried. */
   start: { request_id: string; queue_wait_ms: number; prompt_tokens: number; n_ctx: number };
   /** One piece of text. The first of a response also carries `ttft_ms`. */
   token: { t: string; ttft_ms?: number };

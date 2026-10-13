@@ -20,13 +20,6 @@
   --animate-spin: spin 0.8s linear infinite;
 }
 
-/* `hover:` means :hover, on every device. Tailwind's own applies only where
-   the pointer can hover, so on a phone a tapped control would no longer take
-   its pressed-and-held tint the way every control here always has. This
-   belongs with the other variants in styles/theme.css; it is here because
-   that file is not this page's to change. */
-@custom-variant hover (&:hover);
-
 /* The arrival. Once, when the page is come to from outside (<html> carries
    `intro` for the first second, so New chat does not replay it). The sheet
    assembles in reading order: headline, what it is, where to type, what to
@@ -46,23 +39,6 @@
   :root {
     --fault-wash: color-mix(in oklch, var(--fault) 10%, var(--sheet));
     --fault-tint: color-mix(in oklch, var(--fault) 8%, var(--sheet));
-  }
-
-  /* Inline SVG icons (lib/icons.tsx) sit on the text baseline by default,
-     which nudges every label they share a line with. Blocks them instead. */
-  .icon {
-    display: block;
-    flex: 0 0 auto;
-  }
-
-  /* A code block's Copy button is written by the markdown renderer, so it
-     cannot carry a utility class; on a touch screen it is a full-size target
-     like every other control. */
-  @media (pointer: coarse) {
-    .copy-btn {
-      min-height: 44px;
-      padding-inline: var(--s-3);
-    }
   }
 
   @keyframes msg-in {

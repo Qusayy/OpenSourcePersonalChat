@@ -6,13 +6,6 @@
    where they sit. In Tailwind's components layer. */
 
 @layer components {
-  /* An icon in a caption is a block, so it does not sit on the text baseline
-     and nudge the label it shares a line with. */
-  .card-tool .icon {
-    display: block;
-    flex: 0 0 auto;
-  }
-
   /* ----------------------------------------------------------- weather -- */
 
   /* The drawings repeat what the words beside them already say, so they are

@@ -299,6 +299,11 @@
 @custom-variant le-620 (@media (max-width: 620px));
 @custom-variant coarse (@media (pointer: coarse));
 
+/* `hover:` means :hover, on every device. Tailwind's own applies only where
+   the pointer can hover, so on a phone a tapped control would no longer take
+   its pressed-and-held tint the way every control here always has. */
+@custom-variant hover (&:hover);
+
 /* Arriving from outside, the page introduces itself once: <html> carries
    `intro` for the first second (set before first paint in index.html, taken
    off by the shell). `intro:` styles an element only during that arrival. */

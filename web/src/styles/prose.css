@@ -188,6 +188,16 @@
     }
   }
 
+  /* A code block's Copy button is written by the markdown renderer, so it
+     cannot carry a utility class; on a touch screen it is a full-size target
+     like every other control. */
+  @media (pointer: coarse) {
+    .copy-btn {
+      min-height: 44px;
+      padding-inline: var(--s-3);
+    }
+  }
+
   /* Reduced motion: the caret stays lit and stops blinking; new words are
    simply there. */
   @media (prefers-reduced-motion: reduce) {

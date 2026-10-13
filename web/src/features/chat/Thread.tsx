@@ -1,4 +1,5 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CardStack } from "@/features/cards/CardStack";
 import { ToolCard } from "@/features/cards/ToolCard";
 import { copyText } from "@/lib/clipboard";
 import { cx } from "@/lib/cx";
@@ -112,7 +113,7 @@ const Answer = memo(function Answer({ item }: { item: BotItem }) {
         {item.steps.length > 0 && <RouteLine steps={item.steps} />}
         {/* A tool result is set as a figure above the answer it informed. */}
         {item.cards.length > 0 && (
-          <div data-part="cards" className="mb-4 border-b border-rule">
+          <CardStack data-part="cards">
             {item.cards.map((entry, i) => (
               <ToolCard
                 key={entry.key}
@@ -122,7 +123,7 @@ const Answer = memo(function Answer({ item }: { item: BotItem }) {
                 meta={entry.meta}
               />
             ))}
-          </div>
+          </CardStack>
         )}
         <Prose itemKey={item.key} live={item.live} content={item.content} />
         {item.cost && <CostLine item={item} />}

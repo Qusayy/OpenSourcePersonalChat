@@ -90,7 +90,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     </span>
     <span class="st-seg st-model" title="{{ info.model }} {{ info.quant }}">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
     <span class="st-seg st-cpu" id="st-cpu" {% if cpus is none %}hidden{% endif %}>
-      <span><span class="num" id="cpu-count">{{ cpus_text }}</span> <span id="cpu-noun">{{ 'core' if cpus == 1 else 'cores' }}</span></span>
+      <span class="cpu-n"><span class="num" id="cpu-count">{{ cpus_text }}</span> <span id="cpu-noun">{{ 'core' if cpus == 1 else 'cores' }}</span></span>
+      <span class="st-short">CPU</span>
       {# One bar per core up to eight; past that the bars would be a comb, so one bar for all of them. #}
       <span class="cpu-bars{{ ' agg' if core_bars > 8 }}" id="cpu-bars" aria-hidden="true">
         {%- for i in range(1 if core_bars > 8 else core_bars) %}<i></i>{% endfor -%}
@@ -98,7 +99,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <b class="num" id="cpu-pct">{% if system.cpu_pct is not none %}{{ system.cpu_pct | round | int }}%{% endif %}</b>
     </span>
     <span class="st-seg st-ram" id="st-ram" {% if system.mem_total_mb is none %}hidden{% endif %}>
-      RAM <b class="num" id="ram-used">{% if system.mem_used_mb is not none %}{{ '%.1f' | format(system.mem_used_mb / 1024) }}{% endif %}</b>
+      <span class="st-lab">RAM</span> <b class="num" id="ram-used">{% if system.mem_used_mb is not none %}{{ '%.1f' | format(system.mem_used_mb / 1024) }}{% endif %}</b>
       / <span class="num" id="ram-total">{% if system.mem_total_mb is not none %}{{ '%.1f' | format(system.mem_total_mb / 1024) }} GB{% endif %}</span>
       <span class="meter" aria-hidden="true"><i id="ram-fill"></i></span>
     </span>

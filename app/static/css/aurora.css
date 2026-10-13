@@ -382,10 +382,10 @@ body {
 .status-figs {
   margin-left: auto;
 }
-/* What gives when the row is short of room, and in what order. The trace only
-   ever grows into space that is free, so it narrows first; after that the
-   model's name is cut with an ellipsis (its title still carries all of it).
-   Nothing else moves, and nothing runs into its neighbour. */
+/* What gives when the row is short of room, and in what order: the model's
+   name first, cut with an ellipsis (its title still carries all of it); then
+   the trace, which may narrow from 6rem but keeps 4rem, enough to show a
+   shape. Nothing else moves, and nothing runs into its neighbour. */
 .status-id > * {
   flex: none;
 }
@@ -396,22 +396,35 @@ body {
   text-overflow: ellipsis;
 }
 @media (min-width: 1264px) {
+  /* The order is a matter of how eagerly each shrinks. For that the name has
+     to compete with the right-hand group directly, so the left group's box is
+     dissolved and its members sit on the row themselves. The name then takes
+     all but a thousandth of any shortfall until it reaches its minimum, and
+     only what is left over reaches the trace. */
+  .status {
+    column-gap: var(--s-4);
+  }
+  .status-id {
+    display: contents;
+  }
+  .status-id > .st-model {
+    flex-shrink: 1000;
+  }
   .status-figs {
-    flex: 1 0 auto;
-    justify-content: flex-end;
+    flex: 0 1 auto;
+    /* with the row's own gap, the space the two halves always kept */
+    padding-left: var(--s-2);
   }
   .status-figs > * {
     flex: none;
   }
   .status-figs > .st-tps {
-    flex: 1 1 auto;
-    justify-content: flex-end;
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .st-tps .spark-wrap {
-    flex: 1 1 2.5rem;
-    width: auto;
-    min-width: 2.5rem;
-    max-width: 6rem;
+    flex: 0 1 auto;
+    min-width: 4rem;
   }
 }
 /* Only for the opened line on a narrow screen; see the 620px rules. */
@@ -482,6 +495,11 @@ body {
   color: var(--ink);
   font-weight: 600;
   text-align: right;
+}
+/* "CPU": the short name the load figure goes by in the phone corridor, where
+   the core count and its bars are behind Details. */
+.st-short {
+  display: none;
 }
 #tps-value,
 #cpu-pct,
@@ -665,6 +683,13 @@ body {
   :root[data-page="chat"] .st-ctx {
     order: -1;
   }
+  /* Context use opens that row. Its slot is as wide as the largest count, and
+     right-aligned in it a small count stood 24px in from the edge everything
+     above it starts on. Here the count takes its own width; it changes twice
+     a request, not on every token. */
+  #ctx-value {
+    min-width: 0;
+  }
 }
 /* Before the corridor takes over, the machine's own row sheds its bars, then
    nothing else: the figures stay. */
@@ -833,13 +858,39 @@ body {
     display: flex;
   }
 
-  /* The corridor: state plus the one figure that matters now — the rate while
-     the model writes, context use otherwise. Everything else waits behind
-     Details rather than being shrunk until none of it reads. */
-  .status,
-  :root[data-page="chat"] .status {
-    flex-wrap: nowrap;
-    gap: var(--s-4);
+  /* The corridor: one row. The state, then as much as fits of, in this
+     order: the mock tag, the rate while the model writes, CPU load, memory
+     used and total, context use. The row wraps and only its first line is
+     shown, so what does not fit is dropped whole, last first, rather than
+     squeezed until none of it reads. All of it is still behind Details. */
+  .status:not([data-open="true"]),
+  :root[data-page="chat"] .status:not([data-open="true"]) {
+    /* What a row of the line is tall, less its padding and its rule; or, on
+       a touch screen, as tall as the target on it. */
+    --row: var(--touch-row, calc(2.5rem - 2 * var(--s-1) - 1px));
+    position: relative;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    /* A second line starts far enough down to be outside the padding too,
+       which on a phone with a home indicator is deep. */
+    gap: 8rem var(--s-4);
+    height: calc(var(--row) + var(--s-1) + max(var(--s-1), env(safe-area-inset-bottom)) + 1px);
+    min-height: 0;
+    /* room for Details, which is pinned to the right end */
+    padding-right: calc(max(var(--inset), env(safe-area-inset-right)) + 4.5rem);
+    overflow: hidden;
+  }
+  /* A strut, so the first line is a full row tall whatever is on it. */
+  .status:not([data-open="true"])::before {
+    content: "";
+    order: -1;
+    width: 0;
+    height: var(--row);
+    margin-right: calc(var(--s-4) * -1);
+  }
+  .status:not([data-open="true"]) .status-id,
+  .status:not([data-open="true"]) .status-figs {
+    display: contents;
   }
   .status-id .st-seg,
   .status-figs > * {
@@ -850,6 +901,8 @@ body {
     flex-basis: auto;
     margin-left: 0;
   }
+  .status:not([data-open="true"]) .st-cpu:not([hidden]),
+  .status:not([data-open="true"]) .st-ram:not([hidden]),
   .status-figs > .st-ctx:not([hidden]),
   .status[data-phase="writing"] .status-figs > .st-tps:not([hidden]) {
     display: inline-flex;
@@ -857,10 +910,31 @@ body {
   .status[data-phase="writing"] .status-figs > .st-ctx {
     display: none;
   }
-  /* Off the chat page there is no conversation figure, so the one figure is
-     the machine's memory. */
-  :root:not([data-page="chat"]) .status-id .st-ram:not([hidden]) {
-    display: inline-flex;
+  /* What is dropped last comes first. */
+  .status:not([data-open="true"]) #b-mock {
+    order: 1;
+  }
+  .status:not([data-open="true"]) .st-tps {
+    order: 2;
+  }
+  .status:not([data-open="true"]) .st-cpu {
+    order: 3;
+  }
+  .status:not([data-open="true"]) .st-ram {
+    order: 4;
+  }
+  .status:not([data-open="true"]) .st-ctx,
+  :root[data-page="chat"] .status:not([data-open="true"]) .st-ctx {
+    order: 5;
+  }
+  /* In the row the load goes by a short name and memory by its unit; the core
+     count, the bars and the word are in the opened line. */
+  .status:not([data-open="true"]) .st-cpu .cpu-n,
+  .status:not([data-open="true"]) .st-ram .st-lab {
+    display: none;
+  }
+  .status:not([data-open="true"]) .st-short {
+    display: inline;
   }
   .spark-wrap {
     display: none;
@@ -882,6 +956,14 @@ body {
     text-decoration-color: var(--ink-2);
     text-underline-offset: 3px;
     cursor: pointer;
+  }
+  .status:not([data-open="true"]) .status-more {
+    position: absolute;
+    top: var(--s-1);
+    right: max(var(--inset), env(safe-area-inset-right));
+    height: var(--row);
+    min-height: 0;
+    margin-left: 0;
   }
 
   .status[data-open="true"],
@@ -937,6 +1019,10 @@ body {
   .text-btn,
   .status-more {
     min-height: 44px;
+  }
+  /* The corridor's one row is as tall as the target on it. */
+  :root {
+    --touch-row: 44px;
   }
   .text-btn {
     padding-inline: var(--s-3);

@@ -384,6 +384,12 @@ let teleTimer = null;
 // Once a second while a request is running, when the figures are moving; every
 // three seconds otherwise. The server has two cores and other work to do.
 const teleDelay = () => (phase && phase.key !== "held" ? 1000 : 3000);
+// A load figure is the difference between two readings. A server nobody has
+// asked for a while has only one, and answers with no figure; the next
+// reading it can use is half a second later, so that is when to ask again,
+// rather than leaving the slot empty for seconds.
+const TELE_RETRY_MS = 600;
+let teleRetries = 0;
 
 async function pollTelemetry() {
   teleTimer = null;
@@ -400,6 +406,12 @@ async function pollTelemetry() {
       otherBusy = busy;
       paintState();
     }
+    if (data.system?.cpu_pct === null && teleRetries < 2) {
+      teleRetries += 1;
+      scheduleTelemetry(TELE_RETRY_MS);
+      return;
+    }
+    teleRetries = 0;
   } catch {
     /* a missed sample is not worth a message; the next is seconds away */
   }
@@ -416,7 +428,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 paintSystem(window.AURORA?.system);
-scheduleTelemetry(1000);
+// Straight away: the figures in the page are from when it was rendered.
+scheduleTelemetry(0);
 
 /* ------------------------------------------------------------- health --- */
 

@@ -1,4 +1,266 @@
-/* Rules for this part of the interface that are written as CSS rather than as
-   utility classes. Put them in a layer (`@layer components { … }`) so a
-   utility on the same element still wins; utilities and variants declared
-   with @utility or @custom-variant go at the top level. */
+/* The chat page: what it adds to the theme, and the few parts of it that are
+   written as CSS rather than as utility classes.
+
+   Most of the page is utility classes in its components. What is here is what
+   they cannot say cleanly: motion that needs keyframes or a starting style,
+   the history drawer (a native dialog with its backdrop and its slide), the
+   persona row (whose widths are decided by the order two media rules come
+   in), and a mark that is placed by script. */
+
+/* ---------------------------------------------------------------- theme -- */
+
+@theme inline {
+  /* The live colour of a fault, let down into the sheet: behind an error, and
+     under the Stop button when it is pointed at. Mixed from the two tokens,
+     so they follow the scheme without a second definition. */
+  --color-fault-wash: var(--fault-wash);
+  --color-fault-tint: var(--fault-tint);
+
+  --animate-msg-in: msg-in var(--dur-2) var(--ease) both;
+  --animate-spin: spin 0.8s linear infinite;
+}
+
+/* `hover:` means :hover, on every device. Tailwind's own applies only where
+   the pointer can hover, so on a phone a tapped control would no longer take
+   its pressed-and-held tint the way every control here always has. This
+   belongs with the other variants in styles/theme.css; it is here because
+   that file is not this page's to change. */
+@custom-variant hover (&:hover);
+
+/* The arrival. Once, when the page is come to from outside (<html> carries
+   `intro` for the first second, so New chat does not replay it). The sheet
+   assembles in reading order: headline, what it is, where to type, what to
+   try. Each element says its place in that order with --i. Under reduced
+   motion nothing travels and everything is simply there. */
+@utility arrive {
+  &:where(:root.intro *) {
+    animation: rise-in var(--dur-4) var(--ease) backwards;
+    animation-delay: calc(var(--i, 0) * 50ms);
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+}
+
+@layer components {
+  :root {
+    --fault-wash: color-mix(in oklch, var(--fault) 10%, var(--sheet));
+    --fault-tint: color-mix(in oklch, var(--fault) 8%, var(--sheet));
+  }
+
+  /* Inline SVG icons (lib/icons.tsx) sit on the text baseline by default,
+     which nudges every label they share a line with. Blocks them instead. */
+  .icon {
+    display: block;
+    flex: 0 0 auto;
+  }
+
+  /* A code block's Copy button is written by the markdown renderer, so it
+     cannot carry a utility class; on a touch screen it is a full-size target
+     like every other control. */
+  @media (pointer: coarse) {
+    .copy-btn {
+      min-height: 44px;
+      padding-inline: var(--s-3);
+    }
+  }
+
+  @keyframes msg-in {
+    from {
+      opacity: 0;
+      translate: 0 6px;
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* -------------------------------------------------------- personas -- */
+
+  .persona-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--s-1);
+    min-width: 0;
+    margin-left: calc(var(--s-2) * -1);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .persona-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Plain words. The chosen one is inked and ruled; weight stays the same so
+     choosing never shifts its neighbours. */
+  .persona {
+    appearance: none;
+    padding: var(--s-1) var(--s-2);
+    border: 0;
+    border-radius: var(--r-1);
+    background: none;
+    color: var(--ink-2);
+    font-size: var(--t-2);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      color var(--dur-1),
+      background var(--dur-1);
+  }
+  .persona:hover {
+    color: var(--ink);
+    background: var(--sheet-2);
+  }
+  .persona[aria-pressed="true"] {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 6px;
+  }
+
+  /* The mark under the chosen persona is one rule that slides to whichever is
+     chosen, rather than an underline that vanishes from one word and appears
+     under another. PersonaToggle places it; until it has, the plain underline
+     above does the job. */
+  .persona-ink {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1px;
+    height: 2px;
+    background: var(--ink);
+    transform: translate(var(--x, 0px), var(--y, 0px)) scaleX(var(--w, 0));
+    transform-origin: left center;
+    pointer-events: none;
+  }
+  .persona-ink.moving {
+    transition: transform var(--dur-3) var(--ease);
+  }
+  .persona-row.inked .persona[aria-pressed="true"] {
+    text-decoration: none;
+  }
+
+  @media (max-width: 620px) {
+    /* Five words do not fit one row here, and a row that scrolls sideways hid
+       the last of them with nothing to say it was there. They wrap. */
+    .persona-row {
+      flex-wrap: wrap;
+      overflow: visible;
+    }
+  }
+  @media (pointer: coarse) {
+    .persona {
+      min-height: 44px;
+      padding-inline: var(--s-3);
+    }
+  }
+  /* At phone width the five personas fit one row once the padding between
+     them is trimmed; a full-width word is still a 44px-tall target. Wrapping
+     (set above) remains for screens too narrow even for that. This comes
+     after the touch rule on purpose: on a phone both apply, and this is the
+     padding that must win. */
+  @media (max-width: 620px) {
+    .persona-row {
+      gap: 0;
+      margin-left: -5px;
+    }
+    .persona {
+      padding-inline: 5px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .persona-ink {
+      transition: none !important;
+    }
+  }
+
+  /* -------------------------------------------------- history drawer -- */
+
+  /* A real <dialog>: the focus trap, Escape, the inert page behind it and the
+     return of focus to the button that opened it all come from the platform. */
+  .rail {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(88vw, 24rem);
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--rule);
+    background: var(--sheet);
+    color: var(--ink);
+    box-shadow: var(--sh-pop);
+    transition:
+      translate var(--dur-2) var(--ease),
+      overlay var(--dur-2) allow-discrete,
+      display var(--dur-2) allow-discrete;
+    translate: 100% 0;
+  }
+  .rail[open] {
+    translate: 0 0;
+  }
+  @starting-style {
+    .rail[open] {
+      translate: 100% 0;
+    }
+  }
+  .rail::backdrop {
+    background: var(--scrim);
+  }
+
+  /* History rows arrive as a list, one after another, once per opening.
+     `pending` holds them unseen for the moment it takes the fresh list to
+     come back, so they are not shown, replaced and shown again. */
+  .convo-list.pending > * {
+    opacity: 0;
+  }
+  .convo-list.stagger > * {
+    animation: rise-in var(--dur-3) var(--ease) backwards;
+    animation-delay: calc(var(--n, 10) * 24ms);
+  }
+  .convo-list.stagger > :nth-child(1) {
+    --n: 0;
+  }
+  .convo-list.stagger > :nth-child(2) {
+    --n: 1;
+  }
+  .convo-list.stagger > :nth-child(3) {
+    --n: 2;
+  }
+  .convo-list.stagger > :nth-child(4) {
+    --n: 3;
+  }
+  .convo-list.stagger > :nth-child(5) {
+    --n: 4;
+  }
+  .convo-list.stagger > :nth-child(6) {
+    --n: 5;
+  }
+  .convo-list.stagger > :nth-child(7) {
+    --n: 6;
+  }
+  .convo-list.stagger > :nth-child(8) {
+    --n: 7;
+  }
+  .convo-list.stagger > :nth-child(9) {
+    --n: 8;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* The drawer appears rather than slides, and its rows are simply there. */
+    .rail {
+      transition: none !important;
+    }
+    .convo-list.stagger > * {
+      animation: none !important;
+      transform: none !important;
+      translate: none !important;
+      opacity: 1 !important;
+    }
+  }
+}

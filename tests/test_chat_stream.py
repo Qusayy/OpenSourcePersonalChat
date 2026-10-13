@@ -15,6 +15,7 @@ try:
     from app.personas import get_persona
     from app.router import ROUTE_SYSTEM
     from app.tools.base import ToolResult, tool_menu
+    from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import ChatCase, PlayedEngine, only, shape, step
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -394,6 +395,40 @@ class AgentRoutingTests(ChatCase):
         stream = self.chat("15% of 200", persona="explainer")
         self.assertEqual(shape(stream), ["conversation", *ANSWER])
         self.assertEqual(self.engine.route_prompts, [])
+
+
+class RoutingThroughTheSlotTests(ChatCase):
+    """The same choice, made by an engine whose routing pass is a real pass:
+    queued, run on a worker thread, and timed."""
+
+    def test_the_choice_and_the_answer_are_two_passes_through_one_slot(self) -> None:
+        engine = ScriptedEngine(['{"tool": "weather", "args": {"location": "Paris"}}', "Take a coat."])
+        self.use_engine(engine)
+        support.played_tools(self, {"weather": WEATHER})
+        stream = self.chat("Do I need a coat in Paris", persona="agent")
+        self.assertEqual(
+            shape(stream),
+            ["conversation", "step:route:running", "step:route:ok", "step:tool-0:running",
+             "step:tool-0:ok", "card", *ANSWER],
+        )
+        routed = step(stream, "route", "ok")
+        self.assertEqual((routed["label"], routed["detail"], routed["tool"]),
+                         ("Weather", "model", "weather"))
+        self.assertGreater(routed["ms"], 0)
+        self.assertEqual(len(engine.passes), 2)
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+        self.assertEqual(self.conversation(stream)["messages"][1]["content"], "Take a coat.")
+
+    def test_one_engine_serves_message_after_message(self) -> None:
+        engine = ScriptedEngine(['{"tool": "none"}', "First."] * 5)
+        self.use_engine(engine)
+        for _ in range(5):
+            stream = self.chat("Suggest a name for my boat", persona="agent")
+            self.assertEqual(only(stream, "done")[0]["completion_tokens"], 1)
+            self.assertTrue(engine.free)
+        self.assertEqual(len(engine.passes), 10)
+        self.assertEqual(engine.info()["completed"], 10)
 
 
 class SkillTests(ChatCase):

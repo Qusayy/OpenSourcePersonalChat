@@ -18,13 +18,15 @@ Design notes that matter on a 2 vCPU box:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import platform
 import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from contextlib import aclosing
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
@@ -79,6 +81,33 @@ class EngineState:
 
 
 SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repeat_penalty", "max_tokens")
+
+# What the mock engine answers when asked to choose under a grammar.
+MOCK_DECISION = '{"tool": "none"}'
+
+
+@dataclass(frozen=True)
+class Completion:
+    """What one grammar-constrained pass said, and what it cost.
+
+    The token and timing figures are None when the pass never reached the
+    model: the engine was not ready, or the pass failed on the way in.
+    """
+
+    # The reply as a JSON object, or None if it was not one.
+    parsed: dict | None = None
+    raw: str = ""
+    # From the call to the end, the wait for the slot included.
+    ms: float = 0.0
+    # Why there is nothing to read, when there is nothing.
+    error: str | None = None
+    cancelled: bool = False
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    queue_wait_ms: float | None = None
+    ttft_ms: float | None = None
+    # Inside the slot: reading the prompt and writing the reply.
+    total_ms: float | None = None
 
 
 class Engine:
@@ -237,6 +266,12 @@ class Engine:
     ) -> Iterator[str]:
         """Yield text deltas from llama.cpp (or the mock generator)."""
         if self.cfg.mock:
+            if grammar is not None:
+                # A pass held to a grammar is a decision, and without a model
+                # the only honest one is "no tool". It is said at once: there
+                # is nothing here whose speed is worth imitating.
+                yield MOCK_DECISION
+                return
             for i, word in enumerate(MOCK_VOCAB):
                 time.sleep(self.cfg.mock_delay)  # ~11 tok/s by default
                 yield ("" if i == 0 else " ") + word
@@ -276,50 +311,81 @@ class Engine:
             self._grammars[key] = cached
         return cached
 
-    def _complete_json_blocking(self, messages: list[dict], grammar_text: str,
-                                max_tokens: int) -> tuple[dict | None, str]:
-        import json
+    async def stream_json(
+        self,
+        messages: list[dict],
+        grammar_text: str,
+        max_tokens: int | None = None,
+        *,
+        request_id: str | None = None,
+        seed: int | None = None,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """One short grammar-constrained pass, with its wait made visible.
 
-        out = self._llm.create_chat_completion(
-            messages=messages,
-            grammar=self._grammar(grammar_text),
-            temperature=0.0,  # the grammar decides the shape; greedy picks the content
-            top_k=1,
-            max_tokens=max_tokens,
-            stream=False,
-        )
-        raw = (out["choices"][0]["message"].get("content") or "").strip()
+        Yields ``("queue", payload)`` while the pass waits for the slot, then
+        exactly one ``("completion", Completion)``.
+
+        It is an ordinary pass: it queues, runs on a worker thread and gives
+        the slot back from that thread, like an answer. A 2 vCPU box must
+        never run two inferences at once, routing included, and a caller that
+        goes away mid-pass must not be able to free the slot while llama.cpp
+        is still working.
+        """
+        t0 = time.perf_counter()
+        # The grammar decides the shape; greedy picks the content.
+        sampling = {
+            "temperature": 0.0,
+            "top_k": 1,
+            "max_tokens": max_tokens or self.cfg.route_max_tokens,
+        }
+        result = Completion(error="the pass ended without saying anything")
         try:
-            return json.loads(raw), raw
-        except json.JSONDecodeError:
-            return None, raw
+            async with aclosing(
+                self.stream_chat(messages, sampling, request_id, grammar=grammar_text, seed=seed)
+            ) as stream:
+                async for event, data in stream:
+                    if event == "queue":
+                        yield event, data
+                    elif event == "error":
+                        result = Completion(error=data["message"])
+                    elif event == "done":
+                        raw = data["text"].strip()
+                        try:
+                            parsed = json.loads(raw)
+                        except json.JSONDecodeError:
+                            parsed = None
+                        result = Completion(
+                            parsed=parsed if isinstance(parsed, dict) else None,
+                            raw=raw,
+                            cancelled=data["cancelled"],
+                            prompt_tokens=data["prompt_tokens"],
+                            completion_tokens=data["completion_tokens"],
+                            queue_wait_ms=data["queue_wait_ms"],
+                            ttft_ms=data["ttft_ms"],
+                            total_ms=data["total_ms"],
+                        )
+        except Exception as exc:  # noqa: BLE001 — a decision that fails is "no decision", never a broken chat
+            result = Completion(error=f"{type(exc).__name__}: {exc}")
+        yield "completion", replace(result, ms=(time.perf_counter() - t0) * 1000)
 
     async def complete_json(
-        self, messages: list[dict], grammar_text: str, max_tokens: int | None = None
-    ) -> tuple[dict | None, float, str]:
-        """One short grammar-constrained pass. Returns (parsed, ms, raw).
-
-        Takes the same lock as generation — a 2 vCPU box must never run two
-        inferences at once, routing included.
-        """
-        if not self.ready:
-            return None, 0.0, ""
-        if self.cfg.mock:
-            return {"tool": "none"}, 0.0, '{"tool": "none"}'
-
-        max_tokens = max_tokens or self.cfg.route_max_tokens
-        t0 = time.perf_counter()
-        async with self._lock:
-            self._busy = True
-            try:
-                parsed, raw = await asyncio.to_thread(
-                    self._complete_json_blocking, messages, grammar_text, max_tokens
-                )
-            except Exception as exc:  # noqa: BLE001 — routing must never break chat
-                self._busy = False
-                return None, (time.perf_counter() - t0) * 1000, f"{type(exc).__name__}: {exc}"
-            self._busy = False
-        return parsed, (time.perf_counter() - t0) * 1000, raw
+        self,
+        messages: list[dict],
+        grammar_text: str,
+        max_tokens: int | None = None,
+        *,
+        request_id: str | None = None,
+        seed: int | None = None,
+    ) -> Completion:
+        """``stream_json`` for a caller with nowhere to show a queue."""
+        result = Completion(error="the pass ended without saying anything")
+        async with aclosing(
+            self.stream_json(messages, grammar_text, max_tokens, request_id=request_id, seed=seed)
+        ) as stream:
+            async for event, data in stream:
+                if event == "completion":
+                    result = data
+        return result
 
     async def stream_chat(
         self,

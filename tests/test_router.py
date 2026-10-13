@@ -132,14 +132,26 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
             (call.name, call.args, call.via, call.ms, call.raw),
             ("weather", {"location": "Paris"}, "model", support.ROUTE_MS, raw),
         )
-        self.assertEqual(told, {"tier": "model", "ms": support.ROUTE_MS, "raw": raw})
+        self.assertEqual(
+            (told["tier"], told["ms"], told["raw"]), ("model", support.ROUTE_MS, raw)
+        )
         self.assertEqual(len(engine.route_prompts), 1)
+
+    async def test_the_pass_itself_goes_back_with_what_it_cost(self) -> None:
+        engine = PlayedEngine()
+        _, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
+        self.assertEqual(set(told), {"tier", "ms", "raw", "completion"})
+        self.assertEqual(told["completion"].raw, '{"tool": "none"}')
+        self.assertEqual(told["completion"].ms, support.ROUTE_MS)
 
     async def test_none_from_the_model_is_no_call(self) -> None:
         engine = PlayedEngine()
         call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
         self.assertIsNone(call)
-        self.assertEqual(told, {"tier": "model", "ms": support.ROUTE_MS, "raw": '{"tool": "none"}'})
+        self.assertEqual(
+            (told["tier"], told["ms"], told["raw"]),
+            ("model", support.ROUTE_MS, '{"tool": "none"}'),
+        )
 
     async def test_a_tool_that_does_not_exist_is_no_call_and_is_noted(self) -> None:
         engine = PlayedEngine(decision={"tool": "telescope", "args": {}})

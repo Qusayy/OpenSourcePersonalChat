@@ -258,9 +258,14 @@ async def route(
         {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
         {"role": "user", "content": text[:600]},
     ]
-    parsed, ms, raw = await engine.complete_json(messages, tools_to_gbnf(tools))
-    telemetry.update({"tier": "model", "ms": round(ms, 1), "raw": raw[:200]})
+    said = await engine.complete_json(messages, tools_to_gbnf(tools))
+    # The whole pass goes back with its figures; `raw` is cut short because it
+    # is only ever looked at, and a reply that ran away can be long.
+    telemetry.update(
+        {"tier": "model", "ms": round(said.ms, 1), "raw": said.raw[:200], "completion": said}
+    )
 
+    parsed = said.parsed
     if not parsed or parsed.get("tool") in (None, "none"):
         return None, telemetry
     name = parsed.get("tool")
@@ -268,4 +273,4 @@ async def route(
         telemetry["note"] = f"model picked an unknown tool: {name}"
         return None, telemetry
 
-    return ToolCall(name, parsed.get("args") or {}, via="model", ms=ms, raw=raw), telemetry
+    return ToolCall(name, parsed.get("args") or {}, via="model", ms=said.ms, raw=said.raw), telemetry

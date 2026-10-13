@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from app import db, main
 from app.config import settings
-from app.llm import Engine
+from app.llm import Completion, Engine
 from app.tools import base as tool_base
 from app.tools.base import ToolResult
 
@@ -107,9 +107,13 @@ class PlayedEngine(Engine):
     """A real Engine whose model is a script.
 
     The lock, the queue, the worker thread and the cancel flag are the engine's
-    own. Only the two places that would call llama.cpp are replaced: writing an
-    answer, and choosing a tool. What each was asked is kept, so a test can
-    read the exact prompt a pass was given.
+    own for the answer. Choosing a tool is answered directly, with a fixed
+    time, so a test can tell which figure on the page came from that pass. What
+    each was asked is kept, so a test can read the exact prompt a pass was
+    given.
+
+    For a routing pass that really goes through the slot, use
+    ``evals.scripted.ScriptedEngine``.
     """
 
     def __init__(
@@ -139,9 +143,9 @@ class PlayedEngine(Engine):
         for i, word in enumerate(self.answer.split(" ")):
             yield ("" if i == 0 else " ") + word
 
-    async def complete_json(self, messages, grammar_text, max_tokens=None):
+    async def complete_json(self, messages, grammar_text, max_tokens=None, **kwargs) -> Completion:
         if not self.ready:
-            return None, 0.0, ""
+            return Completion(error="The model is still loading.")
         self.route_prompts.append([dict(m) for m in messages])
         self.grammars.append(grammar_text)
         decision = {"tool": "none"} if self.decision is None else self.decision
@@ -150,7 +154,7 @@ class PlayedEngine(Engine):
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             parsed = None
-        return parsed, ROUTE_MS, raw
+        return Completion(parsed=parsed, raw=raw, ms=ROUTE_MS)
 
 
 # ------------------------------------------------------- the surroundings ---

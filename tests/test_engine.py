@@ -284,6 +284,157 @@ class StopTests(EngineCase):
         self.assertIs(engine.cancel("abc"), False)
 
 
+GRAMMAR = 'root ::= "{\\"tool\\": \\"none\\"}"'
+NONE = '{"tool": "none"}'
+WEATHER = '{"tool": "weather", "args": {"location": "Paris"}}'
+
+
+class RoutingPassTests(EngineCase):
+    """The short pass that chooses a tool. It is a pass like any other: it
+    queues, it runs on a worker thread, and the thread hands the slot back."""
+
+    async def test_a_routing_pass_returns_what_was_said_parsed_with_what_it_cost(self) -> None:
+        engine = self.scripted(WEATHER)
+        said = await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertEqual(said.parsed, {"tool": "weather", "args": {"location": "Paris"}})
+        self.assertEqual(said.raw, WEATHER)
+        self.assertIsNone(said.error)
+        self.assertIs(said.cancelled, False)
+        self.assertEqual(said.prompt_tokens, engine.prompt_tokens(MESSAGES))
+        self.assertEqual(said.completion_tokens, len(engine.passes[0].pieces))
+        self.assertIsNotNone(said.ttft_ms)
+        # The whole call is never shorter than the part spent inside the slot.
+        self.assertGreaterEqual(said.ms, said.total_ms)
+
+    async def test_it_is_asked_greedily_under_its_grammar_within_the_routing_limit(self) -> None:
+        engine = self.scripted(NONE, NONE)
+        await engine.complete_json(MESSAGES, GRAMMAR)
+        asked = engine.passes[0]
+        self.assertEqual(asked.grammar, GRAMMAR)
+        self.assertEqual(
+            asked.sampling,
+            {"temperature": 0.0, "top_k": 1, "max_tokens": engine.cfg.route_max_tokens},
+        )
+        await engine.complete_json(MESSAGES, GRAMMAR, 32, seed=3)
+        self.assertEqual(engine.passes[1].sampling["max_tokens"], 32)
+        self.assertEqual(engine.passes[1].seed, 3)
+
+    async def test_a_routing_pass_that_ends_leaves_the_engine_free_and_not_busy(self) -> None:
+        engine = self.scripted(NONE)
+        await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertTrue(engine.free)
+        self.assertIs(engine.info()["busy"], False)
+        self.assertEqual(engine.info()["completed"], 1)
+
+    async def test_a_cancelled_routing_pass_keeps_the_slot_until_its_thread_has_left(self) -> None:
+        engine = self.scripted(WEATHER, EIGHT, gated=True)
+        choosing = asyncio.create_task(engine.complete_json(MESSAGES, GRAMMAR))
+        await engine.entered(1)
+
+        # The visitor closes the page while the model is choosing.
+        choosing.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await choosing
+        self.assertTrue(engine._lock.locked())
+        self.assertIs(engine.info()["busy"], True)
+
+        # The next request arrives. It waits; it does not enter the model
+        # while the first thread is still in there.
+        answer = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await until(lambda: engine.info()["queued"] == 1)
+        self.assertEqual(len(engine.passes), 1)
+
+        engine.release()
+        stream = await answer
+        self.assertEqual(stream[-1][1]["text"], EIGHT)
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+        self.assertIs(engine.info()["busy"], False)
+
+    async def test_a_routing_pass_waits_in_the_same_queue_as_an_answer(self) -> None:
+        engine = self.scripted(EIGHT, NONE, gated=True)
+        writing = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await engine.entered(1)
+
+        seen: list = []
+
+        async def choose() -> None:
+            async for item in engine.stream_json(MESSAGES, GRAMMAR):
+                seen.append(item)
+
+        choosing = asyncio.create_task(choose())
+        await until(lambda: any(name == "queue" for name, _ in seen))
+        self.assertEqual(engine.info()["queued"], 1)
+
+        engine.release()
+        await writing
+        await choosing
+        self.assertEqual(names(seen), ["queue", "completion"])
+        said = seen[-1][1]
+        self.assertEqual(said.parsed, {"tool": "none"})
+        self.assertGreater(said.queue_wait_ms, 0)
+        self.assertGreaterEqual(said.ms, said.queue_wait_ms)
+        self.assertEqual(engine.most_at_once, 1)
+
+    async def test_a_reply_that_is_not_json_is_kept_raw_and_parsed_as_nothing(self) -> None:
+        cut = '{"tool": "wikipedia", "args": {"query": "the long'
+        for raw in (cut, '["a", "list"]', "42", ""):
+            with self.subTest(raw=raw):
+                engine = self.scripted(raw)
+                said = await engine.complete_json(MESSAGES, GRAMMAR)
+                self.assertIsNone(said.parsed)
+                self.assertEqual(said.raw, raw)
+                self.assertIsNone(said.error)
+
+    async def test_a_model_that_raises_is_no_decision_and_never_an_exception(self) -> None:
+        engine = self.scripted(ValueError("boom"))
+        said = await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertIsNone(said.parsed)
+        self.assertEqual(said.error, "ValueError: boom")
+        self.assertIsNone(said.prompt_tokens)
+        self.assertTrue(engine.free)
+
+    async def test_a_failure_on_the_way_in_is_no_decision_either(self) -> None:
+        engine = self.scripted(NONE)
+        with mock.patch.object(engine, "prompt_tokens", side_effect=RuntimeError("tokenizer broke")):
+            said = await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertEqual(said.error, "RuntimeError: tokenizer broke")
+        self.assertTrue(engine.free)
+
+    async def test_an_engine_that_is_not_ready_makes_no_decision(self) -> None:
+        engine = self.scripted(NONE)
+        engine.state.status = "loading"
+        said = await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertIsNone(said.parsed)
+        self.assertIn("still loading", said.error)
+        self.assertEqual(engine.passes, [])
+
+    async def test_a_routing_pass_can_be_stopped_by_its_id(self) -> None:
+        engine = self.scripted(WEATHER, gated=True)
+        choosing = asyncio.create_task(engine.complete_json(MESSAGES, GRAMMAR, request_id="abc"))
+        await engine.entered(1)
+        self.assertIs(engine.cancel("abc"), True)
+        engine.release()
+        said = await choosing
+        self.assertIs(said.cancelled, True)
+        self.assertIsNone(said.parsed)
+        self.assertTrue(engine.free)
+
+
+class MockModeTests(unittest.IsolatedAsyncioTestCase):
+    """Without a model, a decision is always "no tool", made through the slot."""
+
+    async def test_the_mock_decides_none_as_a_real_pass(self) -> None:
+        engine = Engine(settings.model_copy(update={"mock": True, "mock_delay": 0.0}))
+        engine.state.status = "ready"
+        said = await engine.complete_json(MESSAGES, GRAMMAR)
+        self.assertEqual(said.parsed, {"tool": "none"})
+        self.assertEqual(said.completion_tokens, 1)
+        self.assertEqual(engine.info()["completed"], 1)
+        self.assertIs(engine.info()["busy"], False)
+        self.assertFalse(engine._lock.locked())
+
+
 class ScriptTests(EngineCase):
     """The stand-in itself: it must say what it was given, exactly."""
 

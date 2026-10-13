@@ -1,6 +1,6 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth, canvas } from "./app.js";
+import { $, $$, toast, setRail, onHealth, setPhase, holdPhase } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { Meter, sparkPaths, fmt, fmtInt, fmtMs } from "./metrics.js";
@@ -16,8 +16,6 @@ function dismiss(el) {
   setTimeout(() => el.remove(), 160);
 }
 import { icon, hasIcon } from "./icons.js";
-
-const RING_C = 2 * Math.PI * 22;
 
 const state = {
   conversationId: null,
@@ -35,14 +33,14 @@ const els = {
   input: $("#input"),
   send: $("#send"),
   list: $("#convo-list"),
-  ctxHint: $("#ctx-hint"),
+  bar: $("#status"),
+  last: $("#st-last"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
   out: $("#out-value"),
   ctxValue: $("#ctx-value"),
-  ctxRing: $("#ctx-ring"),
+  ctxFill: $("#ctx-fill"),
   sparkLine: $("#spark-line"),
-  sparkFill: $("#spark-fill"),
   skillGrid: $("#skill-grid"),
   skillChip: $("#skill-active"),
   palette: $("#palette"),
@@ -325,18 +323,14 @@ els.thread.addEventListener("click", (e) => {
   }
 });
 
-/* ----------------------------------------------------------------- HUD --- */
+/* --------------------------------------------------------- status line --- */
 
 const meter = new Meter({
   onSample: ({ rate, total, history }) => {
     els.tps.dataset.empty = "false";
     els.tps.textContent = fmt(rate, 1);
     els.out.textContent = fmtInt(total);
-    const [line, fill] = sparkPaths(history);
-    els.sparkLine.setAttribute("d", line);
-    els.sparkFill.setAttribute("d", fill);
-    const strip = document.querySelector('[data-strip="tps"]');
-    if (strip) strip.textContent = fmt(rate, 1);
+    els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
   },
 });
 
@@ -344,10 +338,37 @@ function setContext(tokens) {
   const max = window.AURORA.info.n_ctx || 4096;
   const pct = Math.max(0, Math.min(1, tokens / max));
   els.ctxValue.textContent = fmtInt(tokens);
-  els.ctxRing.setAttribute("stroke-dashoffset", String(RING_C * (1 - pct)));
-  els.ctxHint.textContent = `${fmtInt(tokens)} / ${fmtInt(max)} ctx`;
-  const strip = document.querySelector('[data-strip="ctx"]');
-  if (strip) strip.textContent = fmtInt(tokens);
+  els.ctxFill.style.transform = `scaleX(${pct.toFixed(4)})`;
+  // Past this the next long answer is likely to push old turns out.
+  els.bar.dataset.ctx = pct > 0.85 ? "high" : "ok";
+}
+
+/** Clear the figures that belong to one answer. */
+function resetFigures() {
+  els.tps.dataset.empty = "true";
+  els.tps.textContent = "—";
+  els.ttft.textContent = "—";
+  els.out.textContent = "—";
+  els.sparkLine.setAttribute("d", "");
+  els.last.hidden = true;
+}
+
+// The status line's state while a request is in flight. Every phase but
+// "writing" is a wait, so it counts the seconds: on this hardware a wait is
+// long enough that a still label looks like a hang.
+let phaseClock = null;
+function livePhase(key, text) {
+  clearInterval(phaseClock);
+  phaseClock = null;
+  if (!key) return setPhase(null);
+  if (key === "writing") return setPhase(key, text);
+  const since = performance.now();
+  const paint = () => {
+    const s = Math.floor((performance.now() - since) / 1000);
+    setPhase(key, s >= 2 ? `${text} · ${s} s` : text);
+  };
+  paint();
+  phaseClock = setInterval(paint, 1000);
 }
 
 /* ------------------------------------------------------------ streaming -- */
@@ -356,7 +377,7 @@ function setMode(streaming) {
   state.streaming = streaming;
   els.send.dataset.mode = streaming ? "stop" : "send";
   els.send.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
-  canvas?.setGenerating(streaming);
+  livePhase(streaming ? "working" : null, "working");
 }
 
 async function stopGeneration() {
@@ -380,6 +401,8 @@ async function send(text) {
   const timeline = bot.querySelector(".timeline");
   const cardHost = bot.querySelector(".cards");
   let queueCard = null;
+  let queuedAs = null; // the queue wording currently on the status line
+  let finishedUnseen = false;
   let raw = "";
   let dirty = false;
   let caretOn = true;
@@ -401,9 +424,7 @@ async function send(text) {
 
   setMode(true);
   meter.start();
-  els.tps.textContent = "0.0";
-  els.ttft.textContent = "—";
-  els.out.textContent = "0";
+  resetFigures();
 
   const controller = new AbortController();
 
@@ -432,8 +453,15 @@ async function send(text) {
               : "Next in line — starting shortly.";
           queueCard.lastElementChild.textContent = queueText;
           announce(queueText);
+          const ahead = data.position > 0 ? `queued, ${data.position} ahead` : "queued, next";
+          if (queuedAs !== ahead) livePhase("queued", (queuedAs = ahead));
         } else if (event === "step") {
           upsertStep(timeline, data);
+          // Routing and tools name themselves on the line. The answer step does
+          // not: "start" and the first token already say where that one is.
+          if (data.status === "running" && data.label && data.kind !== "model") {
+            livePhase("working", `working · ${data.label}`);
+          }
           if (data.status === "failed") {
             announce(`${data.label} failed: ${data.detail || "unknown error"}`);
           }
@@ -448,20 +476,15 @@ async function send(text) {
           }</span>`);
         } else if (event === "start") {
           state.requestId = data.request_id;
-          canvas?.setWaiting(true); // holds until the first token lands
+          livePhase("reading", "reading prompt"); // holds until the first token lands
           dismiss(queueCard);
           queueCard = null;
           setContext(data.prompt_tokens);
         } else if (event === "token") {
           // No layout reads here — the tick below batches one read and one
           // write per frame instead of a pair per token.
-          if (!raw) {
-            // The release: prefill is over, the model is talking.
-            canvas?.setWaiting(false);
-            canvas?.pulse(0.4);
-          } else {
-            canvas?.pulse();
-          }
+          // The release: prefill is over, the model is talking.
+          if (!raw) livePhase("writing", "writing");
           raw += data.t;
           dirty = true;
           meter.token(1);
@@ -474,9 +497,13 @@ async function send(text) {
           els.ttft.textContent = fmtMs(data.ttft_ms);
           els.out.textContent = fmtInt(data.completion_tokens);
           setContext((data.prompt_tokens || 0) + (data.completion_tokens || 0));
-          if (data.gen_tps) els.tps.textContent = fmt(data.gen_tps, 1);
-          const strip = document.querySelector('[data-strip="ttft"]');
-          if (strip) strip.textContent = Math.round(data.ttft_ms || 0);
+          // The server's own rate replaces the browser's rolling estimate.
+          if (data.gen_tps) {
+            els.tps.dataset.empty = "false";
+            els.tps.textContent = fmt(data.gen_tps, 1);
+          }
+          els.last.hidden = false;
+          finishedUnseen = document.hidden;
           announce(
             data.cancelled
               ? "Generation stopped."
@@ -511,6 +538,8 @@ async function send(text) {
     dismiss(queueCard);
     meter.stop();
     setMode(false);
+    // Finished while the tab was in the background: say so until it is seen.
+    if (finishedUnseen) holdPhase("answer ready");
     state.requestId = null;
     if (!raw.trim() && !cardHost.children.length) bot.remove();
     setSkill(null); // a skill applies to one message, not the whole thread
@@ -533,11 +562,11 @@ async function refreshList() {
           c.id === state.conversationId ? 'aria-current="true"' : ""
         }>
           <span class="t" dir="auto">${escapeHtml(c.title)}</span>
-          <span class="m">${c.n} messages</span>
+          <span class="m">${c.n} ${c.n === 1 ? "message" : "messages"}</span>
         </button>
-        <button class="convo-del" type="button" data-del="${c.id}"
+        <button class="icon-btn convo-del" type="button" data-del="${c.id}"
                 aria-label="Delete conversation: ${escapeHtml(c.title)}">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </li>`
         )
@@ -601,6 +630,9 @@ async function loadConversation(cid) {
       }
     }
     setContext(ctx);
+    // The figures on the line belong to an answer in the thread that was just
+    // replaced; leaving them up would attribute them to this one.
+    resetFigures();
     setRail(false);
     els.wrap.scrollTop = els.wrap.scrollHeight;
     refreshList();
@@ -616,12 +648,7 @@ function newChat() {
   if (els.hero) els.hero.hidden = false;
   setSkill(null);
   setContext(0);
-  els.tps.dataset.empty = "true";
-  els.tps.textContent = "—";
-  els.ttft.textContent = "—";
-  els.out.textContent = "—";
-  els.sparkLine.setAttribute("d", "");
-  els.sparkFill.setAttribute("d", "");
+  resetFigures();
   setRail(false);
   refreshList();
   els.input.focus();

@@ -125,8 +125,8 @@ const RENDERERS = {
         ${
           hourly.length > 2
             ? `<svg class="w-spark" viewBox="0 0 120 38" preserveAspectRatio="none" aria-hidden="true">
-                 <path d="${fill}" fill="url(#sparkfill)"></path>
-                 <path d="${line}" fill="none" stroke="url(#sparkgrad)" stroke-width="1.6"></path>
+                 <path class="w-area" d="${fill}"></path>
+                 <path class="w-line" d="${line}"></path>
                </svg>
                <div class="axis-mini"><span>now</span><span>next 24h</span></div>`
             : ""

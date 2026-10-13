@@ -95,7 +95,9 @@ export function fmt(n, digits = 1) {
 
 export function fmtInt(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return Math.round(n).toLocaleString();
+  // A fixed locale: these sit beside figures the server formatted, and a
+  // visitor's own grouping would put "4.096" next to "4,096" on one line.
+  return Math.round(n).toLocaleString("en-US");
 }
 
 export function fmtMs(ms) {

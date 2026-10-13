@@ -1,26 +1,7 @@
-/* Shared shell behaviour: canvas, mobile rail, toasts, health polling, copy. */
-
-import { startCanvas } from "./canvas.js";
+/* Shared shell behaviour: status line, history drawer, toasts, health polling, copy. */
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-
-/* ------------------------------------------------------------- canvas --- */
-
-/**
- * Null when WebGL2 is unavailable — every caller uses `canvas?.pulse()`, and
- * the CSS gradient layers stay visible as the fallback.
- */
-export const canvas = (() => {
-  const el = $("#gl");
-  if (!el) return null;
-  try {
-    return startCanvas(el);
-  } catch (err) {
-    console.warn("[aurora] canvas unavailable:", err);
-    return null;
-  }
-})();
 
 /* -------------------------------------------------------------- toasts -- */
 
@@ -32,56 +13,34 @@ export function toast(message, kind = "") {
   el.textContent = message;
   host.appendChild(el);
   setTimeout(() => {
-    el.style.transition = "opacity 300ms, transform 300ms";
+    el.style.transition = "opacity 200ms, translate 200ms";
     el.style.opacity = "0";
-    el.style.transform = "translateY(8px)";
-    setTimeout(() => el.remove(), 320);
+    el.style.translate = "0 8px";
+    setTimeout(() => el.remove(), 220);
   }, 4200);
 }
 
-/* ---------------------------------------------------------- mobile rail -- */
+/* ------------------------------------------------------ history drawer -- */
 
 const rail = $("#rail");
-const scrim = $("#rail-scrim");
-
 const menuBtn = $("#menu-btn");
 
+/** Open or close the history drawer. A native dialog, so the focus trap,
+ *  Escape and the return of focus to the opener are the browser's job. */
 export function setRail(open) {
   if (!rail) return;
-  const was = rail.dataset.open === "true";
-  rail.dataset.open = String(open);
-  rail.setAttribute("aria-hidden", String(!open && isDrawer()));
+  if (open && !rail.open) rail.showModal();
+  else if (!open && rail.open) rail.close();
   menuBtn?.setAttribute("aria-expanded", String(open));
-  if (scrim) {
-    scrim.hidden = !open;
-    scrim.dataset.open = String(open);
-  }
-  // A drawer that opens without moving focus leaves a keyboard or screen-reader
-  // user still outside it, and closing without returning focus strands them at
-  // the top of the page.
-  if (!isDrawer() || open === was) return;
-  if (open) rail.querySelector("button, a")?.focus();
-  else menuBtn?.focus();
 }
 
-/** True only while the rail is actually behaving as an overlay drawer. */
-function isDrawer() {
-  return window.matchMedia("(max-width: 860px)").matches;
-}
-
-menuBtn?.addEventListener("click", () => setRail(rail?.dataset.open !== "true"));
-scrim?.addEventListener("click", () => setRail(false));
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") setRail(false);
-});
-
-// Leaving drawer width must not leave the rail marked hidden.
-window.matchMedia("(max-width: 860px)").addEventListener("change", (e) => {
-  if (!e.matches) {
-    rail?.removeAttribute("aria-hidden");
-    rail?.removeAttribute("data-open");
-    if (scrim) scrim.hidden = true;
-  }
+menuBtn?.addEventListener("click", () => setRail(true));
+$("#rail-close")?.addEventListener("click", () => setRail(false));
+// Escape closes the dialog without going through setRail.
+rail?.addEventListener("close", () => menuBtn?.setAttribute("aria-expanded", "false"));
+// The dialog has no padding of its own, so a click on it is a click on the backdrop.
+rail?.addEventListener("click", (e) => {
+  if (e.target === rail) setRail(false);
 });
 
 /* ------------------------------------------------------- copy code block -- */
@@ -104,6 +63,74 @@ document.addEventListener("click", async (e) => {
   }, 1600);
 });
 
+/* --------------------------------------------------------- status line --- */
+
+const bar = $("#status");
+const stateEl = $("#b-state");
+
+// What the server's own states are called on screen. base.html renders the
+// same words so the first paint agrees with the first poll.
+const STATE_WORDS = {
+  cold: "starting",
+  loading: "loading model",
+  ready: "ready",
+  error: "model unavailable",
+};
+
+// Set by the chat page while a request is in flight; null means "show what
+// the health poll says".
+let phase = null;
+
+function paintState() {
+  if (!bar) return;
+  const info = window.AURORA?.info || {};
+  bar.dataset.phase = phase?.key || info.status || "cold";
+  if (stateEl) stateEl.textContent = phase?.text || STATE_WORDS[info.status] || info.status || "";
+}
+
+/**
+ * Put the status line into a request phase — "working", "queued", "reading",
+ * "writing" — with the words to show, or pass nothing to hand it back to the
+ * health poll.
+ */
+export function setPhase(key, text) {
+  phase = key ? { key, text } : null;
+  paintState();
+}
+
+/**
+ * A change that landed while nobody was looking stays marked until the tab is
+ * seen, then clears itself. Does nothing if the tab is already visible.
+ */
+export function holdPhase(text) {
+  if (!document.hidden) return;
+  setPhase("held", text);
+  const seen = () => {
+    if (document.hidden) return;
+    document.removeEventListener("visibilitychange", seen);
+    setTimeout(() => {
+      if (phase?.key === "held") setPhase(null);
+    }, 4000);
+  };
+  document.addEventListener("visibilitychange", seen);
+}
+
+// On a narrow screen the line shows one figure and keeps the rest behind this.
+const more = $("#status-more");
+more?.addEventListener("click", () => {
+  const open = bar.dataset.open !== "true";
+  bar.dataset.open = String(open);
+  more.setAttribute("aria-expanded", String(open));
+  more.textContent = open ? "Hide" : "Details";
+});
+
+// Toasts sit just above the line, which is one row or two depending on width.
+if (bar && "ResizeObserver" in window) {
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty("--status-h", `${bar.offsetHeight}px`);
+  }).observe(bar);
+}
+
 /* ------------------------------------------------------------- health --- */
 
 const listeners = new Set();
@@ -121,21 +148,17 @@ export async function pollHealth() {
     const info = data.engine;
     window.AURORA.info = info;
 
-    const dot = $("#status-dot");
-    if (dot) {
-      dot.className = `dot ${info.status}`;
-      dot.title = info.error || info.status;
-    }
-    const state = $("#b-state");
-    if (state) state.textContent = info.mock ? "mock" : info.status;
+    paintState();
+    const mock = $("#b-mock");
+    if (mock) mock.hidden = !info.mock;
     const rss = $("#b-rss");
     if (rss) rss.textContent = info.rss_mb ? `${info.rss_mb} MB` : "—";
-    const strip = document.querySelector('[data-strip="rss"]');
-    if (strip) strip.textContent = info.rss_mb ?? "—";
 
     if (info.status !== lastStatus) {
       if (info.status === "ready" && lastStatus === "loading") toast("Model warm — ready to go");
-      if (info.status === "error") toast(info.error || "Model failed to load", "err");
+      // info.error carries the server's filesystem path; the visitor needs to
+      // know it failed, not where the weights were expected.
+      if (info.status === "error") toast("The model could not be loaded", "err");
       lastStatus = info.status;
     }
     listeners.forEach((fn) => fn(info));

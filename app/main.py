@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import uuid
 from contextlib import aclosing, asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -186,35 +187,43 @@ async def api_chat(payload: ChatRequest):
     db.add_message(cid, "user", user_text)
     db.touch_conversation(cid, persona.id)
 
-    async def event_stream() -> AsyncIterator[str]:
-        convo = db.get_conversation(cid)
-        yield sse(
-            "conversation",
-            {
-                "id": cid,
-                "title": convo["title"] if convo else "",
-                "created": created,
-                "skill": skill.id if skill else None,
-                "persona": persona.id,
-            },
-        )
+    # The name this run can be stopped by, from here to its last event.
+    run_id = uuid.uuid4().hex
 
-        trace = agent.Trace()
-        keeper = _Keeper(cid, persona.id, trace)
-        run = agent.run(
-            user_text, persona=persona, skill=skill, history=history, trace=trace, engine=engine
-        )
-        try:
-            # Closed with this response, not whenever it is collected: a run
-            # that nobody is reading must let go of the engine.
-            async with aclosing(run) as events:
-                async for event, data in events:
-                    keeper.keep()
-                    yield sse(event, data)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+    async def event_stream() -> AsyncIterator[str]:
+        # Open before the page is told the id, so a Stop sent the moment it
+        # arrives finds a run to stop.
+        with engine.hold(run_id):
+            convo = db.get_conversation(cid)
+            yield sse(
+                "conversation",
+                {
+                    "id": cid,
+                    "title": convo["title"] if convo else "",
+                    "created": created,
+                    "skill": skill.id if skill else None,
+                    "persona": persona.id,
+                    "request_id": run_id,
+                },
+            )
+
+            trace = agent.Trace()
+            keeper = _Keeper(cid, persona.id, trace)
+            run = agent.run(
+                user_text, persona=persona, skill=skill, history=history, trace=trace,
+                engine=engine, request_id=run_id,
+            )
+            try:
+                # Closed with this response, not whenever it is collected: a
+                # run that nobody is reading must let go of the engine.
+                async with aclosing(run) as events:
+                    async for event, data in events:
+                        keeper.keep()
+                        yield sse(event, data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=SSE_HEADERS)
 

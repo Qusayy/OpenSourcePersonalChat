@@ -139,7 +139,7 @@ class ScriptedEngine(Engine):
 
     # -- holding and letting go -------------------------------------------
 
-    def hold(self) -> None:
+    def pause(self) -> None:
         """Keep every pass from here on inside the model until ``release``."""
         self._gate.clear()
 

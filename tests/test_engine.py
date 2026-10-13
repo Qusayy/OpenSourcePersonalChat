@@ -283,6 +283,93 @@ class StopTests(EngineCase):
         await collect(engine.stream_chat(MESSAGES, SAMPLING, request_id="abc"))
         self.assertIs(engine.cancel("abc"), False)
 
+    async def test_a_pass_stopped_while_it_waits_gives_its_place_up_having_read_nothing(self) -> None:
+        engine = self.scripted(EIGHT, gated=True)
+        first = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
+        await engine.entered(1)
+        second = asyncio.create_task(
+            collect(engine.stream_chat(MESSAGES, SAMPLING, request_id="waiting"))
+        )
+        await until(lambda: engine.info()["queued"] == 1)
+
+        self.assertIs(engine.cancel("waiting"), True)
+        stream = await second  # it ends by itself; the first is still held
+        # Whether a notice of its place got out first is a matter of timing.
+        self.assertEqual([n for n in names(stream) if n != "queue"], ["done"])
+        done = stream[-1][1]
+        self.assertIs(done["cancelled"], True)
+        self.assertEqual((done["text"], done["completion_tokens"]), ("", 0))
+        self.assertIsNone(done["prompt_tokens"])
+        self.assertIsNone(done["total_ms"])
+        self.assertGreater(done["queue_wait_ms"], 0)
+        self.assertEqual(engine.info()["queued"], 0)
+        self.assertEqual(len(engine.passes), 1)
+
+        engine.release()
+        self.assertEqual((await first)[-1][1]["text"], EIGHT)
+        self.assertTrue(engine.free)
+
+
+class HoldTests(EngineCase):
+    """A run is several passes with other work in between. Its id is held open
+    around all of it, so Stop finds the run and not just whichever pass is on."""
+
+    async def test_a_held_id_can_be_stopped_when_no_pass_is_running(self) -> None:
+        engine = self.scripted()
+        self.assertIs(engine.cancel("run"), False)
+        with engine.hold("run") as stop:
+            self.assertIs(stop.is_set(), False)
+            self.assertIs(engine.cancel("run"), True)
+            self.assertIs(stop.is_set(), True)
+        self.assertIs(engine.cancel("run"), False)
+        self.assertEqual(engine._cancels, {})
+
+    async def test_a_pass_that_ends_leaves_the_run_held_and_unstopped(self) -> None:
+        engine = self.scripted(NONE, EIGHT)
+        with engine.hold("run") as stop:
+            await engine.complete_json(MESSAGES, GRAMMAR, request_id="run")
+            # One pass ending is not somebody pressing Stop.
+            self.assertIs(stop.is_set(), False)
+            self.assertIn("run", engine._cancels)
+            stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, request_id="run"))
+            self.assertIs(stream[-1][1]["cancelled"], False)
+            self.assertEqual(stream[-1][1]["text"], EIGHT)
+
+    async def test_a_run_stopped_between_passes_starts_no_other(self) -> None:
+        engine = self.scripted(NONE, EIGHT)
+        with engine.hold("run"):
+            await engine.complete_json(MESSAGES, GRAMMAR, request_id="run")
+            engine.cancel("run")
+            stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, request_id="run"))
+        self.assertEqual(names(stream), ["done"])
+        self.assertIs(stream[-1][1]["cancelled"], True)
+        self.assertEqual(len(engine.passes), 1)
+        self.assertTrue(engine.free)
+
+    async def test_a_hold_inside_a_hold_is_the_same_stop_and_the_outer_one_owns_it(self) -> None:
+        engine = self.scripted()
+        with engine.hold("run") as outer:
+            with engine.hold("run") as inner:
+                self.assertIs(inner, outer)
+            self.assertIn("run", engine._cancels)
+        self.assertNotIn("run", engine._cancels)
+
+    async def test_a_stop_can_be_waited_for(self) -> None:
+        engine = self.scripted()
+        with engine.hold("run") as stop:
+            waiting = asyncio.create_task(stop.wait())
+            await asyncio.sleep(0)
+            self.assertFalse(waiting.done())
+            engine.cancel("run")
+            await asyncio.wait_for(waiting, 5)
+
+    async def test_the_hold_ends_even_if_the_run_inside_it_raises(self) -> None:
+        engine = self.scripted()
+        with self.assertRaises(RuntimeError):
+            with engine.hold("run"):
+                raise RuntimeError("the run broke")
+        self.assertEqual(engine._cancels, {})
+
 
 GRAMMAR = 'root ::= "{\\"tool\\": \\"none\\"}"'
 NONE = '{"tool": "none"}'

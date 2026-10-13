@@ -68,11 +68,32 @@ class PlainAnswerTests(ChatCase):
         stream = self.chat("Why is the sky blue?", persona="explainer")
         first = stream[0]
         self.assertEqual(first[0], "conversation")
-        self.assertEqual(set(first[1]), {"id", "title", "created", "skill", "persona"})
+        self.assertEqual(
+            set(first[1]), {"id", "title", "created", "skill", "persona", "request_id"}
+        )
         self.assertEqual(first[1]["title"], "Why is the sky blue?")
         self.assertIs(first[1]["created"], True)
         self.assertIsNone(first[1]["skill"])
         self.assertEqual(first[1]["persona"], "explainer")
+
+    def test_the_first_event_also_names_the_run_so_it_can_be_stopped_from_the_start(self) -> None:
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        run_id = stream[0][1]["request_id"]
+        self.assertTrue(run_id)
+        # The pass that writes the answer goes by the same name.
+        self.assertEqual(only(stream, "start")[0]["request_id"], run_id)
+
+    def test_every_message_is_a_run_of_its_own(self) -> None:
+        first = self.chat("Why is the sky blue?", persona="explainer")
+        cid = only(first, "conversation")[0]["id"]
+        second = self.chat("And at sunset?", persona="explainer", conversation_id=cid)
+        self.assertNotEqual(first[0][1]["request_id"], second[0][1]["request_id"])
+
+    def test_once_a_stream_has_ended_its_name_stops_nothing(self) -> None:
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        res = self.client.post(f"/api/cancel/{stream[0][1]['request_id']}")
+        self.assertEqual(res.json(), {"cancelled": False})
+        self.assertEqual(self.engine._cancels, {})
 
     def test_the_answer_step_opens_and_closes_around_the_writing(self) -> None:
         stream = self.chat("Why is the sky blue?", persona="explainer")

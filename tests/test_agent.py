@@ -113,8 +113,184 @@ class RunTests(AgentCase):
         self.assertEqual(engine.passes, [])
 
 
+class StopTests(AgentCase):
+    """Somebody presses Stop. The run is known by one id from its first stage
+    to its last, and stopping it works at every one of them."""
+
+    async def test_a_run_goes_by_the_id_it_was_given_and_forgets_it_at_the_end(self) -> None:
+        engine = self.scripted("A short answer.")
+        stream = await collect(agent.run(
+            "Hello", persona=get_persona("explainer"), history=[], engine=engine, request_id="run",
+        ))
+        self.assertEqual(only(stream, "start")[0]["request_id"], "run")
+        self.assertIs(engine.cancel("run"), False)
+        self.assertEqual(engine._cancels, {})
+
+    async def test_a_run_given_no_id_makes_one_up(self) -> None:
+        engine = self.scripted("A short answer.")
+        stream = await collect(self.run_message("Hello", engine, persona="explainer"))
+        self.assertTrue(only(stream, "start")[0]["request_id"])
+
+    async def test_stopped_while_choosing_a_tool_it_calls_none_and_writes_nothing(self) -> None:
+        engine = self.scripted(WEATHER, "never said", gated=True)
+        asked = support.played_tools(self, {"weather": PARIS})
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "Do I need a coat in Paris", persona=get_persona("agent"), history=[], trace=trace,
+            engine=engine, request_id="run",
+        )))
+        await engine.entered(1)
+        self.assertIs(engine.cancel("run"), True)
+        engine.release()
+        stream = await reading
+
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:stopped", "done"])
+        done = only(stream, "done")[0]
+        self.assertIs(done["cancelled"], True)
+        self.assertEqual(done["tool_calls"], 0)
+        self.assertIsNone(done["prompt_tokens"])
+        self.assertEqual(asked["weather"], [])
+        self.assertEqual(len(engine.passes), 1)
+        self.assertEqual(trace.answer, "")
+        self.assertEqual(trace.calls, [])
+        await engine.settled()
+        self.assertTrue(engine.free)
+
+    async def test_stopped_while_a_tool_is_out_the_tool_is_called_off(self) -> None:
+        engine = self.scripted("never said")
+        out = asyncio.Event()
+        called_off: list[bool] = []
+
+        async def slow(name: str, args: dict) -> ToolResult:
+            out.set()
+            try:
+                await asyncio.Event().wait()  # a page that never answers
+            except asyncio.CancelledError:
+                called_off.append(True)
+                raise
+            return PARIS
+
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "/weather Paris", persona=get_persona("explainer"), history=[], trace=trace,
+            engine=engine, call_tool=slow, request_id="run",
+        )))
+        await asyncio.wait_for(out.wait(), 5)
+        engine.cancel("run")
+        stream = await asyncio.wait_for(reading, 5)
+
+        self.assertEqual(
+            shape(stream),
+            ["step:route:ok", "step:tool-0:running", "step:tool-0:stopped", "done"],
+        )
+        self.assertEqual(
+            support.step(stream, "tool-0", "stopped"),
+            {"id": "tool-0", "kind": "tool", "status": "stopped", "label": "Weather",
+             "glyph": "☁", "tool": "weather"},
+        )
+        self.assertIs(only(stream, "done")[0]["cancelled"], True)
+        self.assertEqual(called_off, [True])
+        self.assertEqual(trace.calls, [])
+        self.assertEqual(engine.passes, [])
+
+    async def test_stopped_between_two_tools_the_second_is_never_called(self) -> None:
+        engine = self.scripted("never said")
+        seen: list[dict] = []
+
+        async def first_then_stop(name: str, args: dict) -> ToolResult:
+            seen.append(args)
+            engine.cancel("run")
+            return ToolResult(True, f"Wikipedia — {args['query']}.", card="wikipedia")
+
+        trace = agent.Trace()
+        stream = await collect(agent.run(
+            "Python vs Rust", persona=get_persona("agent"), skill=get_skill("compare"),
+            history=[], trace=trace, engine=engine, call_tool=first_then_stop, request_id="run",
+        ))
+        self.assertEqual(
+            shape(stream),
+            ["step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card", "done"],
+        )
+        self.assertEqual(seen, [{"query": "Python"}])
+        done = only(stream, "done")[0]
+        self.assertIs(done["cancelled"], True)
+        # What ran is what is counted, not what was planned.
+        self.assertEqual(done["tool_calls"], 1)
+        self.assertEqual(len(trace.calls), 1)
+        self.assertEqual(engine.passes, [])
+
+    async def test_stopped_while_writing_it_keeps_what_was_written(self) -> None:
+        engine = self.scripted("one two three four five six seven eight", delay=0.02)
+        trace = agent.Trace()
+        run = agent.run(
+            "Count to eight", persona=get_persona("explainer"), history=[], trace=trace,
+            engine=engine, request_id="run",
+        )
+        stream = []
+        async for item in run:
+            stream.append(item)
+            if sum(name == "token" for name, _ in stream) == 2:
+                engine.cancel("run")
+        self.assertEqual(shape(stream), ANSWER)
+        done = only(stream, "done")[0]
+        self.assertIs(done["cancelled"], True)
+        self.assertLess(done["completion_tokens"], 8)
+        self.assertTrue(trace.answer.startswith("one two"))
+        self.assertTrue(engine.free)
+
+    async def test_stopped_while_the_answer_waits_its_turn_it_never_starts(self) -> None:
+        engine = self.scripted("Somebody else's answer.", "never said", gated=True)
+        other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
+        await engine.entered(1)
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "Hello again", persona=get_persona("explainer"), history=[], trace=trace,
+            engine=engine, request_id="run",
+        )))
+        await until(lambda: engine.info()["queued"] == 1)
+        engine.cancel("run")
+        stream = await asyncio.wait_for(reading, 5)
+
+        # Whether a notice of its place got out first is a matter of timing.
+        self.assertEqual(
+            [word for word in shape(stream) if word != "queue"],
+            ["step:answer:running", "step:answer:ok", "done"],
+        )
+        self.assertIs(only(stream, "done")[0]["cancelled"], True)
+        self.assertEqual(trace.answer, "")
+        self.assertEqual(len(engine.passes), 1)
+        engine.release()
+        await other
+
+
 class LeavingTests(AgentCase):
     """The reader goes away part-way through a run."""
+
+    async def test_a_reader_that_leaves_while_a_tool_is_out_calls_the_tool_off(self) -> None:
+        engine = self.scripted("never said")
+        out = asyncio.Event()
+        called_off: list[bool] = []
+
+        async def slow(name: str, args: dict) -> ToolResult:
+            out.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                called_off.append(True)
+                raise
+            return PARIS
+
+        reading = asyncio.create_task(collect(agent.run(
+            "/weather Paris", persona=get_persona("explainer"), history=[], engine=engine,
+            call_tool=slow,
+        )))
+        await asyncio.wait_for(out.wait(), 5)
+        reading.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await reading
+        await asyncio.sleep(0)
+        self.assertEqual(called_off, [True])
+        self.assertEqual(engine._cancels, {})
 
     async def test_a_run_closed_while_choosing_a_tool_keeps_the_slot_until_the_thread_has_left(self) -> None:
         engine = self.scripted(WEATHER, "Someone else's answer.", gated=True)

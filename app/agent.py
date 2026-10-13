@@ -18,12 +18,13 @@ Two things this module deliberately does not do:
 from __future__ import annotations
 
 import asyncio
+import uuid
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
-from .llm import Engine, engine as default_engine
+from .llm import Engine, Stop, engine as default_engine
 from .personas import Persona
 from .router import ToolCall, route
 from .skills import Skill, build_prompt
@@ -62,11 +63,15 @@ def run(
     engine: Engine | None = None,
     call_tool: ToolCaller | None = None,
     tools_enabled: bool | None = None,
+    request_id: str | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
     ``history`` is the conversation before this message, oldest first, as
     ``{"role", "content"}``. The stream ends in ``done`` or in ``error``.
+
+    ``request_id`` is the name the run can be stopped by, from its first stage
+    to its last: ``engine.cancel(request_id)``. One is made up if none is given.
     """
     return _Run(
         message=message,
@@ -77,6 +82,7 @@ def run(
         engine=engine if engine is not None else default_engine,
         call_tool=call_tool if call_tool is not None else default_call_tool,
         tools_enabled=settings.tools_enabled if tools_enabled is None else tools_enabled,
+        request_id=request_id or uuid.uuid4().hex,
     ).go()
 
 
@@ -90,27 +96,60 @@ class _Run:
     engine: Engine
     call_tool: ToolCaller
     tools_enabled: bool
+    request_id: str
     # The calls this message was routed to, and the line each successful one
     # gave back for the model to read.
     calls: list[ToolCall] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
+    # Set by whoever asks for this run to stop. Looked at before each stage,
+    # and waited on while a tool is out.
+    stop: Stop = field(default_factory=Stop)
 
     async def go(self) -> AsyncIterator[Event]:
-        try:
-            async for event in self._route():
-                yield event
-            for index, call in enumerate(self.calls):
-                async for event in self._act(index, call):
+        # Held for the whole run, so that Stop finds it between passes and
+        # while a tool is out, not only while the model is writing.
+        with self.engine.hold(self.request_id) as self.stop:
+            try:
+                async for event in self._route():
                     yield event
-            # Closed with this generator, not whenever it is collected: the
-            # pass underneath is holding the one inference slot.
-            async with aclosing(self._answer(self._prompt())) as events:
-                async for event in events:
-                    yield event
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - the stream ends in words, not a dropped connection
-            yield "error", {"message": f"{type(exc).__name__}: {exc}"}
+                for index, call in enumerate(self.calls):
+                    if self.stop.is_set():
+                        break
+                    async for event in self._act(index, call):
+                        yield event
+                if self.stop.is_set():
+                    yield self._stopped()
+                    return
+                # Closed with this generator, not whenever it is collected: the
+                # pass underneath is holding the one inference slot.
+                async with aclosing(self._answer(self._prompt())) as events:
+                    async for event in events:
+                        yield event
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the stream ends in words, not a dropped connection
+                yield "error", {"message": f"{type(exc).__name__}: {exc}"}
+
+    def _stopped(self) -> Event:
+        """How a run ends when it was stopped before any answer was begun.
+
+        It is the same ``done`` a stopped answer ends in, with nothing in the
+        figures: no prompt was read and no token written.
+        """
+        self.trace.answer = ""
+        self.trace.usage = {
+            "cancelled": True,
+            "ttft_ms": None,
+            "queue_wait_ms": None,
+            "prompt_tokens": None,
+            "completion_tokens": 0,
+            "prefill_tps": None,
+            "gen_tps": None,
+            "total_ms": None,
+            "rss_mb": None,
+            "tool_calls": len(self.trace.calls),
+        }
+        return "done", self.trace.usage
 
     # ------------------------------------------------------------ routing --
 
@@ -133,8 +172,19 @@ class _Run:
                 "label": "Choosing a tool", "glyph": "◇",
             }
         call, told = await route(
-            self.message, tools_enabled=self.persona.tools, engine=self.engine
+            self.message, tools_enabled=self.persona.tools, engine=self.engine,
+            request_id=self.request_id,
         )
+        if self.stop.is_set():
+            # Stopped while the choice was being made. Whatever came back is
+            # not acted on, and the step that was announced is closed.
+            if needs_pass:
+                yield "step", {
+                    "id": "route", "kind": "route", "status": "stopped",
+                    "label": "Choosing a tool", "glyph": "◇",
+                    "ms": round(told.get("ms") or 0, 1),
+                }
+            return
         if call is not None:
             self.calls = [call]
         if call is not None or needs_pass:
@@ -160,7 +210,13 @@ class _Run:
             "label": label, "glyph": glyph,
             "tool": call.name, "args": call.args,
         }
-        result = await self.call_tool(call.name, call.args)
+        result = await self._call(call)
+        if result is None:
+            yield "step", {
+                "id": step_id, "kind": "tool", "status": "stopped",
+                "label": label, "glyph": glyph, "tool": call.name,
+            }
+            return
         self.trace.calls.append((call, result))
         yield "step", {
             "id": step_id, "kind": "tool", "status": "ok" if result.ok else "failed",
@@ -180,6 +236,24 @@ class _Run:
                 "step_id": step_id, "card": "error", "tool": call.name,
                 "data": {"message": result.summary or result.error},
             }
+
+    async def _call(self, call: ToolCall) -> ToolResult | None:
+        """Run one tool, unless Stop comes first. None means it did.
+
+        A tool that goes out can take ten seconds. Whoever pressed Stop should
+        not have to wait for a page they no longer want.
+        """
+        tool = asyncio.ensure_future(self.call_tool(call.name, call.args))
+        asked = asyncio.ensure_future(self.stop.wait())
+        try:
+            await asyncio.wait({tool, asked}, return_when=asyncio.FIRST_COMPLETED)
+            return tool.result() if tool.done() else None
+        finally:
+            # Whichever lost is called off. So is the tool if this run itself
+            # is being cancelled: nothing may be left running for nobody.
+            for task in (tool, asked):
+                if not task.done():
+                    task.cancel()
 
     # ---------------------------------------------------------- the prompt --
 
@@ -221,7 +295,9 @@ class _Run:
             "id": "answer", "kind": "model", "status": "running",
             "label": "Writing the answer", "glyph": "✦",
         }
-        async with aclosing(self.engine.stream_chat(fitted, sampling)) as stream:
+        async with aclosing(
+            self.engine.stream_chat(fitted, sampling, self.request_id)
+        ) as stream:
             async for event, data in stream:
                 if event != "done":
                     yield event, data

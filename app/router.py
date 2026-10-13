@@ -230,8 +230,13 @@ async def route(
     tools_enabled: bool,
     engine=None,
     allow_model: bool = True,
+    request_id: str | None = None,
 ) -> tuple[ToolCall | None, dict]:
-    """Pick a tool. Returns (call, telemetry)."""
+    """Pick a tool. Returns (call, telemetry).
+
+    ``request_id`` names the run this choice belongs to, so that stopping the
+    run also stops a routing pass that is under way.
+    """
     telemetry: dict = {"tier": None, "ms": 0.0}
 
     call, _ = parse_slash(text)
@@ -258,7 +263,7 @@ async def route(
         {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
         {"role": "user", "content": text[:600]},
     ]
-    said = await engine.complete_json(messages, tools_to_gbnf(tools))
+    said = await engine.complete_json(messages, tools_to_gbnf(tools), request_id=request_id)
     # The whole pass goes back with its figures; `raw` is cut short because it
     # is only ever looked at, and a reply that ran away can be long.
     telemetry.update(

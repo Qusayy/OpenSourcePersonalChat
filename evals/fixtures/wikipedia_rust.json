@@ -1,0 +1,21 @@
+{
+  "tool": "wikipedia",
+  "args": {
+    "query": "Rust"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Wikipedia — Rust (programming language): Rust is a general-purpose programming language emphasizing performance, type safety and concurrency. It enforces memory safety without a garbage collector, and its first stable release was in 2015.",
+    "card": "wikipedia",
+    "data": {
+      "title": "Rust (programming language)",
+      "description": "General-purpose programming language",
+      "extract": "Rust is a general-purpose programming language emphasizing performance, type safety and concurrency. It enforces memory safety without a garbage collector, and its first stable release was in 2015.",
+      "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      "lang": "en"
+    },
+    "error": null
+  }
+}

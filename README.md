@@ -267,6 +267,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
 
 ---
@@ -337,7 +338,23 @@ lock and reports queue position over SSE, so waiting visitors see
 
 **The lock is released by the generation thread**, in its own `finally` — not by
 the request handler. Otherwise a client disconnecting mid-answer hands the slot
-to the next visitor while llama.cpp is still mid-token.
+to the next visitor while llama.cpp is still mid-token. The short pass that
+chooses a tool is a pass like any other and follows the same rule: it queues,
+runs on a worker thread, and that thread hands the slot back.
+
+**A run has one name from its first event to its last.** The first event of a
+chat stream carries a `request_id`, and `POST /api/cancel/{id}` stops the run
+at whatever stage it has reached: waiting for the slot, choosing a tool,
+waiting on a page, or writing. A tool that is out is called off there and then,
+and whatever was already written is kept.
+
+**Every run leaves a trace.** Each thing a message did — how its tool was
+chosen, each tool call, the pass that wrote the answer — is a row in the
+`steps` table: what it was given, what came back, and what it cost in tokens
+and time. A step's time is its own cost and nothing else's, so the steps of a
+run add up to its total, and the stream's last event, `run`, reports that
+total. Rows are kept for `AURORA_STEPS_KEEP_DAYS` and go with their
+conversation when it is deleted.
 
 **Tokens cross threads through a queue.** Generation runs on a plain thread and
 pushes into an `asyncio.Queue`, so the event loop stays free for `/api/health`,
@@ -495,10 +512,10 @@ load, and if it did, every token would come off disk.
 
 | Endpoint | |
 |---|---|
-| `POST /api/chat` → SSE | events: `conversation`, `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error` |
+| `POST /api/chat` → SSE | events: `conversation` (with the run's `request_id`), `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error`, and last of all `run`: how the run ended, its steps and model passes, and what they cost together |
 | `GET /api/tools` | the registry, as the UI sees it |
 | `GET /api/skills` | workflow definitions |
-| `POST /api/cancel/{id}` | stop an in-flight generation |
+| `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
 | `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, app RSS, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
 | `GET/DELETE /api/conversations[/{id}]` | history |
@@ -539,6 +556,17 @@ tries to climb out of `assets/`, a missing build, and what a 404 is for a
 page, for a file and for the API. Those two need the app's requirements;
 without them they are skipped.
 
+The rest follow a message through the server, with a script standing where the
+model would be (`evals/scripted.py`). It is the real engine with one call
+replaced, so the lock, the queue, the worker thread and Stop are the code the
+server runs. `test_engine.py` is about the one inference slot: that two passes
+never overlap, and that a reader who leaves mid-pass cannot free the slot while
+llama.cpp is still working. `test_agent.py` drives a run directly, and stops it
+at each stage. `test_chat_stream.py` does the same over HTTP and reads what was
+stored. `test_router.py`, `test_tools.py` and `test_steps.py` cover routing,
+argument checking and the stored trace. No test sleeps to let something happen,
+and a test that tries to resolve a hostname fails.
+
 **The interface's unit tests** (Vitest) cover the modules that are algorithms:
 the markdown renderer and its escaping, the stream reader, the meter, the
 streaming answer's DOM, the chart geometry, the stores, each tool card.
@@ -560,6 +588,37 @@ it is on `http://<server ip>`, and `localhost` hides it. On a development
 machine the tests use the Chrome that is installed; CI installs Chromium.
 Playwright starts the server itself, with `python` (on Windows, the
 repository's `.venv`); `AURORA_PYTHON` names another interpreter.
+
+### Does it do the right thing
+
+The benchmark says how fast. This says whether, given a message, the right
+thing happened: the right tool, the right arguments, no pass that was not
+needed. `evals/tasks.jsonl` is a file of tasks, one per line, each with what to
+send and what must be true afterwards. Tool results come from
+`evals/fixtures`, so no task touches the network, and nothing is written to the
+database.
+
+```bash
+python scripts/eval_agent.py                                   # scripted: no model needed
+python scripts/eval_agent.py --engine real --out evals/reports/today.json
+python scripts/eval_agent.py --engine real --compare evals/reports/before.json
+python scripts/eval_agent.py --engine real --probe-routing     # one routing pass, cold then warm
+```
+
+**Scripted**, each task brings what the model says, so the run measures the
+code around the model and nothing about the model. It takes a second and runs
+with the server's tests. Its report says its token counts are estimates and
+carries no timings.
+
+**Real** loads the model as the site does and gives every pass the same seed.
+It is the only source of a number about what the agent can do: task success,
+routing accuracy, argument match, steps and passes, tokens, and seconds per
+task split into waiting, reading and writing. Stop the web service first: a
+second process loads a second copy of the model and shares the cores, exactly
+as the benchmark would.
+
+A task marked `pending` is a known gap, written down with its reason. It is
+expected to fail; the day it passes, the run fails until the mark comes off.
 
 ---
 

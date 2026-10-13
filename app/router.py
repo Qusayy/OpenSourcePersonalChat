@@ -231,11 +231,13 @@ async def route(
     engine=None,
     allow_model: bool = True,
     request_id: str | None = None,
+    seed: int | None = None,
 ) -> tuple[ToolCall | None, dict]:
     """Pick a tool. Returns (call, telemetry).
 
     ``request_id`` names the run this choice belongs to, so that stopping the
-    run also stops a routing pass that is under way.
+    run also stops a routing pass that is under way. ``seed`` goes to that
+    pass, for a caller that needs the same choice twice.
     """
     telemetry: dict = {"tier": None, "ms": 0.0}
 
@@ -263,7 +265,9 @@ async def route(
         {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
         {"role": "user", "content": text[:600]},
     ]
-    said = await engine.complete_json(messages, tools_to_gbnf(tools), request_id=request_id)
+    said = await engine.complete_json(
+        messages, tools_to_gbnf(tools), request_id=request_id, seed=seed
+    )
     # The whole pass goes back with its figures and with the text it was asked
     # about; `raw` is cut short because it is only ever looked at, and a reply
     # that ran away can be long.

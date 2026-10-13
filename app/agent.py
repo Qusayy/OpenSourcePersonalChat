@@ -88,6 +88,9 @@ class Trace:
     answer: str | None = None
     # That pass's own figures: what `done` carries.
     usage: dict = field(default_factory=dict)
+    # The prompt that pass was given, as it was sent: after the tool results
+    # were folded in and after any trimming. None if no answer was begun.
+    prompt: list[dict] | None = None
     # How it ended: answered | stopped | failed. None while it is running.
     outcome: str | None = None
     # The run's own stopwatch, first stage to last. It is a little more than
@@ -122,6 +125,7 @@ def run(
     call_tool: ToolCaller | None = None,
     tools_enabled: bool | None = None,
     request_id: str | None = None,
+    seed: int | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -131,6 +135,9 @@ def run(
     ``request_id`` is the name the run can be stopped by, from its first stage
     to its last: ``engine.cancel(request_id)``. It is the trace's ``run_id``;
     given here, it replaces the one the trace made up.
+
+    ``seed`` is given to every pass of the run, so that the same message
+    against the same model gives the same run. The site leaves it unset.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -148,6 +155,7 @@ def run(
         call_tool=call_tool if call_tool is not None else default_call_tool,
         tools_enabled=settings.tools_enabled if tools_enabled is None else tools_enabled,
         request_id=trace.run_id,
+        seed=seed,
     ).go()
 
 
@@ -162,6 +170,7 @@ class _Run:
     call_tool: ToolCaller
     tools_enabled: bool
     request_id: str
+    seed: int | None = None
     # The calls this message was routed to, and the line each successful one
     # gave back for the model to read.
     calls: list[ToolCall] = field(default_factory=list)
@@ -253,7 +262,7 @@ class _Run:
             }
         call, told = await route(
             self.message, tools_enabled=self.persona.tools, engine=self.engine,
-            request_id=self.request_id,
+            request_id=self.request_id, seed=self.seed,
         )
         said: Completion | None = told.get("completion")
         self._record_route(call, told, said)
@@ -421,8 +430,9 @@ class _Run:
             "id": "answer", "kind": "model", "status": "running",
             "label": "Writing the answer", "glyph": "✦",
         }
+        self.trace.prompt = fitted
         async with aclosing(
-            self.engine.stream_chat(fitted, sampling, self.request_id)
+            self.engine.stream_chat(fitted, sampling, self.request_id, seed=self.seed)
         ) as stream:
             async for event, data in stream:
                 if event == "error":

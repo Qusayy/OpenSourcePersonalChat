@@ -1,0 +1,24 @@
+{
+  "tool": "read_url",
+  "args": {
+    "url": "https://example.org/tides"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Page “How tides work” (example.org): Tides are the rise and fall of sea levels caused by the gravitational pull of the Moon and the Sun on the rotating Earth. Most coasts see two high tides and two low tides every lunar day, which lasts 24 hours and 50 minutes.",
+    "card": "url",
+    "data": {
+      "url": "https://example.org/tides",
+      "domain": "example.org",
+      "title": "How tides work",
+      "text": "Tides are the rise and fall of sea levels caused by the gravitational pull of the Moon and the Sun on the rotating Earth. Most coasts see two high tides and two low tides every lunar day, which lasts 24 hours and 50 minutes. Spring tides, the largest, come at new and full moon, when the Sun and the Moon pull along the same line.",
+      "lede": "Tides are the rise and fall of sea levels caused by the gravitational pull of the Moon and the Sun on the rotating Earth.",
+      "words": 63,
+      "reading_minutes": 1,
+      "truncated": false
+    },
+    "error": null
+  }
+}

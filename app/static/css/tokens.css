@@ -101,7 +101,7 @@
   /* layout — one left edge shared by the wordmark, the column, the composer
      and the status line. It sits a third of the spare width in from the left,
      so the column is neither jammed against the edge nor centred like a card. */
-  --col: 46rem;
+  --col: 42rem;
   --edge: 24px;
   --pad: max(var(--edge), calc((100vw - var(--col)) / 3));
   --bar-h: 56px;

@@ -147,11 +147,13 @@ test("Enter or Tab on a skill arms it and sends nothing", async ({ page }) => {
 });
 
 test("Escape closes it and leaves what was typed", async ({ page }) => {
-  await input(page).pressSequentially("/we");
+  // A tool that works offline: with outbound requests switched off, as they
+  // are for these tests, the ones that need the network are not offered.
+  await input(page).pressSequentially("/cl");
   await expect(palette(page)).toBeVisible();
   await input(page).press("Escape");
   await expect(palette(page)).toBeHidden();
-  await expect(input(page)).toHaveValue("/we");
+  await expect(input(page)).toHaveValue("/cl");
   await expect(input(page)).not.toHaveAttribute("aria-activedescendant", /.+/);
 });
 

@@ -45,18 +45,59 @@ rail?.addEventListener("click", (e) => {
   if (e.target === rail) setRail(false);
 });
 
-/* ------------------------------------------------------- copy code block -- */
+/* ------------------------------------------------------------- copying -- */
+
+/**
+ * Put text on the clipboard; resolves to whether it got there.
+ *
+ * `navigator.clipboard` exists only in a secure context. Reached at a bare IP
+ * over plain HTTP, which is how a small self-hosted box is often first opened,
+ * it is undefined and every Copy button would fail. There, and wherever the
+ * API refuses, the text is selected in an off-screen field and the document
+ * is asked to copy it, which needs no secure context.
+ */
+export async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* refused; try the older route */
+    }
+  }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.readOnly = true; // no on-screen keyboard on touch devices
+  field.setAttribute("aria-hidden", "true");
+  // 16px so iOS does not zoom to it; fixed so selecting it cannot scroll the page.
+  field.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;";
+  const returnTo = document.activeElement;
+  // Inside an open modal dialog everything outside it is inert, a field in
+  // <body> included, so the field goes where focus is allowed to be.
+  (document.querySelector("dialog[open]") || document.body).appendChild(field);
+  field.focus({ preventScroll: true });
+  field.select();
+  field.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  field.remove();
+  returnTo?.focus?.({ preventScroll: true });
+  return copied;
+}
 
 document.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-copy]");
   if (!btn) return;
   const block = btn.closest(".codeblock");
   const text = block?.dataset.code ?? "";
-  try {
-    await navigator.clipboard.writeText(text);
+  if (await copyText(text)) {
     btn.textContent = "Copied";
     btn.classList.add("ok");
-  } catch {
+  } else {
     toast("Clipboard blocked by the browser", "err");
   }
   setTimeout(() => {

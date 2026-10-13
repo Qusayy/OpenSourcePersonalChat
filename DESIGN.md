@@ -95,6 +95,7 @@ spacing:
   s-8: "64px"
   s-9: "96px"
   edge: "24px"
+  page: "76rem"
   col: "42rem"
   bar-h: "56px"
 components:
@@ -326,7 +327,7 @@ There are none. A **panel** is a block with 16px above it and a hairline on top.
 
 ### Thread
 - **Question:** set as a heading (20px, 600). No bubble; weight and size say whose line it is. A long paste is set as body text and folded to five lines.
-- **Answer:** body text at the column measure, straight on the sheet. While it streams, a 2px live-coloured caret marks the writing position.
+- **Answer:** body text at the column measure, straight on the sheet. While it streams, a 2px live-coloured caret marks the writing position and the newest words fade up behind it.
 - **Cost line:** under each finished reply, 13px in the second ink: tok/s, time to first token, tokens, time to answer, each numeral fixed-width in ink; then Copy and Ask again.
 - **Route line:** one line of 13px text above a reply, steps parted by hairlines. A step is drawn while it runs, in the live colour with the word "running", and afterwards only if it was a routing decision worth knowing.
 - **Notices:** a line in the thread with a mark. Queue notices take caution; an error is the one tinted block (8% fault in the sheet), with a Try again button.

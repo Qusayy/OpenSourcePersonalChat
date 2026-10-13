@@ -1,6 +1,6 @@
 /* Chat page controller. */
 
-import { $, $$, toast, setRail, onHealth, setPhase, holdPhase } from "./app.js";
+import { $, $$, toast, copyText, setRail, onHealth, setPhase, holdPhase } from "./app.js";
 import { renderMarkdown, splitBlocks, escapeHtml } from "./md.js";
 import { sseFetch } from "./stream.js";
 import { Meter, fmt, fmtInt, fmtMs } from "./metrics.js";
@@ -501,9 +501,8 @@ els.thread.addEventListener("click", (e) => {
   if (!btn) return;
   const msg = btn.closest(".msg");
   if (btn.dataset.act === "copy") {
-    navigator.clipboard.writeText(msg.dataset.raw || "").then(
-      () => toast("Answer copied"),
-      () => toast("Clipboard blocked by the browser", "err")
+    copyText(msg.dataset.raw || "").then((copied) =>
+      copied ? toast("Answer copied") : toast("Clipboard blocked by the browser", "err")
     );
   } else if (btn.dataset.act === "again") {
     if (state.streaming) return;

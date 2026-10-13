@@ -4,9 +4,10 @@ A web front-end that makes a tiny local model look intentional.
 
 `Qwen2.5-1.5B-Instruct` at `Q4_K_M`, served from a 2 vCPU / 4 GB VPS with no GPU,
 no API key and no upstream provider. The performance story isn't hidden — it's
-the feature: live tokens/sec while the answer streams, time-to-first-token under
-every reply, and a benchmark page that measures the machine it's running on and
-plots it against reference hardware.
+the feature: live tokens/sec while the answer streams, the machine's cores and
+memory measured and shown as they are used, time-to-first-token under every
+reply, and a benchmark page that measures the machine it's running on and plots
+it against reference hardware.
 
 It also gives the model a tool belt — exact arithmetic, a clock, Wikipedia,
 weather, currency and a URL reader — because those are precisely the things a
@@ -16,6 +17,7 @@ weather, currency and a URL reader — because those are precisely the things a
 app/
   main.py        FastAPI: pages, SSE chat, tools, skills, benchmark, history
   llm.py         one Llama instance, one lock, honest metrics, grammar routing
+  telemetry.py   the machine, measured: usable CPUs, per-core load, memory, cgroup limits
   router.py      slash commands -> heuristics -> grammar-constrained routing
   skills.py      one-click workflows built on the tools
   tools/         base (registry + GBNF) · offline · web · reader (SSRF guard)
@@ -24,9 +26,11 @@ app/
   db.py          SQLite (WAL): conversations, messages, tool_calls, runs
   templates/     Jinja2 — chat, bench, about
   static/        hand-written CSS + ES modules, no build step
-    js/app.js      shell: status line, history drawer, health polling
+    js/app.js      shell: status line, live machine figures, history drawer
+    js/aurora.js   the light that rises from the status line while an answer is written
     fonts/         Recursive, self-hosted (SIL OFL 1.1)
     js/cards.js    visual answers — weather, calculator tape, clock, …
+tests/                  unit tests for the telemetry parsers (standard library only)
 scripts/bench_cli.py    headless benchmark → JSON
 deploy/                 systemd unit + nginx site
 ```
@@ -112,8 +116,13 @@ Other deployment notes:
   whole VPS down with it.
 * Keep ~2 GB of swap as a safety net. In normal operation the process should
   never touch it.
-* `pip install psutil` if you want the memory readouts on non-Linux hosts; on
-  Linux they come from `/proc/self/status` for free.
+* The live CPU and memory figures need nothing extra on Linux: they are read
+  from `/proc` and the service's cgroup with the standard library. On Windows
+  and macOS `requirements.txt` installs `psutil` for the same job. Where a
+  figure cannot be read it is left off the page rather than guessed.
+* A systemd `CPUQuota=` or `MemoryMax=`, or a container's limits, are picked up
+  from the cgroup: the page shows the CPUs and memory this service can actually
+  use, not what the kernel can see.
 
 ---
 
@@ -129,7 +138,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
-| `AURORA_HARDWARE_LABEL` | `2 vCPU · 4 GB VPS` | shown in the status line |
+| `AURORA_HARDWARE_LABEL` | *(unset)* | how the machine is described in prose (About page, page description). Unset, it is written from what is measured, e.g. "machine with 2 cores and 3.8 GB of RAM". The status line always shows measured figures, whatever this says |
 | `AURORA_MOCK` | `false` | run the site with no model present |
 | `AURORA_MOCK_DELAY` | `0.085` | seconds between fake tokens; `0` runs the mock at full speed |
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
@@ -232,20 +241,53 @@ else's machine. The one borrowed asset is the typeface: Recursive, a variable
 font served from `static/fonts/` under the SIL Open Font License. Its `MONO`
 axis sets every figure fixed-width in the same letterforms as the prose.
 
+**The machine is measured, not described.** `app/telemetry.py` reads the host
+while the page is open: the CPUs this process may use (scheduler affinity, then
+the cgroup's CPU quota, so `CPUQuota=150%` reads as 1.5 cores), load per core
+from two readings of `/proc/stat`, memory in use and in total from
+`/proc/meminfo`, the process's own resident size, and the tightest
+`memory.max` among the service's cgroup and its ancestors (cgroup v2, with a v1
+fallback). Nothing about the machine is a configured string. The status line
+polls `GET /api/telemetry` once a second while a request is running and every
+three seconds otherwise, and not at all in a hidden tab; the endpoint is a few
+small file reads and is rate-limited inside the sampler, so many open tabs cost
+one sample.
+
 **The status line reports generation as it happens.** One line along the bottom
-of every page carries the server's state, the model and the hardware, each
-shown once, and on the chat page how much of the context window is in use.
-While a request is in flight it also carries what that answer is costing: a
-rolling tokens-per-second figure sampled four times a second with its trace,
-tokens out, and time to first token. It names each phase — queued, reading,
-writing — and counts the seconds through the waits. When the answer ends the
+of every page, centred on the same container as the top bar, carries the
+server's state, the model, and the machine's cores and memory as measured: a
+small column per core filled to its load, and memory in use against the total.
+On the chat page it also shows how much of the context window is in use.
+While a request is in flight it carries what that answer is costing: a
+tokens-per-second figure measured four times a second, with a trace of the last
+twelve seconds that scrolls at display rate, and time to first token. It names
+each phase — queued, reading, writing — and counts the seconds through the
+waits. When the answer ends the
 figures leave the line and are printed under the reply they belong to, so the
 same number is never on screen twice. The rolling rate is client-side
 arithmetic over the token stream; time to first token is the server's own
 measurement, sent with the first token, and the figures under each reply are
 the server's too. An answer that finishes while the tab is in the background
-stays marked until the tab is seen. The page follows the visitor's light or
-dark setting, and under `prefers-reduced-motion` nothing loops or travels.
+stays marked until the tab is seen.
+
+**One effect, and only while the model is working.** While an answer is being
+read or written a strip of light in the page's one accent colour rises from
+the status line, behind everything else on the page. Its brightness and reach
+follow the measured tokens per second, with a small lift as each token lands;
+it is off while a request is queued behind someone else's, and when the answer
+ends it fades and is removed. It is a WebGL2 fragment shader on a transparent
+half-resolution canvas (`static/js/aurora.js`), compiled when the page is idle,
+with a CSS strip driven by the same value where WebGL2 is missing. Its alpha is
+capped so that the page's secondary text still clears 4.5:1 over its brightest
+pixel. The answer's own text fades up as it arrives rather than appearing in
+slabs. The rest of the motion is small and explains something: the page
+assembles once on arrival, the composer travels to the foot of the sheet on
+the first send, the state word slides when the state changes, and charts draw
+when scrolled to.
+
+The page follows the visitor's light or dark setting. Under
+`prefers-reduced-motion` nothing loops or travels: the effect becomes a still
+tint, text simply appears, and charts are shown already drawn.
 
 ---
 
@@ -307,7 +349,8 @@ load, and if it did, every token would come off disk.
 | `GET /api/tools` | the registry, as the UI sees it |
 | `GET /api/skills` | workflow definitions |
 | `POST /api/cancel/{id}` | stop an in-flight generation |
-| `GET /api/health` | model, status, RSS, queue depth, uptime |
+| `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
+| `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, app RSS, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
 | `GET/DELETE /api/conversations[/{id}]` | history |
 | `POST /api/bench/run` → SSE | `stage`, `rep`, `case`, `summary` |
 | `GET /api/bench/results` | latest summary + history + reference data |
@@ -320,6 +363,16 @@ curl -N -X POST localhost:8000/api/chat \
 
 Tokens must appear one at a time. If they arrive all at once, something between
 you and uvicorn is buffering — see the nginx note above.
+
+### Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+Standard library only. They cover the parsers and the sampler in
+`app/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
+nested limits, quotas, missing files), so they run the same on any OS.
 
 ---
 

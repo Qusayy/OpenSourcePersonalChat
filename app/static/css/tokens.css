@@ -207,8 +207,10 @@ body {
   overflow: hidden;
 }
 
+/* Selected text is tinted with ink. It is something chosen, not something
+   happening, so it does not take the live colour. */
 ::selection {
-  background: color-mix(in oklch, var(--live) 26%, var(--sheet));
+  background: color-mix(in oklch, var(--ink) 18%, var(--sheet));
   color: var(--ink);
 }
 

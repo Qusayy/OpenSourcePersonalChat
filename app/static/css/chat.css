@@ -529,8 +529,9 @@
   background: var(--sheet);
   color: var(--ink);
 }
+/* "Copied" is said in ink: done is not the same as live. */
 .copy-btn.ok {
-  color: var(--live);
+  color: var(--ink);
 }
 
 /* The writing position. It is the one thing in the thread that is live, so it

@@ -240,12 +240,13 @@ DEFAULT_WEIGHTS_MB = 990
 LARGER_WEIGHTS_MB = 4400
 
 
-def weights_mb() -> int:
-    """The size of the model file, or a typical figure when it is not there."""
+def weights_mb() -> tuple[int, bool]:
+    """The size of the model file and True, or a typical figure and False when
+    the file is not there to be weighed (mock mode on a development machine)."""
     try:
-        return round(engine.cfg.resolved_model_path.stat().st_size / (1024 * 1024))
+        return round(engine.cfg.resolved_model_path.stat().st_size / (1024 * 1024)), True
     except OSError:
-        return DEFAULT_WEIGHTS_MB
+        return DEFAULT_WEIGHTS_MB, False
 
 
 def memory_budget(n_ctx: int) -> list[dict]:
@@ -257,8 +258,14 @@ def memory_budget(n_ctx: int) -> list[dict]:
     The pages label it as an estimate and print the measured resident size of
     the process beside it."""
     kv_mb = round(28 * 2 * 128 * 2 * 2 * n_ctx / (1024 * 1024))
+    weights, on_disk = weights_mb()
     return [
-        {"name": f"Weights ({engine.cfg.model_quant}, mmap)", "mb": weights_mb(), "note": "read once per token"},
+        {
+            "name": f"Weights ({engine.cfg.model_quant}, mmap)",
+            "mb": weights,
+            "note": "read once per token" if on_disk else "typical size; no model file on this server",
+            "on_disk": on_disk,
+        },
         {"name": f"KV cache @ {n_ctx} ctx (f16)", "mb": kv_mb, "note": "28 KiB per token"},
         {"name": "Compute buffers", "mb": 200, "note": "scales with n_batch"},
         {"name": "Python + FastAPI + uvicorn", "mb": 120, "note": "one worker"},

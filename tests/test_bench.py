@@ -69,9 +69,20 @@ class BudgetTests(unittest.TestCase):
         large = bench.memory_budget(4096)[1]["mb"]
         self.assertEqual(large, 2 * small)
 
-    def test_weights_fall_back_when_there_is_no_file(self) -> None:
-        # The repository ships no model file; where one is present its size is used.
-        self.assertGreater(bench.weights_mb(), 0)
+    def test_weights_are_the_files_size_or_say_they_are_not(self) -> None:
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest import mock
+
+        with mock.patch.object(bench.engine, "cfg", SimpleNamespace(resolved_model_path=Path(__file__), model_quant="Q4_K_M")):
+            mb, on_disk = bench.weights_mb()
+            self.assertTrue(on_disk)
+            self.assertEqual(mb, round(Path(__file__).stat().st_size / (1024 * 1024)))
+        with mock.patch.object(bench.engine, "cfg", SimpleNamespace(resolved_model_path=Path(__file__).with_name("no-such.gguf"), model_quant="Q4_K_M")):
+            self.assertEqual(bench.weights_mb(), (bench.DEFAULT_WEIGHTS_MB, False))
+            first = bench.memory_budget(4096)[0]
+            self.assertFalse(first["on_disk"])
+            self.assertIn("no model file", first["note"])
 
 
 if __name__ == "__main__":

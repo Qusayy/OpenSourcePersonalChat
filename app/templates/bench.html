@@ -122,8 +122,9 @@
          so it is only made where it is true. #}
       <p class="sub">
         An estimate of what a loaded {{ info.params }} model at {{ info.quant }}
-        takes, worked out from the size of its file and the context length. It
-        is not a measurement; the measured figure is beneath it.
+        takes, worked out from {% if budget[0].on_disk %}the size of its file{% else %}a typical size for its file{% endif %}
+        and the context length. It is not a measurement; the measured figure is
+        beneath it.
       </p>
       {% set total = budget | sum(attribute='mb') %}
       <div class="panel">

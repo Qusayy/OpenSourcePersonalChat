@@ -136,6 +136,7 @@ class PlayedEngine(Engine):
         self.samplings: list[dict] = []
         self.route_prompts: list[list[dict]] = []
         self.grammars: list[str] = []
+        self.route_limits: list[int | None] = []
 
     def _iter_chunks(self, messages: list[dict], sampling: dict, *args, **kwargs) -> Iterator[str]:
         self.answer_prompts.append([dict(m) for m in messages])
@@ -150,6 +151,7 @@ class PlayedEngine(Engine):
             return Completion(error="The model is still loading.")
         self.route_prompts.append([dict(m) for m in messages])
         self.grammars.append(grammar_text)
+        self.route_limits.append(max_tokens)
         decision = {"tool": "none"} if self.decision is None else self.decision
         raw = decision if isinstance(decision, str) else json.dumps(decision)
         try:

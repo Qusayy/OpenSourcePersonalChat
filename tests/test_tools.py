@@ -8,15 +8,17 @@ made-up tool stands in wherever the dispatcher itself is what is being tested.
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from unittest import mock
 
 try:
     from app.tools import base
     from app.tools.base import (
-        Arg, Tool, ToolResult, call_tool, check, tool_menu, tools_to_gbnf,
+        Arg, Tool, ToolResult, call_tool, check, decision_ceiling, tool_menu, tools_to_gbnf,
     )
     from tests import support
+    from tests.gbnf import Grammar
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -293,42 +295,43 @@ class CheckTests(unittest.TestCase):
                 call, _ = parse_slash(text)
                 clean, rejection = check(base.REGISTRY[call.name], call.args)
                 self.assertIsNone(rejection)
-                self.assertEqual(clean, call.args)
+                # As typed, but for a currency, which is run in capitals.
+                self.assertEqual(
+                    {k: v.lower() if isinstance(v, str) else v for k, v in clean.items()},
+                    {k: v.lower() if isinstance(v, str) else v for k, v in call.args.items()},
+                )
+
+
+def call(tool: str, **args) -> str:
+    """A tool call as the model has to write it."""
+    return json.dumps({"tool": tool, "args": args}, ensure_ascii=False)
 
 
 class GrammarTests(unittest.TestCase):
-    """The grammar a routing pass is held to, and the menu it reads."""
+    """The grammar a routing pass is held to, and the menu it reads.
+
+    The grammar cannot be compiled here, so these read its text: what it lets
+    a model say, and what it does not.
+    """
 
     def setUp(self) -> None:
         support.with_settings(self, allow_outbound=True)
+        self.grammar = Grammar(tools_to_gbnf())
 
-    def rules(self, tools=None) -> dict[str, str]:
+    def rules(self, tools=None, **options) -> dict[str, str]:
         out = {}
-        for line in tools_to_gbnf(tools).splitlines():
+        for line in tools_to_gbnf(tools, **options).splitlines():
             name, sep, body = line.partition(" ::= ")
             if sep:
                 out[name] = body
         return out
 
-    def test_the_root_offers_every_tool_in_registry_order_and_then_none(self) -> None:
+    def test_the_root_offers_every_tool_in_registry_order_then_ask_then_none(self) -> None:
         self.assertEqual(
             self.rules()["root"],
             "t-calculator | t-clock | t-convert-units | t-text-stats | t-wikipedia | "
-            "t-weather | t-currency | t-read-url | t-none",
+            "t-weather | t-currency | t-read-url | t-ask | t-none",
         )
-
-    def test_none_is_a_choice_with_no_arguments(self) -> None:
-        self.assertEqual(self.rules()["t-none"], r'"{\"tool\": \"none\"}"')
-
-    def test_a_rule_spells_out_the_call_with_its_required_arguments_in_order(self) -> None:
-        self.assertEqual(
-            self.rules()["t-convert-units"],
-            r'"{\"tool\": \"convert_units\", \"args\": {" "\"value\": " number '
-            r'", \"from_unit\": " string ", \"to_unit\": " string "}}"',
-        )
-
-    def test_an_optional_argument_is_not_in_the_grammar_at_all(self) -> None:
-        self.assertEqual(self.rules()["t-clock"], r'"{\"tool\": \"clock\", \"args\": {" "}}"')
 
     def test_every_registered_tool_has_a_rule(self) -> None:
         rules = self.rules()
@@ -339,11 +342,163 @@ class GrammarTests(unittest.TestCase):
     def test_with_outgoing_requests_off_only_local_tools_are_offered(self) -> None:
         support.with_settings(self, allow_outbound=False)
         self.assertEqual(
-            self.rules()["root"], "t-calculator | t-clock | t-convert-units | t-text-stats | t-none"
+            self.rules()["root"],
+            "t-calculator | t-clock | t-convert-units | t-text-stats | t-ask | t-none",
         )
         self.assertNotIn("weather", tool_menu())
 
-    def test_the_menu_is_one_line_a_tool_naming_what_it_must_be_given(self) -> None:
+    def test_none_is_a_choice_with_no_arguments(self) -> None:
+        self.assertEqual(self.rules()["t-none"], r'"{\"tool\": \"none\"}"')
+        self.assertTrue(self.grammar.accepts('{"tool": "none"}'))
+        self.assertFalse(self.grammar.accepts('{"tool": "none", "args": {}}'))
+
+    def test_a_rule_spells_out_the_call_with_its_required_arguments_in_order(self) -> None:
+        rules = self.rules()
+        self.assertEqual(
+            rules["t-convert-units"],
+            r'"{\"tool\": \"convert_units\", \"args\": {" "\"value\": " number '
+            r'", \"from_unit\": " ' + "choice-1" + r' ", \"to_unit\": " ' + "choice-1" + r' "}}"',
+        )
+        self.assertEqual(
+            rules["t-wikipedia"],
+            r'"{\"tool\": \"wikipedia\", \"args\": {" "\"query\": " text-80 "}}"',
+        )
+
+    def test_a_call_to_each_tool_is_something_the_grammar_allows(self) -> None:
+        for said in (
+            call("calculator", expression="1247*89"),
+            call("clock"),
+            call("clock", timezone_name="Europe/Paris"),
+            call("convert_units", value=10, from_unit="km", to_unit="mi"),
+            call("convert_units", value=-2.5, from_unit="°c", to_unit="fahrenheit"),
+            call("text_stats", text="The quick brown fox."),
+            call("wikipedia", query="Ada Lovelace"),
+            call("weather", location="São Paulo"),
+            call("currency", amount=100, from_currency="EUR", to_currency="USD"),
+            call("read_url", url="https://example.org/a?b=c&d=%20"),
+            call("ask", question="Which city do you mean?"),
+            '{"tool": "none"}',
+        ):
+            with self.subTest(said=said):
+                self.assertTrue(self.grammar.accepts(said))
+
+    def test_what_a_small_model_writes_when_asked_politely_is_ruled_out(self) -> None:
+        good = call("weather", location="Paris")
+        for said in (
+            "Sure! " + good,                                   # a preamble
+            good + "\n",                                       # something after it
+            '{"tool": "weather", "args": {"location": "Paris",}}',   # a trailing comma
+            '{"tool": "weather", "args": {"location": "Paris", "units": "c"}}',  # an invented key
+            '{"tool": "weather", "args": {}}',                 # a required argument left out
+            '{"tool":"weather","args":{"location":"Paris"}}',  # its own spacing
+            '{"tool": "telescope", "args": {}}',               # a tool that does not exist
+            '{"tool": "weather", "args": {"location": 7}}',    # a number where text is wanted
+            '{"tool": "calculator", "args": {"expression": "2+2"}',  # never closed
+            "",
+        ):
+            with self.subTest(said=said):
+                self.assertFalse(self.grammar.accepts(said))
+
+    def test_an_optional_argument_may_be_given_or_left_out_and_nothing_between(self) -> None:
+        self.assertEqual(
+            self.rules()["t-clock"],
+            r'"{\"tool\": \"clock\", \"args\": {" ("\"timezone_name\": " text-40)? "}}"',
+        )
+        self.assertTrue(self.grammar.accepts(call("clock")))
+        self.assertTrue(self.grammar.accepts(call("clock", timezone_name="Asia/Tokyo")))
+        self.assertFalse(self.grammar.accepts('{"tool": "clock", "args": {"timezone_name": }}'))
+        self.assertFalse(self.grammar.accepts('{"tool": "clock", "args": {, "timezone_name": "UTC"}}'))
+
+    def test_optional_arguments_never_leave_a_comma_where_none_belongs(self) -> None:
+        both = Tool("probe", "Probe", "?", "", (Arg("a", "string", False), Arg("b", "number", False)),
+                    None, "probe")
+        after = Tool("probe", "Probe", "?", "",
+                     (Arg("need"), Arg("a", "string", False), Arg("b", "number", False)), None, "probe")
+        free = Grammar(tools_to_gbnf([both], ask=False))
+        for args in ({}, {"a": "x"}, {"b": 1}, {"a": "x", "b": 1}):
+            with self.subTest(args=args):
+                self.assertTrue(free.accepts(call("probe", **args)))
+        self.assertFalse(free.accepts('{"tool": "probe", "args": {"b": 1, "a": "x"}}'))  # out of order
+        self.assertFalse(free.accepts('{"tool": "probe", "args": {, "b": 1}}'))
+        held = Grammar(tools_to_gbnf([after], ask=False))
+        for args in ({"need": "n"}, {"need": "n", "a": "x"}, {"need": "n", "b": 1},
+                     {"need": "n", "a": "x", "b": 1}):
+            with self.subTest(args=args):
+                self.assertTrue(held.accepts(call("probe", **args)))
+        self.assertFalse(held.accepts(call("probe", a="x")))
+
+    def test_no_text_can_run_on_past_its_ceiling(self) -> None:
+        rules = self.rules()
+        self.assertNotIn("string", rules)
+        texts = {name: body for name, body in rules.items() if name.startswith("text-")}
+        self.assertEqual(set(texts), {"text-40", "text-60", "text-80", "text-120", "text-200"})
+        for name, body in texts.items():
+            with self.subTest(rule=name):
+                self.assertEqual(body, r'"\"" char{1,' + name[5:] + r'} "\""')
+        # Every text argument is held to one of them, or to a list of values.
+        for tool in base.available():
+            for arg in tool.args:
+                if arg.type == "string":
+                    with self.subTest(tool=tool.name, arg=arg.name):
+                        self.assertTrue(arg.choices or (arg.max_len or base.DEFAULT_MAX_LEN) <= 200)
+        self.assertTrue(self.grammar.accepts(call("weather", location="x" * 60)))
+        self.assertFalse(self.grammar.accepts(call("weather", location="x" * 61)))
+        self.assertFalse(self.grammar.accepts(call("weather", location="")))
+
+    def test_text_may_hold_any_letters_and_the_usual_escapes_but_no_raw_control(self) -> None:
+        for location in ("Zürich", "東京", 'the \\"old\\" town', "a\\\\b", "line\\nbreak"):
+            with self.subTest(location=location):
+                said = '{"tool": "weather", "args": {"location": "' + location + '"}}'
+                self.assertTrue(self.grammar.accepts(said))
+        for location in ("a\nb", 'a"b', "a\\qb", "tab\there"):
+            with self.subTest(location=location):
+                said = '{"tool": "weather", "args": {"location": "' + location + '"}}'
+                self.assertFalse(self.grammar.accepts(said))
+
+    def test_a_currency_can_only_be_one_the_tool_knows(self) -> None:
+        for code in ("USD", "EUR", "JPY", "ZAR"):
+            with self.subTest(code=code):
+                self.assertTrue(self.grammar.accepts(
+                    call("currency", amount=1, from_currency=code, to_currency="GBP")))
+        for code in ("dollars", "usd", "US", "XXX", "EURO", ""):
+            with self.subTest(code=code):
+                self.assertFalse(self.grammar.accepts(
+                    call("currency", amount=1, from_currency=code, to_currency="GBP")))
+
+    def test_a_unit_can_be_written_by_its_name_or_by_a_word_for_it_and_not_made_up(self) -> None:
+        for unit in ("km", "kilometres", "mi", "miles", "km/h", "°c", "c", "k", "m", "floz"):
+            with self.subTest(unit=unit):
+                self.assertTrue(self.grammar.accepts(
+                    call("convert_units", value=1, from_unit=unit, to_unit="m")))
+        for unit in ("parsecs", "KM", "kilo metres", "kmm", "x", ""):
+            with self.subTest(unit=unit):
+                self.assertFalse(self.grammar.accepts(
+                    call("convert_units", value=1, from_unit=unit, to_unit="m")))
+
+    def test_a_number_is_a_plain_decimal_of_bounded_length(self) -> None:
+        for number, allowed in (("0", True), ("-12.5", True), ("9" * 16, True), ("1.123456", True),
+                                ("9" * 17, False), ("1.1234567", False), ("01", False),
+                                ("1e3", False), (".5", False), ('"7"', False)):
+            with self.subTest(number=number):
+                said = '{"tool": "convert_units", "args": {"value": ' + number
+                said += ', "from_unit": "km", "to_unit": "mi"}}'
+                self.assertEqual(self.grammar.accepts(said), allowed)
+
+    def test_the_model_may_ask_one_bounded_question(self) -> None:
+        self.assertEqual(
+            self.rules()["t-ask"], r'"{\"tool\": \"ask\", \"args\": {" "\"question\": " text-120 "}}"'
+        )
+        self.assertTrue(self.grammar.accepts(call("ask", question="Which city?")))
+        self.assertFalse(self.grammar.accepts(call("ask", question="x" * 121)))
+        self.assertFalse(self.grammar.accepts(call("ask")))
+
+    def test_asking_can_be_left_out_of_the_grammar(self) -> None:
+        rules = self.rules(ask=False)
+        self.assertNotIn("t-ask", rules)
+        self.assertNotIn("t-ask", rules["root"])
+        self.assertFalse(Grammar(tools_to_gbnf(ask=False)).accepts(call("ask", question="Why?")))
+
+    def test_the_menu_is_one_line_a_tool_and_marks_what_may_be_left_out(self) -> None:
         rows = tool_menu().splitlines()
         self.assertEqual(len(rows), len(base.available()))
         self.assertEqual(
@@ -351,9 +506,185 @@ class GrammarTests(unittest.TestCase):
             "- calculator(expression): Evaluate an arithmetic expression exactly. Use for any sum.",
         )
         self.assertEqual(
-            rows[1], "- clock(none): Current date and time, optionally in a named timezone."
+            rows[1],
+            "- clock(timezone_name?): Current date and time, optionally in a named timezone.",
         )
 
+
+class GrammarReaderTests(unittest.TestCase):
+    """The reader the tests above lean on. If it misread a grammar, they would
+    be checking nothing, so it is checked on grammars small enough to read."""
+
+    def accepts(self, grammar: str, text: str) -> bool:
+        return Grammar(grammar).accepts(text)
+
+    def test_a_literal_matches_itself_whole_and_nothing_else(self) -> None:
+        g = r'root ::= "a\"b\\c"'
+        self.assertTrue(self.accepts(g, 'a"b\\c'))
+        for text in ("", 'a"b', 'a"b\\cd', 'A"b\\c'):
+            with self.subTest(text=text):
+                self.assertFalse(self.accepts(g, text))
+
+    def test_a_class_is_a_set_ranges_and_all_and_can_be_turned_inside_out(self) -> None:
+        self.assertTrue(self.accepts("root ::= [a-cx]", "b"))
+        self.assertTrue(self.accepts("root ::= [a-cx]", "x"))
+        self.assertFalse(self.accepts("root ::= [a-cx]", "d"))
+        self.assertFalse(self.accepts("root ::= [a-cx]", "ab"))
+        self.assertTrue(self.accepts(r'root ::= [^"\\\x7F\x00-\x1F]', "é"))
+        for ch in ('"', "\\", "\n", "\x7f", "\x00"):
+            with self.subTest(ch=repr(ch)):
+                self.assertFalse(self.accepts(r'root ::= [^"\\\x7F\x00-\x1F]', ch))
+
+    def test_repetition_counts(self) -> None:
+        for grammar, yes, no in (
+            ('root ::= "a"?', ("", "a"), ("aa",)),
+            ('root ::= "a"*', ("", "a", "aaaa"), ("b",)),
+            ('root ::= "a"+', ("a", "aaa"), ("",)),
+            ('root ::= "a"{2,3}', ("aa", "aaa"), ("a", "aaaa")),
+            ('root ::= "a"{2}', ("aa",), ("a", "aaa")),
+            ('root ::= [0-9]{0,2} "x"', ("x", "1x", "12x"), ("123x",)),
+        ):
+            for text in yes:
+                with self.subTest(grammar=grammar, text=text):
+                    self.assertTrue(self.accepts(grammar, text))
+            for text in no:
+                with self.subTest(grammar=grammar, text=text):
+                    self.assertFalse(self.accepts(grammar, text))
+
+    def test_alternatives_groups_and_other_rules(self) -> None:
+        g = 'root ::= "<" item ("," item)* ">"\nitem ::= "a" | "bb"'
+        for text in ("<a>", "<bb>", "<a,bb,a>"):
+            with self.subTest(text=text):
+                self.assertTrue(self.accepts(g, text))
+        for text in ("<>", "<a,>", "<b>", "a", "<a,bb"):
+            with self.subTest(text=text):
+                self.assertFalse(self.accepts(g, text))
+
+    def test_one_alternative_being_the_start_of_another_is_not_a_trap(self) -> None:
+        g = 'root ::= "\\"" unit "\\""\nunit ::= "m" | "mi" | "min"'
+        for text in ('"m"', '"mi"', '"min"'):
+            self.assertTrue(self.accepts(g, text))
+        self.assertFalse(self.accepts(g, '"mil"'))
+
+    def test_what_it_cannot_read_it_refuses_to_guess_at(self) -> None:
+        for grammar in ("root = x", 'root ::= "a" & "b"', "root ::= (", r'root ::= "\q"'):
+            with self.subTest(grammar=grammar):
+                with self.assertRaises((ValueError, IndexError)):
+                    Grammar(grammar).accepts("a")
+
+
+class CeilingTests(unittest.TestCase):
+    """How long a reply can get, which is how many tokens a pass must be given
+    to be sure of reaching the end of it."""
+
+    def setUp(self) -> None:
+        support.with_settings(self, allow_outbound=True)
+
+    def longest(self, tool: Tool) -> str:
+        """The longest call to a tool the grammar allows: every argument given,
+        each as long as it can be."""
+        args = {}
+        for arg in tool.args:
+            if arg.type != "string":
+                args[arg.name] = None  # written in below; JSON has no way to spell this number
+            elif arg.choices:
+                args[arg.name] = max(arg.choices, key=lambda c: len(json.dumps(c, ensure_ascii=False).encode()))
+            else:
+                args[arg.name] = "\U0001F600" * (arg.max_len or base.DEFAULT_MAX_LEN)  # four bytes each
+        return call(tool.name, **args).replace("null", "-" + "9" * 16 + "." + "9" * 6)
+
+    def test_the_longest_call_to_each_tool_is_allowed_and_fits_under_the_ceiling(self) -> None:
+        grammar = Grammar(tools_to_gbnf())
+        ceiling = decision_ceiling()
+        for tool in [*base.available(), Tool("ask", "", "", "", (base.ASK,), None, "")]:
+            with self.subTest(tool=tool.name):
+                said = self.longest(tool)
+                self.assertTrue(grammar.accepts(said))
+                self.assertLessEqual(len(said.encode("utf-8")), ceiling)
+
+    def test_the_ceiling_is_exactly_the_longest_of_them(self) -> None:
+        longest = max(len(self.longest(t).encode("utf-8")) for t in base.available())
+        self.assertEqual(decision_ceiling(), longest)
+
+    def test_the_ceiling_is_worked_out_from_the_arguments(self) -> None:
+        tool = Tool("t", "", "", "", (Arg("a", max_len=10), Arg("n", "number")), None, "")
+        # {"tool": "t", "args": {"a": "<10 chars of 4 bytes>", "n": <24 bytes>}}
+        frame = len('{"tool": "t", "args": {"a": "", "n": }}')
+        self.assertEqual(decision_ceiling([tool], ask=False), frame + 40 + 24)
+        self.assertEqual(decision_ceiling([], ask=False), len('{"tool": "none"}'))
+
+    def test_a_list_of_values_is_as_long_as_its_longest_value(self) -> None:
+        tool = Tool("t", "", "", "", (Arg("u", choices=("km", "kilometres", "°c")),), None, "")
+        self.assertEqual(
+            decision_ceiling([tool], ask=False), len('{"tool": "t", "args": {"u": "kilometres"}}')
+        )
+
+    def test_characters_alone_would_not_be_enough(self) -> None:
+        # 120 characters is the ceiling the grammar puts on a question, and a
+        # question that long can be several times that in bytes. A pass given
+        # only the old 96 tokens could be cut off inside it.
+        self.assertGreater(decision_ceiling(), 96)
+        self.assertGreater(decision_ceiling([], ask=True), 120)
+
+
+class AllowedValueTests(unittest.TestCase):
+    """What the grammar holds a model to, every other caller is held to as well."""
+
+    def test_a_currency_is_taken_in_any_case_and_run_in_capitals(self) -> None:
+        clean, rejection = check(
+            base.REGISTRY["currency"], {"amount": 5, "from_currency": " usd", "to_currency": "Eur"}
+        )
+        self.assertIsNone(rejection)
+        self.assertEqual(clean, {"amount": 5, "from_currency": "USD", "to_currency": "EUR"})
+
+    def test_a_currency_nobody_publishes_a_rate_for_is_refused_by_name(self) -> None:
+        _, rejection = check(
+            base.REGISTRY["currency"], {"amount": 5, "from_currency": "dollars", "to_currency": "EUR"}
+        )
+        self.assertEqual(rejection.code, "bad input")
+        self.assertEqual(
+            rejection.reasons,
+            ("from_currency must be one of the 32 values it knows, such as AUD, BGN, BRL; "
+             "got 'dollars'",),
+        )
+        self.assertEqual(
+            rejection.summary, "Currency does not know 'dollars' as a currency to convert from."
+        )
+
+    def test_a_unit_is_taken_by_any_of_its_names_and_run_by_its_own(self) -> None:
+        clean, rejection = check(
+            base.REGISTRY["convert_units"],
+            {"value": "10", "from_unit": "Kilometres", "to_unit": "miles."},
+        )
+        self.assertIsNone(rejection)
+        self.assertEqual(clean, {"value": 10, "from_unit": "km", "to_unit": "mi"})
+
+    def test_a_unit_nobody_knows_is_refused_before_the_tool_runs(self) -> None:
+        _, rejection = check(
+            base.REGISTRY["convert_units"], {"value": 1, "from_unit": "parsecs", "to_unit": "km"}
+        )
+        self.assertEqual(len(rejection.reasons), 1)
+        self.assertTrue(rejection.reasons[0].startswith("from_unit must be one of the "))
+        self.assertTrue(rejection.reasons[0].endswith("got 'parsecs'"))
+        self.assertEqual(
+            rejection.summary, "Convert does not know 'parsecs' as a unit to convert from."
+        )
+
+    def test_every_spelling_the_grammar_offers_is_one_the_check_accepts(self) -> None:
+        for tool in base.REGISTRY.values():
+            for arg in tool.args:
+                for spelling in arg.choices or ():
+                    with self.subTest(tool=tool.name, arg=arg.name, spelling=spelling):
+                        value, complaint = base._coerce(arg, spelling)  # noqa: SLF001 - the rule itself
+                        self.assertIsNone(complaint)
+                        self.assertEqual(value, arg.canon(spelling) if arg.canon else spelling)
+
+    def test_how_long_text_may_be_binds_the_model_and_not_a_person(self) -> None:
+        # A ceiling is on what the grammar lets a model write. What a person
+        # types is the tool's own business.
+        clean, rejection = check(base.REGISTRY["weather"], {"location": "x" * 500})
+        self.assertIsNone(rejection)
+        self.assertEqual(len(clean["location"]), 500)
 
 if __name__ == "__main__":
     unittest.main()

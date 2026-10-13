@@ -18,15 +18,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .config import settings
 from .tools import REGISTRY, tools_to_gbnf
-from .tools.base import available, tool_menu
+from .tools.base import available, decision_ceiling, tool_menu
 from .tools.offline import TEMPS, UNITS, _canon
+from .tools.web import CURRENCY_CODES
 
-CURRENCIES = {
-    "usd", "eur", "gbp", "jpy", "chf", "cad", "aud", "nzd", "cny", "sek", "nok",
-    "dkk", "pln", "czk", "huf", "try", "inr", "brl", "zar", "mxn", "sgd", "hkd",
-    "krw", "rub", "ils", "thb", "php", "idr", "myr", "ron", "bgn", "isk",
-}
+# The same list the currency tool is held to, as the patterns below match it.
+CURRENCIES = {code.lower() for code in CURRENCY_CODES}
 
 SLASH = {
     "calc": "calculator", "calculate": "calculator", "math": "calculator",
@@ -265,8 +264,13 @@ async def route(
         {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
         {"role": "user", "content": text[:600]},
     ]
+    # Enough tokens for the longest reply the grammar allows, so a reply is
+    # never cut off before it closes. The grammar ends it long before that.
+    # Asking the user a question is something the grammar can say and nothing
+    # here can act on yet, so it is not offered.
+    limit = max(settings.route_max_tokens, decision_ceiling(tools, ask=False))
     said = await engine.complete_json(
-        messages, tools_to_gbnf(tools), request_id=request_id, seed=seed
+        messages, tools_to_gbnf(tools, ask=False), limit, request_id=request_id, seed=seed
     )
     # The whole pass goes back with its figures and with the text it was asked
     # about; `raw` is cut short because it is only ever looked at, and a reply

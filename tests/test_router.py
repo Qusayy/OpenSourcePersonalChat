@@ -11,6 +11,7 @@ import unittest
 
 try:
     from app.router import heuristic, parse_slash, route
+    from app.tools.base import decision_ceiling
     from tests import support
     from tests.support import PlayedEngine
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -170,6 +171,17 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         engine = PlayedEngine(decision="x" * 500)
         _, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
         self.assertEqual(told["raw"], "x" * 200)
+
+    async def test_the_pass_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
+        engine = PlayedEngine()
+        await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
+        self.assertEqual(engine.route_limits, [decision_ceiling(ask=False)])
+        self.assertNotIn("t-ask", engine.grammars[0])
+        # A setting above that is honoured; one below it is not, because a
+        # reply cut off before it closes is not a reply.
+        support.with_settings(self, route_max_tokens=5000)
+        await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
+        self.assertEqual(engine.route_limits[-1], 5000)
 
     async def test_with_no_engine_the_model_tier_is_skipped(self) -> None:
         call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=None)

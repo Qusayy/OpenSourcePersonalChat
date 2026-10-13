@@ -9,11 +9,13 @@ plays back prepared text, and the tools that would go out are replaced.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 try:
     from app import db
     from app.personas import get_persona
     from app.router import ROUTE_SYSTEM
+    from app.tools import base as tool_base
     from app.tools.base import ToolResult, tool_menu
     from evals.scripted import ScriptedEngine
     from tests import support
@@ -303,19 +305,15 @@ class SlashCommandTests(ChatCase):
 class AgentRoutingTests(ChatCase):
     """The one persona that pays for routing: a pattern first, then the model."""
 
-    def test_a_pattern_match_costs_no_pass_and_is_still_announced(self) -> None:
+    def test_a_pattern_match_costs_no_pass_and_none_is_announced(self) -> None:
         stream = self.chat("15% of 200", persona="agent")
+        # Nothing is "being chosen": the pattern decided before anything was said.
         self.assertEqual(
             shape(stream),
-            ["conversation", "step:route:running", "step:route:ok", "step:tool-0:running",
-             "step:tool-0:ok", "card", *ANSWER],
+            ["conversation", "step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card",
+             *ANSWER],
         )
         self.assertEqual(self.engine.route_prompts, [])
-        self.assertEqual(
-            step(stream, "route", "running"),
-            {"id": "route", "kind": "route", "status": "running", "label": "Choosing a tool",
-             "glyph": "◇"},
-        )
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "Calculator",
@@ -331,6 +329,12 @@ class AgentRoutingTests(ChatCase):
         stream = self.chat("Suggest a name for my boat", persona="agent")
         self.assertEqual(
             shape(stream), ["conversation", "step:route:running", "step:route:ok", *ANSWER]
+        )
+        # A pass is about to be made, so one is announced.
+        self.assertEqual(
+            step(stream, "route", "running"),
+            {"id": "route", "kind": "route", "status": "running", "label": "Choosing a tool",
+             "glyph": "◇"},
         )
         self.assertEqual(
             step(stream, "route", "ok"),
@@ -412,10 +416,24 @@ class AgentRoutingTests(ChatCase):
         )
         self.assertIsNone(step(stream, "route", "ok")["tool"])
 
-    def test_a_command_nobody_defined_costs_a_pass_the_stream_never_mentions(self) -> None:
+    def test_a_command_nobody_defined_is_left_to_the_model_and_the_pass_is_shown(self) -> None:
         stream = self.chat("/foo bar", persona="agent")
-        self.assertEqual(shape(stream), ["conversation", *ANSWER])
+        self.assertEqual(
+            shape(stream), ["conversation", "step:route:running", "step:route:ok", *ANSWER]
+        )
         self.assertEqual(len(self.engine.route_prompts), 1)
+        self.assertEqual(step(stream, "route", "ok")["detail"], "model")
+
+    def test_a_command_nobody_defined_is_only_text_for_a_persona_without_tools(self) -> None:
+        stream = self.chat("/foo bar", persona="explainer")
+        self.assertEqual(shape(stream), ["conversation", *ANSWER])
+        self.assertEqual(self.engine.route_prompts, [])
+
+    def test_with_every_tool_switched_off_the_model_is_not_asked_to_choose(self) -> None:
+        with mock.patch.dict(tool_base.REGISTRY, clear=True):
+            stream = self.chat("Suggest a name for my boat", persona="agent")
+        self.assertEqual(shape(stream), ["conversation", *ANSWER])
+        self.assertEqual(self.engine.route_prompts, [])
 
     def test_other_personas_never_reach_a_pattern_or_the_model(self) -> None:
         stream = self.chat("15% of 200", persona="explainer")

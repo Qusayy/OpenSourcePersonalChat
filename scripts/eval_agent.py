@@ -31,8 +31,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
-from app.router import ROUTE_SYSTEM  # noqa: E402
-from app.tools.base import available, tool_menu, tools_to_gbnf  # noqa: E402
+from app.router import decision_grammar, decision_limit, decision_messages  # noqa: E402
+from app.tools.base import available  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
 from evals.tasks import TASKS, load_tasks  # noqa: E402
@@ -60,14 +60,11 @@ async def probe_routing(engine, seed: int | None) -> dict:
     """
     with fixtures.recorded({}):
         tools = available()
-        messages = [
-            {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
-            {"role": "user", "content": "Do I need a coat in Paris today?"},
-        ]
-        grammar = tools_to_gbnf(tools)
+        messages = decision_messages("Do I need a coat in Paris today?", tools)
+        grammar, limit = decision_grammar(tools), decision_limit(tools)
     out = {}
     for name in ("cold", "warm"):
-        said = await engine.complete_json(messages, grammar, seed=seed)
+        said = await engine.complete_json(messages, grammar, limit, seed=seed)
         out[name] = {
             "prompt_tokens": said.prompt_tokens,
             "output_tokens": said.completion_tokens,

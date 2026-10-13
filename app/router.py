@@ -7,7 +7,9 @@ Ordered cheapest-first, because a routing pass on 2 vCPU costs seconds:
    miles", "weather in Paris". Regex, free, and far more reliable than a 1.5B
    model's judgement.
 3. **Grammar pass** — only when the persona enables tools and nothing above
-   fired. Constrained by GBNF so the output cannot be malformed.
+   fired. Constrained by GBNF so the output cannot be malformed. The pass
+   itself is made by whoever is running the message; what is here is what it
+   reads, what it is held to, and how its reply is read.
 
 Anything the heuristics catch is a model call that never happens, which on this
 hardware is the difference between an instant answer and a five-second wait.
@@ -20,7 +22,7 @@ from dataclasses import dataclass, field
 
 from .config import settings
 from .tools import REGISTRY, tools_to_gbnf
-from .tools.base import available, decision_ceiling, tool_menu
+from .tools.base import decision_ceiling, tool_menu
 from .tools.offline import TEMPS, UNITS, _canon
 from .tools.web import CURRENCY_CODES
 
@@ -222,74 +224,88 @@ ROUTE_SYSTEM = (
     'If no tool is needed, reply {{"tool": "none"}}.'
 )
 
+# How much of a message the routing pass reads. A choice of tool is made from
+# the first lines; a pasted document after them only costs seconds to read.
+ROUTE_TEXT = 600
 
-async def route(
-    text: str,
-    *,
-    tools_enabled: bool,
-    engine=None,
-    allow_model: bool = True,
-    request_id: str | None = None,
-    seed: int | None = None,
-) -> tuple[ToolCall | None, dict]:
-    """Pick a tool. Returns (call, telemetry).
+# Asking the user a question is something the grammar can say and nothing can
+# act on yet, so it is not offered.
+ASK = False
 
-    ``request_id`` names the run this choice belongs to, so that stopping the
-    run also stops a routing pass that is under way. ``seed`` goes to that
-    pass, for a caller that needs the same choice twice.
+
+@dataclass
+class Action:
+    """What the model chose to do next, read from its reply.
+
+    ``tool`` is a call to make. ``final`` is "write the answer now": the model
+    said no tool is needed, or said something that could not be used, in which
+    case ``note`` says what was wrong with it.
     """
-    telemetry: dict = {"tier": None, "ms": 0.0}
 
+    kind: str  # tool | final
+    call: ToolCall | None = None
+    raw: str = ""
+    note: str | None = None
+
+
+def free_route(text: str, *, tools_enabled: bool) -> tuple[ToolCall | None, str | None]:
+    """The two tiers that cost nothing. Returns ``(call, tier)``.
+
+    A command is honoured for everyone. A pattern is only tried where tools
+    are on, which is the persona's choice.
+    """
     call, _ = parse_slash(text)
     if call is not None:
-        telemetry["tier"] = "slash"
-        return call, telemetry
-
+        return call, "slash"
     if not tools_enabled:
-        return None, telemetry
-
+        return None, None
     call = heuristic(text)
     if call is not None:
-        telemetry["tier"] = "heuristic"
-        return call, telemetry
+        return call, "heuristic"
+    return None, None
 
-    if not allow_model or engine is None:
-        return None, telemetry
 
-    tools = available()
-    if not tools:
-        return None, telemetry
-
-    messages = [
+def decision_messages(text: str, tools: list) -> list[dict]:
+    """What the model reads when it is asked to choose: the menu and the
+    start of the message, and nothing of the conversation before it."""
+    return [
         {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
-        {"role": "user", "content": text[:600]},
+        {"role": "user", "content": text[:ROUTE_TEXT]},
     ]
-    # Enough tokens for the longest reply the grammar allows, so a reply is
-    # never cut off before it closes. The grammar ends it long before that.
-    # Asking the user a question is something the grammar can say and nothing
-    # here can act on yet, so it is not offered.
-    limit = max(settings.route_max_tokens, decision_ceiling(tools, ask=False))
-    said = await engine.complete_json(
-        messages, tools_to_gbnf(tools, ask=False), limit, request_id=request_id, seed=seed
-    )
-    # The whole pass goes back with its figures and with the text it was asked
-    # about; `raw` is cut short because it is only ever looked at, and a reply
-    # that ran away can be long.
-    telemetry.update({
-        "tier": "model", "ms": round(said.ms, 1), "raw": said.raw[:200],
-        "text": messages[-1]["content"], "completion": said,
-    })
 
+
+def decision_grammar(tools: list) -> str:
+    """The grammar a choice is held to."""
+    return tools_to_gbnf(tools, ask=ASK)
+
+
+def decision_limit(tools: list) -> int:
+    """Tokens for a choice: enough for the longest reply the grammar allows,
+    so a reply is never cut off before it closes. The grammar ends it long
+    before that; a setting above it is honoured, one below it is not."""
+    return max(settings.route_max_tokens, decision_ceiling(tools, ask=ASK))
+
+
+def parse_action(said) -> Action:
+    """Read one grammar-constrained reply (a ``Completion``) as an action.
+
+    Anything that cannot be acted on is ``final`` with a note, never an
+    error: a choice that came to nothing is "no tool", and the run answers.
+    """
     parsed = said.parsed
-    if parsed is None and said.raw and said.error is None:
+    if parsed is None:
         # The grammar makes this impossible unless the reply ran out of tokens
-        # before it closed. It is "no tool", and it is worth knowing it happened.
-        telemetry["note"] = "the reply was not a complete JSON object"
-    if not parsed or parsed.get("tool") in (None, "none"):
-        return None, telemetry
+        # before it closed. It is worth knowing it happened.
+        cut_off = bool(said.raw) and said.error is None
+        return Action(
+            "final", raw=said.raw,
+            note="the reply was not a complete JSON object" if cut_off else None,
+        )
     name = parsed.get("tool")
+    if name in (None, "none"):
+        return Action("final", raw=said.raw)
     if name not in REGISTRY:
-        telemetry["note"] = f"model picked an unknown tool: {name}"
-        return None, telemetry
-
-    return ToolCall(name, parsed.get("args") or {}, via="model", ms=said.ms, raw=said.raw), telemetry
+        return Action("final", raw=said.raw, note=f"model picked an unknown tool: {name}")
+    args = parsed.get("args")
+    call = ToolCall(name, args if isinstance(args, dict) else {}, via="model", ms=said.ms, raw=said.raw)
+    return Action("tool", call=call, raw=said.raw)

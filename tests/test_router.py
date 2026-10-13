@@ -1,19 +1,30 @@
 """Which tool a message is sent to, and by which of the three tiers.
 
 Needs the app's own requirements; without them the whole module is skipped.
-The first two tiers are plain functions over text. The third asks an engine,
-which here plays back a prepared choice.
+The first two tiers are plain functions over text. The third is a pass through
+the model, which is made elsewhere; what is tested here is what that pass is
+given to read and how its reply is read.
 """
 
 from __future__ import annotations
 
+import json
 import unittest
 
 try:
-    from app.router import heuristic, parse_slash, route
-    from app.tools.base import decision_ceiling
+    from app.llm import Completion
+    from app.router import (
+        ROUTE_SYSTEM,
+        decision_grammar,
+        decision_limit,
+        decision_messages,
+        free_route,
+        heuristic,
+        parse_action,
+        parse_slash,
+    )
+    from app.tools.base import available, decision_ceiling, tool_menu
     from tests import support
-    from tests.support import PlayedEngine
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -97,114 +108,124 @@ class HeuristicTests(unittest.TestCase):
         self.assertEqual(heuristic("250 kg in lb").name, "convert_units")
 
 
-class RouteTests(unittest.IsolatedAsyncioTestCase):
-    """The tiers in order, cheapest first."""
+class FreeRouteTests(unittest.TestCase):
+    """The two tiers that cost nothing, in order."""
+
+    def test_a_command_is_routed_even_for_a_persona_without_tools(self) -> None:
+        call, tier = free_route("/calc 2+2", tools_enabled=False)
+        self.assertEqual((call.name, call.via, tier), ("calculator", "slash", "slash"))
+
+    def test_without_tools_nothing_but_a_command_is_routed(self) -> None:
+        self.assertEqual(free_route("15% of 200", tools_enabled=False), (None, None))
+
+    def test_a_pattern_is_tried_where_tools_are_on(self) -> None:
+        call, tier = free_route("15% of 200", tools_enabled=True)
+        self.assertEqual((call.name, call.via, tier), ("calculator", "heuristic", "heuristic"))
+
+    def test_a_command_is_tried_before_a_pattern(self) -> None:
+        call, tier = free_route("/wiki 15% of 200", tools_enabled=True)
+        self.assertEqual((call.name, tier), ("wikipedia", "slash"))
+
+    def test_a_command_nobody_defined_can_still_match_a_pattern(self) -> None:
+        call, tier = free_route("/foo https://example.org/x", tools_enabled=True)
+        self.assertEqual((call.name, tier), ("read_url", "heuristic"))
+
+    def test_what_neither_catches_is_left_for_the_model(self) -> None:
+        for text in ("Suggest a name for my boat", "/foo bar", "the weather"):
+            with self.subTest(text=text):
+                self.assertEqual(free_route(text, tools_enabled=True), (None, None))
+
+
+class DecisionPromptTests(unittest.TestCase):
+    """What the model is given when it is asked to choose."""
 
     def setUp(self) -> None:
-        support.no_network(self)
         support.with_settings(self, allow_outbound=True)
 
-    async def test_a_command_is_routed_even_for_a_persona_without_tools(self) -> None:
-        engine = PlayedEngine()
-        call, told = await route("/calc 2+2", tools_enabled=False, engine=engine)
-        self.assertEqual((call.name, call.via), ("calculator", "slash"))
-        self.assertEqual(told, {"tier": "slash", "ms": 0.0})
-        self.assertEqual(engine.route_prompts, [])
-
-    async def test_without_tools_nothing_but_a_command_is_routed(self) -> None:
-        engine = PlayedEngine()
-        call, told = await route("15% of 200", tools_enabled=False, engine=engine)
-        self.assertIsNone(call)
-        self.assertEqual(told, {"tier": None, "ms": 0.0})
-        self.assertEqual(engine.route_prompts, [])
-
-    async def test_a_pattern_is_tried_before_the_model(self) -> None:
-        engine = PlayedEngine(decision={"tool": "wikipedia", "args": {"query": "percent"}})
-        call, told = await route("15% of 200", tools_enabled=True, engine=engine)
-        self.assertEqual((call.name, call.via), ("calculator", "heuristic"))
-        self.assertEqual(told, {"tier": "heuristic", "ms": 0.0})
-        self.assertEqual(engine.route_prompts, [])
-
-    async def test_the_model_is_asked_last_and_its_choice_is_kept_with_its_cost(self) -> None:
-        raw = '{"tool": "weather", "args": {"location": "Paris"}}'
-        engine = PlayedEngine(decision=raw)
-        call, told = await route("Do I need a coat in Paris", tools_enabled=True, engine=engine)
+    def test_it_reads_a_menu_and_the_message_and_nothing_else(self) -> None:
+        tools = available()
         self.assertEqual(
-            (call.name, call.args, call.via, call.ms, call.raw),
-            ("weather", {"location": "Paris"}, "model", support.ROUTE_MS, raw),
-        )
-        self.assertEqual(
-            (told["tier"], told["ms"], told["raw"]), ("model", support.ROUTE_MS, raw)
-        )
-        self.assertEqual(len(engine.route_prompts), 1)
-
-    async def test_the_pass_itself_goes_back_with_what_it_cost(self) -> None:
-        engine = PlayedEngine()
-        _, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertEqual(set(told), {"tier", "ms", "raw", "text", "completion"})
-        self.assertEqual(told["text"], "Suggest a name for my boat")
-        self.assertEqual(told["completion"].raw, '{"tool": "none"}')
-        self.assertEqual(told["completion"].ms, support.ROUTE_MS)
-
-    async def test_none_from_the_model_is_no_call(self) -> None:
-        engine = PlayedEngine()
-        call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertIsNone(call)
-        self.assertEqual(
-            (told["tier"], told["ms"], told["raw"]),
-            ("model", support.ROUTE_MS, '{"tool": "none"}'),
+            decision_messages("Suggest a name for my boat", tools),
+            [
+                {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
+                {"role": "user", "content": "Suggest a name for my boat"},
+            ],
         )
 
-    async def test_a_tool_that_does_not_exist_is_no_call_and_is_noted(self) -> None:
-        engine = PlayedEngine(decision={"tool": "telescope", "args": {}})
-        call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertIsNone(call)
-        self.assertEqual(told["note"], "model picked an unknown tool: telescope")
+    def test_a_long_message_is_read_only_at_its_start(self) -> None:
+        long = "Suggest a name for my boat. " * 30
+        self.assertEqual(decision_messages(long, available())[1]["content"], long[:600])
 
-    async def test_a_reply_that_is_not_json_is_no_call(self) -> None:
-        engine = PlayedEngine(decision='{"tool": "wikipedia", "args": {"query": "the long')
-        call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertIsNone(call)
-        self.assertEqual(told["tier"], "model")
-
-    async def test_only_the_start_of_a_long_reply_is_kept_to_look_at(self) -> None:
-        engine = PlayedEngine(decision="x" * 500)
-        _, told = await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertEqual(told["raw"], "x" * 200)
-
-    async def test_the_pass_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
-        engine = PlayedEngine()
-        await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertEqual(engine.route_limits, [decision_ceiling(ask=False)])
-        self.assertNotIn("t-ask", engine.grammars[0])
+    def test_it_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
+        tools = available()
+        self.assertEqual(decision_limit(tools), decision_ceiling(tools, ask=False))
         # A setting above that is honoured; one below it is not, because a
         # reply cut off before it closes is not a reply.
         support.with_settings(self, route_max_tokens=5000)
-        await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        self.assertEqual(engine.route_limits[-1], 5000)
+        self.assertEqual(decision_limit(tools), 5000)
+        support.with_settings(self, route_max_tokens=1)
+        self.assertEqual(decision_limit(tools), decision_ceiling(tools, ask=False))
 
-    async def test_with_no_engine_the_model_tier_is_skipped(self) -> None:
-        call, told = await route("Suggest a name for my boat", tools_enabled=True, engine=None)
-        self.assertIsNone(call)
-        self.assertEqual(told, {"tier": None, "ms": 0.0})
-
-    async def test_the_model_can_be_left_out_on_request(self) -> None:
-        engine = PlayedEngine(decision={"tool": "weather", "args": {"location": "Paris"}})
-        call, _ = await route(
-            "Do I need a coat in Paris", tools_enabled=True, engine=engine, allow_model=False
-        )
-        self.assertIsNone(call)
-        self.assertEqual(engine.route_prompts, [])
-
-    async def test_with_outgoing_requests_off_the_model_is_offered_only_local_tools(self) -> None:
+    def test_with_outgoing_requests_off_only_local_tools_are_offered(self) -> None:
         support.with_settings(self, allow_outbound=False)
-        engine = PlayedEngine()
-        await route("Suggest a name for my boat", tools_enabled=True, engine=engine)
-        menu = engine.route_prompts[0][0]["content"]
+        tools = available()
+        menu = decision_messages("hi", tools)[0]["content"]
         self.assertIn("- calculator(", menu)
         self.assertNotIn("- weather(", menu)
-        self.assertNotIn("t-weather", engine.grammars[0])
+        self.assertNotIn("t-weather", decision_grammar(tools))
 
+    def test_asking_the_user_is_not_on_offer(self) -> None:
+        self.assertNotIn("t-ask", decision_grammar(available()))
+
+
+def said(raw: str = "", **more) -> Completion:
+    """A reply as the engine hands it back."""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    return Completion(parsed=parsed if isinstance(parsed, dict) else None, raw=raw, ms=12.5, **more)
+
+
+class ParseActionTests(unittest.TestCase):
+    """Reading the model's reply as something to do."""
+
+    def test_a_call_to_a_real_tool_is_a_call_to_make(self) -> None:
+        raw = '{"tool": "weather", "args": {"location": "Paris"}}'
+        action = parse_action(said(raw))
+        self.assertEqual((action.kind, action.raw, action.note), ("tool", raw, None))
+        self.assertEqual(
+            (action.call.name, action.call.args, action.call.via, action.call.ms, action.call.raw),
+            ("weather", {"location": "Paris"}, "model", 12.5, raw),
+        )
+
+    def test_none_is_the_end_of_choosing(self) -> None:
+        action = parse_action(said('{"tool": "none"}'))
+        self.assertEqual((action.kind, action.call, action.note), ("final", None, None))
+
+    def test_a_tool_that_does_not_exist_is_no_call_and_is_noted(self) -> None:
+        action = parse_action(said('{"tool": "telescope", "args": {}}'))
+        self.assertEqual((action.kind, action.call), ("final", None))
+        self.assertEqual(action.note, "model picked an unknown tool: telescope")
+
+    def test_a_reply_cut_off_before_it_closed_is_no_call_and_is_noted(self) -> None:
+        cut = '{"tool": "wikipedia", "args": {"query": "the long'
+        action = parse_action(said(cut))
+        self.assertEqual((action.kind, action.raw), ("final", cut))
+        self.assertEqual(action.note, "the reply was not a complete JSON object")
+
+    def test_a_pass_that_failed_or_never_ran_is_no_call_and_has_its_own_reason(self) -> None:
+        for reply in (said(error="ValueError: boom"), said(), said(cancelled=True)):
+            with self.subTest(reply=reply):
+                action = parse_action(reply)
+                self.assertEqual((action.kind, action.call, action.note), ("final", None, None))
+
+    def test_a_call_with_no_usable_arguments_is_a_call_with_none(self) -> None:
+        for raw in ('{"tool": "clock"}', '{"tool": "clock", "args": null}',
+                    '{"tool": "clock", "args": "UTC"}', '{"tool": "clock", "args": []}'):
+            with self.subTest(raw=raw):
+                action = parse_action(said(raw))
+                self.assertEqual((action.kind, action.call.name, action.call.args), ("tool", "clock", {}))
 
 if __name__ == "__main__":
     unittest.main()

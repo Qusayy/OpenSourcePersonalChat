@@ -27,10 +27,18 @@ from typing import AsyncIterator, Awaitable, Callable
 from .config import settings
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
-from .router import ToolCall, route
+from .router import (
+    Action,
+    ToolCall,
+    decision_grammar,
+    decision_limit,
+    decision_messages,
+    free_route,
+    parse_action,
+)
 from .skills import Skill, build_prompt
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import ToolResult
+from .tools.base import ToolResult, available
 
 Event = tuple[str, dict]
 ToolCaller = Callable[[str, dict], Awaitable[ToolResult]]
@@ -254,71 +262,77 @@ class _Run:
         if not self.tools_enabled:
             return
 
-        needs_pass = self.persona.tools and not self.message.startswith("/")
-        if needs_pass:
-            yield "step", {
-                "id": "route", "kind": "route", "status": "running",
-                "label": "Choosing a tool", "glyph": "◇",
-            }
-        call, told = await route(
-            self.message, tools_enabled=self.persona.tools, engine=self.engine,
-            request_id=self.request_id, seed=self.seed,
-        )
-        said: Completion | None = told.get("completion")
-        self._record_route(call, told, said)
+        # The two tiers that cost nothing come first. A command works for
+        # every persona; a pattern only where the persona has tools.
+        call, tier = free_route(self.message, tools_enabled=self.persona.tools)
+        if call is not None:
+            self.calls = [call]
+            self.trace.steps.append(Step(
+                "route", name=call.name, via=tier, input=call.args, output=call.note,
+            ))
+            yield "step", self._routed(call, tier, ms=0)
+            return
+
+        tools = available() if self.persona.tools else []
+        if not tools:
+            return
+
+        # Only now is a pass about to be made, so only now is one announced.
+        yield "step", {
+            "id": "route", "kind": "route", "status": "running",
+            "label": "Choosing a tool", "glyph": "◇",
+        }
+        action, said = await self._decide(tools)
         if self.stop.is_set():
             # Stopped while the choice was being made. Whatever came back is
             # not acted on, and the step that was announced is closed.
-            if needs_pass:
-                yield "step", {
-                    "id": "route", "kind": "route", "status": "stopped",
-                    "label": "Choosing a tool", "glyph": "◇",
-                    "ms": round(told.get("ms") or 0, 1),
-                }
-            return
-        if call is not None:
-            self.calls = [call]
-        if call is not None or needs_pass:
-            tool = REGISTRY[call.name] if call else None
-            closing = {
-                "id": "route", "kind": "route", "status": "ok",
-                "label": tool.label if tool else "No tool needed",
-                "detail": told.get("tier") or "direct",
-                "glyph": tool.glyph if tool else "◇",
-                "tool": call.name if call else None,
-                "ms": round(told.get("ms") or 0, 1),
+            yield "step", {
+                "id": "route", "kind": "route", "status": "stopped",
+                "label": "Choosing a tool", "glyph": "◇", "ms": round(said.ms, 1),
             }
-            if said is not None:
-                # The choice cost a pass, and a pass is counted in tokens.
-                closing["tokens_in"] = said.prompt_tokens
-                closing["tokens_out"] = said.completion_tokens
-            yield "step", closing
+            return
+        if action.kind == "tool":
+            self.calls = [action.call]
+        closing = self._routed(action.call, "model", ms=round(said.ms, 1))
+        # The choice cost a pass, and a pass is counted in tokens.
+        closing["tokens_in"] = said.prompt_tokens
+        closing["tokens_out"] = said.completion_tokens
+        yield "step", closing
 
-    def _record_route(self, call: ToolCall | None, told: dict, said: Completion | None) -> None:
-        """Write down how the choice was made. Nothing is written when nothing
-        was tried: a persona without tools, and a message that is no command."""
-        tier = told.get("tier")
-        if tier is None:
-            return
-        if said is None:
-            self.trace.steps.append(Step(
-                "route", name=call.name if call else None, via=tier,
-                input=call.args if call else None, output=call.note if call else None,
-            ))
-            return
+    def _routed(self, call: ToolCall | None, tier: str, *, ms: float) -> dict:
+        """The step that says what was chosen, and by which tier."""
+        tool = REGISTRY[call.name] if call else None
+        return {
+            "id": "route", "kind": "route", "status": "ok",
+            "label": tool.label if tool else "No tool needed",
+            "detail": tier,
+            "glyph": tool.glyph if tool else "◇",
+            "tool": call.name if call else None,
+            "ms": ms,
+        }
+
+    async def _decide(self, tools: list) -> tuple[Action, Completion]:
+        """Ask the model which tool, if any. One pass, written down whole."""
+        messages = decision_messages(self.message, tools)
+        said = await self.engine.complete_json(
+            messages, decision_grammar(tools), decision_limit(tools),
+            request_id=self.request_id, seed=self.seed,
+        )
+        action = parse_action(said)
         stopped = said.cancelled or self.stop.is_set()
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
-        error = "stopped" if stopped else (said.error or told.get("note"))
+        error = "stopped" if stopped else (said.error or action.note)
         # A pass that never reached the model still took the time it took.
         cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
         self.trace.steps.append(Step(
-            "route", model=True, name=call.name if call else None, via=tier,
-            input={"text": told.get("text")}, output=said.raw,
+            "route", model=True, name=action.call.name if action.call else None, via="model",
+            input={"text": messages[-1]["content"]}, output=said.raw,
             prompt_tokens=said.prompt_tokens, output_tokens=said.completion_tokens,
             queue_ms=said.queue_wait_ms, first_token_ms=said.ttft_ms, total_ms=cost,
             ok=error is None, error=error,
         ))
+        return action, said
 
     # ---------------------------------------------------------- one tool --
 

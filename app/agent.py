@@ -18,6 +18,7 @@ Two things this module deliberately does not do:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from contextlib import aclosing
@@ -37,7 +38,7 @@ from .router import (
     parse_action,
     repair_messages,
 )
-from .skills import Skill, build_prompt
+from .skills import SAY_SO, Skill, build_prompt, did_not_work
 from .tools import REGISTRY, call_tool as default_call_tool
 from .tools.base import Rejection, ToolResult, available, check
 
@@ -118,6 +119,22 @@ class Trace:
         }
 
 
+# Where one sentence ends and the next begins.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s")
+
+
+def what_happened(result: ToolResult) -> str:
+    """A failed call as one fact, for the model to read.
+
+    The sentence a failure is given for a person often goes on to advise:
+    "Try again", "Try adding a country". A small model reading that in a tool
+    result takes it as an order and acts on it, so only what happened is
+    passed on: the first sentence.
+    """
+    said = (result.summary or result.error or "It did not work.").strip()
+    return _SENTENCE_END.split(said, maxsplit=1)[0]
+
+
 def _pass_ms(queue_wait_ms: float | None, total_ms: float | None) -> float:
     """What a pass cost: its wait for the slot and its time inside it."""
     return (queue_wait_ms or 0.0) + (total_ms or 0.0)
@@ -190,6 +207,8 @@ class _Run:
     # gave back for the model to read.
     calls: list[ToolCall] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
+    # And what each one that failed is known to have done, for the same reader.
+    failures: list[str] = field(default_factory=list)
     # Set by whoever asks for this run to stop. Looked at before each stage,
     # and waited on while a tool is out.
     stop: Stop = field(default_factory=Stop)
@@ -426,7 +445,10 @@ class _Run:
                 "tool": call.name, "data": result.data,
             }
         else:
-            # A failed tool is shown, not hidden — the model still answers.
+            # A failed tool is shown, not hidden, and the model is told as
+            # well: left to think nothing was tried, it answers from memory
+            # beside a card that says the lookup failed.
+            self.failures.append(f"{call.name}: {what_happened(result)}")
             yield "card", {
                 "step_id": step_id, "card": "error", "tool": call.name,
                 "data": {"message": result.summary or result.error},
@@ -457,7 +479,7 @@ class _Run:
         messages += [{"role": m["role"], "content": m["content"]} for m in self.history]
 
         if self.skill is not None:
-            content = build_prompt(self.skill, self.message, self.summaries)
+            content = build_prompt(self.skill, self.message, self.summaries, self.failures)
         elif self.summaries:
             # The tool output goes inside the user turn, not into a second
             # system message. A 1.5B model barely attends to a trailing system
@@ -469,9 +491,21 @@ class _Run:
             content = (
                 f"{self.message}\n\n"
                 f"Live data, retrieved just now by a tool:\n{facts}\n\n"
+            )
+            if self.failures:
+                content += "A lookup was also tried and did not work:\n" + did_not_work(self.failures) + "\n\n"
+            content += (
                 "Answer the question using only the data above. It is "
                 "current and correct. Do not say you lack real-time "
                 "access, and do not recalculate any figure."
+            )
+            if self.failures:
+                content += " " + SAY_SO
+        elif self.failures:
+            content = (
+                f"{self.message}\n\n"
+                "A lookup was tried for this and did not work:\n"
+                + did_not_work(self.failures) + "\n\n" + SAY_SO
             )
         else:
             content = self.message

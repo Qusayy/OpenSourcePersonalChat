@@ -725,5 +725,76 @@ class RepairTests(AgentCase):
         self.assertEqual(len(engine.passes), 2)
 
 
+class FailureTests(AgentCase):
+    """What the pass that writes the answer is told about a lookup that failed."""
+
+    def test_a_failure_is_passed_on_as_its_first_sentence(self) -> None:
+        for summary, error, fact in (
+            ("No place called 'Atlantis' was found. Try adding a country, like “Amman, Jordan”.",
+             "no such place", "No place called 'Atlantis' was found."),
+            ("Weather gave up after 10.0 seconds. The source may be slow or unreachable — try again.",
+             "timeout", "Weather gave up after 10.0 seconds."),
+            ("Weather could not finish. Try again, or ask without it.",
+             "RuntimeError: boom", "Weather could not finish."),
+            ("Calculator needs an expression.", "missing input", "Calculator needs an expression."),
+            ("Is that a real place? Try another.", "no such place", "Is that a real place?"),
+            ("One sentence with no full stop", "odd", "One sentence with no full stop"),
+            ("", "timeout", "timeout"),
+            ("", None, "It did not work."),
+        ):
+            with self.subTest(summary=summary):
+                self.assertEqual(agent.what_happened(ToolResult(False, summary, error=error)), fact)
+
+    def test_no_fact_handed_to_the_model_tells_it_what_to_do(self) -> None:
+        # Every failure a real tool or the dispatcher can report, as the model
+        # is given it. "Try" and "again" in a tool result read as orders.
+        import re
+
+        from app.tools import base
+
+        said = [
+            "There is no tool called 'telescope'.",
+            "This server has outgoing requests switched off, so Wikipedia, weather, "
+            "currency and page reading are unavailable.",
+            "Weather gave up after 10.0 seconds. The source may be slow or unreachable — try again.",
+            "Weather could not finish. Try again, or ask without it.",
+            "No place called 'Atlantis' was found. Try adding a country, like “Amman, Jordan”.",
+            "That is not something this calculator handles. It does numbers, the usual "
+            "operators, and functions like sqrt, round, log and factorial.",
+        ]
+        said += [base.check(base.REGISTRY["calculator"], {})[1].summary]
+        said += [base.check(base.REGISTRY["currency"],
+                            {"amount": 1, "from_currency": "x", "to_currency": "EUR"})[1].summary]
+        for summary in said:
+            with self.subTest(summary=summary):
+                fact = agent.what_happened(ToolResult(False, summary))
+                self.assertNotRegex(fact.lower(), r"\b(try|again|please|retry)\b")
+                self.assertTrue(re.search(r"[.!?]$", fact))
+
+    async def test_where_one_lookup_worked_and_another_did_not_the_answer_is_told_both(self) -> None:
+        # Outside a skill a message has one call today, so the two are put
+        # side by side here by hand: the prompt has to be right before a run
+        # can ever make two calls.
+        engine = self.scripted("It is 12.9 degrees in Paris; Atlantis could not be found.")
+        trace = agent.Trace()
+        run = agent._Run(  # noqa: SLF001 - the prompt is what is under test
+            message="Paris and Atlantis?", persona=get_persona("agent"), skill=None, history=[],
+            trace=trace, engine=engine, call_tool=None, tools_enabled=True, request_id="run",
+        )
+        run.summaries = ["weather: Paris, France: overcast, 12.9°C."]
+        run.failures = ["weather: No place called 'Atlantis' was found."]
+        self.assertEqual(
+            run._prompt()[-1]["content"],  # noqa: SLF001
+            "Paris and Atlantis?\n\n"
+            "Live data, retrieved just now by a tool:\n"
+            "- weather: Paris, France: overcast, 12.9°C.\n\n"
+            "A lookup was also tried and did not work:\n"
+            "- weather: No place called 'Atlantis' was found.\n\n"
+            "Answer the question using only the data above. It is current and correct. "
+            "Do not say you lack real-time access, and do not recalculate any figure. "
+            "Say plainly what could not be looked up, and do not guess at it.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

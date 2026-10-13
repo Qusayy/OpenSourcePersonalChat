@@ -170,11 +170,31 @@ def skill_list() -> list[dict]:
     return [s.as_dict() for s in SKILLS.values()]
 
 
-def build_prompt(skill: Skill, user_text: str, results: list[str]) -> str:
+# What the model is asked to do about a lookup that failed. Without it, it
+# fills the gap from memory and states that as though a tool had returned it.
+SAY_SO = "Say plainly what could not be looked up, and do not guess at it."
+
+
+def did_not_work(failures: list[str]) -> str:
+    """Failed lookups as a list the model can read: one fact to a line."""
+    return "\n".join(f"- {f}" for f in failures)
+
+
+def build_prompt(
+    skill: Skill, user_text: str, results: list[str], failures: list[str] | None = None
+) -> str:
     """Fold the tool output into the skill's prompt.
 
     Results are joined as plain labelled text — a 1.5B model handed raw JSON
     starts reciting the JSON back instead of answering.
+
+    A lookup that failed is put where its result would have been, as what
+    happened, so the answer can say so. That is a different thing from a skill
+    that found nothing to look up, which is told there is no output.
     """
-    joined = "\n\n".join(results) if results else "(no tool output available)"
+    parts = list(results)
+    if failures:
+        heading = "These lookups" if len(failures) > 1 else "This lookup"
+        parts.append(f"{heading} did not work:\n{did_not_work(failures)}\n\n{SAY_SO}")
+    joined = "\n\n".join(parts) if parts else "(no tool output available)"
     return skill.prompt.format(input=user_text.strip(), results=joined)

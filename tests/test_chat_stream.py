@@ -553,7 +553,7 @@ class SkillTests(ChatCase):
 
 
 class FailedToolTests(ChatCase):
-    """A tool that fails is shown failing. The model is told nothing of it."""
+    """A tool that fails is shown failing, and the model is told it failed."""
 
     def test_a_failed_tool_is_shown_with_its_reason(self) -> None:
         stream = self.chat("/calc 1/0", persona="explainer")
@@ -571,9 +571,38 @@ class FailedToolTests(ChatCase):
         )
         self.assertEqual(only(stream, "done")[0]["tool_calls"], 1)
 
-    def test_the_model_answers_the_bare_question_as_if_nothing_was_tried(self) -> None:
+    def test_the_model_is_told_what_happened_and_asked_to_say_so(self) -> None:
         self.chat("/calc 1/0", persona="explainer")
-        self.assertEqual(self.engine.answer_prompts[0][-1]["content"], "/calc 1/0")
+        self.assertEqual(
+            self.engine.answer_prompts[0][-1]["content"],
+            "/calc 1/0\n\n"
+            "A lookup was tried for this and did not work:\n"
+            "- calculator: That is not something this calculator handles.\n\n"
+            "Say plainly what could not be looked up, and do not guess at it.",
+        )
+
+    def test_the_model_is_told_what_happened_and_not_what_to_try(self) -> None:
+        # The card tells a person what to try next. A small model reading that
+        # in a tool result takes it as an order, so it is given only the fact.
+        self.use_engine(PlayedEngine(decision={"tool": "weather", "args": {"location": "Atlantis"}}))
+        support.played_tools(self, {"weather": ToolResult(
+            False, "No place called 'Atlantis' was found. Try adding a country, like “Amman, Jordan”.",
+            error="no such place",
+        )})
+        stream = self.chat("Do I need a coat in Atlantis", persona="agent")
+        told = self.engine.answer_prompts[0][-1]["content"]
+        self.assertIn("- weather: No place called 'Atlantis' was found.\n", told)
+        self.assertNotIn("Try adding", told)
+        self.assertNotIn("Live data", told)
+        # The person still gets the whole sentence.
+        self.assertIn("Try adding a country", only(stream, "card")[0]["data"]["message"])
+
+    def test_a_call_refused_before_it_ran_is_told_the_same_way(self) -> None:
+        self.chat("/fx 5 xyz eur", persona="explainer")
+        self.assertIn(
+            "- currency: Currency does not know 'xyz' as a currency to convert from.",
+            self.engine.answer_prompts[0][-1]["content"],
+        )
 
     def test_the_failure_is_stored_without_a_card(self) -> None:
         stream = self.chat("/calc 1/0", persona="explainer")
@@ -582,11 +611,28 @@ class FailedToolTests(ChatCase):
         self.assertIsNone(call["card"])
         self.assertEqual(call["summary"], CALC_REFUSAL)
 
-    def test_a_skill_whose_tool_failed_is_told_only_that_nothing_came_back(self) -> None:
+    def test_a_skill_whose_tool_failed_is_told_what_happened_in_place_of_the_result(self) -> None:
         self.chat("1/0", skill="do_maths")
-        self.assertTrue(
-            self.engine.answer_prompts[0][-1]["content"].endswith("(no tool output available)")
-        )
+        told = self.engine.answer_prompts[0][-1]["content"]
+        self.assertTrue(told.endswith(
+            "This lookup did not work:\n- calculator: That is not something this calculator handles.\n\nSay plainly what could not be looked up, and do not guess at it."
+        ))
+        # "No output" is what a skill is told when it found nothing to look up.
+        self.assertNotIn("(no tool output available)", told)
+
+    def test_a_skill_with_one_lookup_that_worked_and_one_that_did_not_is_told_both(self) -> None:
+        support.played_tools(self, {"wikipedia": [
+            ToolResult(True, "Wikipedia — Python: a programming language.", data={"title": "Python"}),
+            ToolResult(False, "Wikipedia has no article matching 'Rsut'.", error="not found"),
+        ]})
+        self.chat("Python vs Rsut", skill="compare")
+        told = self.engine.answer_prompts[0][-1]["content"]
+        self.assertTrue(told.endswith(
+            "wikipedia: Wikipedia — Python: a programming language.\n\n"
+            "This lookup did not work:\n"
+            "- wikipedia: Wikipedia has no article matching 'Rsut'.\n\n"
+            "Say plainly what could not be looked up, and do not guess at it."
+        ))
 
     def test_a_tool_that_goes_out_is_refused_when_outgoing_requests_are_off(self) -> None:
         support.with_settings(self, allow_outbound=False)

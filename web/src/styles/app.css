@@ -1,0 +1,17 @@
+/* The one stylesheet. Order is the cascade: Tailwind, then the tokens and the
+   theme that names them, then element rules, then the parts of the interface
+   that are written as CSS rather than as utility classes.
+
+   Each file puts its own rules in a layer (base or components), so a utility
+   class on the same element still wins, and may declare utilities and
+   variants of its own at its top level. */
+
+@import "tailwindcss";
+@import "./theme.css";
+@import "./base.css";
+@import "./motion.css";
+@import "./status.css";
+@import "./prose.css";
+@import "../features/chat/chat.css";
+@import "../features/cards/cards.css";
+@import "../features/bench/bench.css";

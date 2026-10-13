@@ -1,0 +1,11 @@
+# Normalise to LF in the repository. Without this, files authored on Windows
+# keep CRLF, and a shell script or systemd unit that carries CRLF fails on
+# Linux with an unhelpful error (`/usr/bin/env: 'bash\r': No such file`).
+* text=auto eol=lf
+
+# Never let these be rewritten.
+*.gguf binary
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.db binary

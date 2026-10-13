@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-page="chat">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f8fbf9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c110d" media="(prefers-color-scheme: dark)">
+<meta name="description" content="A small language model running locally, with the numbers on screen.">
+<title>Aurora</title>
+<!-- The mark is the status line itself: a dot and a rule along the bottom edge. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161d17'/%3E%3Ccircle cx='8.5' cy='22.5' r='3' fill='%2349de78'/%3E%3Crect x='14' y='21' width='12' height='3' rx='1.5' fill='%23f8fbf9'/%3E%3C/svg%3E">
+<link rel="preload" href="/assets/Recursive_VF_1.085--subset-GF_latin_basic-BdMPsgby.woff2" as="font" type="font/woff2" crossorigin>
+<!-- Arriving from outside (a typed address, a link from elsewhere, a reload)
+     the page introduces itself once. Moving between its own pages it does not:
+     that is a change of page, not an arrival. Decided before first paint, so
+     the entrance is the first thing drawn rather than a flash and a restart. -->
+<script>
+  if (document.referrer.indexOf(location.origin + "/") !== 0) document.documentElement.classList.add("intro");
+</script>
+  <script type="module" crossorigin src="/assets/index-BXMsYBLx.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-Cul0rUca.css">
+</head>
+<body>
+<!--
+THESIS: The page is a plain sheet you write on, and the machine's cost is one status line pinned to its bottom edge that comes alive while the model writes: its figures tick, its trace scrolls, and an aurora rises from it for as long as the answer is being produced. Refuses the category default: a sidebar of chats, a centred column of bubbles, a dashboard column of metric cards.
+OWN-WORLD: Near-white sheet tinted green-grey, centred, two inks, one aurora green reserved for whatever is live. One typeface, Recursive: proportional for prose, fixed-width for every figure. Hairline rules, 4px corners, no boxes around text.
+STORY: A stranger sees a small model on a cheap server being straight about what each answer costs, asks one thing, and watches the line tick.
+FIRST VIEWPORT: A centred column: 52px headline "A small model, hosted honestly.", one paragraph, the input on a 2px ink rule with Send at its right, six skills as ruled rows beneath; the status line across the bottom edge on the same container as the top bar, showing the machine's cores and memory as measured.
+FORM: Status Line, position 4 on the ordered grounded list; seed aa84745b.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+<!-- The frame, drawn with the HTML so the page is not a blank sheet while the
+     script loads: the top bar with its name and an empty status line. React
+     replaces all of it on its first render with the same frame, filled in.
+     The classes are the ones shell/TopBar.tsx gives its header and name. The
+     name is not a tab stop here: focus on it would be lost a moment later
+     when the real bar replaces it, and the first stop is the skip link. -->
+<div id="root">
+  <header class="flex items-center gap-5 min-w-0 border-b border-rule pl-[max(var(--inset),env(safe-area-inset-left))] pr-[max(var(--inset),env(safe-area-inset-right))] le-620:gap-4">
+    <a class="text-3 font-bold tracking-[-0.01em] no-underline" href="/" tabindex="-1">Aurora</a>
+  </header>
+  <!-- Read only where scripts are off. It is inside the sheet: as a child of
+       <body> it would be a fourth row of the page grid, under the status line. -->
+  <main><noscript><p class="mx-auto w-full max-w-col px-edge pt-8 text-3">Aurora needs JavaScript to run: the page streams its answers and measures them as they arrive.</p></noscript></main>
+  <footer class="status" aria-hidden="true"></footer>
+</div>
+<!-- The server replaces this element's contents with the first values the page
+     shows, so they are on screen without a request. Under the Vite dev server
+     it stays null and the page asks /api/bootstrap instead. -->
+<script type="application/json" id="bootstrap">null</script>
+</body>
+</html>

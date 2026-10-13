@@ -1,0 +1,60 @@
+/* Motion shared by every page: the keyframes, and the change of page.
+
+   Durations and curves are tokens (--dur-1 to --dur-4, --ease, --ease-exit).
+   Motion marks a change of state; nothing moves for decoration, and nothing
+   loops except a wait.
+
+   Reduced motion is not "no motion". A blanket rule that zeroes every
+   animation also flattens every transition, so hover, focus, disabled and
+   loading states change with a hard cut and the interface stops acknowledging
+   input. What is removed is looping decoration and travel across the screen;
+   colour and opacity still carry meaning and stay. So each thing that moves
+   says for itself what it does under reduced motion, next to the rule that
+   moves it, and removing the motion never removes the content. */
+
+@layer components {
+  /* An arrival: from just below, out of nothing. Written as a `from` only, so
+     the resting state is the element as it normally is and a failed animation
+     leaves the content in place. */
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      translate: 0 10px;
+    }
+  }
+
+  /* The staged reveal used by anything that starts transparent. It lives
+     here, not with one page: a missing @keyframes leaves such an element
+     invisible on whichever page forgot it. */
+  @keyframes rise {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      translate: 0 8px;
+    }
+  }
+
+  /* Moving between the three pages: the top bar and the status line are the
+     same thing on each, so they stay put (each carries a view-transition-name)
+     and only the sheet between them changes. A browser without view
+     transitions just changes page. */
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: var(--dur-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* The page must not animate the change of view. */
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
+    }
+  }
+}

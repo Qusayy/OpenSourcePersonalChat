@@ -1,0 +1,212 @@
+/* Text the markdown renderer wrote (lib/markdown.ts), and the two marks the
+   streaming renderer adds to it (lib/prose-stream.ts): the caret at the
+   writing position and the fade on words that have just arrived.
+
+   It reaches the page as HTML, not as components, so it cannot carry utility
+   classes and is styled from here. In Tailwind's components layer. */
+
+@layer components {
+  .prose {
+    overflow-wrap: anywhere;
+  }
+  .prose > :first-child {
+    margin-top: 0;
+  }
+  .prose > :last-child {
+    margin-bottom: 0;
+  }
+  /* A streaming answer is rendered as two containers — settled blocks and the
+   one still being written — so the margin resets have to reach through them. */
+  .prose > div > :first-child {
+    margin-top: 0;
+  }
+  .prose > div:last-child > :last-child {
+    margin-bottom: 0;
+  }
+  .prose p {
+    margin: 0 0 0.9em;
+  }
+  .prose h1,
+  .prose h2,
+  .prose h3 {
+    margin: 1.5em 0 0.4em;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+  .prose h1 {
+    font-size: var(--t-5);
+  }
+  .prose h2 {
+    font-size: var(--t-4);
+  }
+  .prose h3 {
+    font-size: var(--t-3);
+  }
+  .prose ul,
+  .prose ol {
+    margin: 0 0 0.9em;
+    padding-inline-start: 1.4em;
+  }
+  .prose li {
+    margin: 0.25em 0;
+  }
+  .prose li::marker {
+    color: var(--ink-2);
+  }
+  .prose blockquote {
+    margin: 0 0 0.9em;
+    padding-inline-start: var(--s-4);
+    border-inline-start: 1px solid var(--ink-2);
+    color: var(--ink-2);
+  }
+  .prose hr {
+    margin: 1.4em 0;
+    border: 0;
+    border-top: 1px solid var(--rule);
+  }
+  .prose code {
+    padding: 1px 4px;
+    border-radius: var(--r-1);
+    background: var(--sheet-2);
+    font-size: 0.94em;
+  }
+  .prose table {
+    width: 100%;
+    margin: 0 0 0.9em;
+    border-collapse: collapse;
+    font-size: var(--t-2);
+  }
+  .prose th,
+  .prose td {
+    padding: var(--s-2) var(--s-3) var(--s-2) 0;
+    border-bottom: 1px solid var(--rule);
+    text-align: start;
+  }
+  .prose th {
+    border-bottom-color: var(--ink-2);
+    font-weight: 600;
+  }
+
+  /* Preflight takes these three away from every element; generated text is
+   where they are wanted back. The values are the browser's own, which is
+   what this text was drawn with before. */
+  .prose ul {
+    list-style: disc;
+  }
+  .prose ol {
+    list-style: decimal;
+  }
+  .prose ul ul {
+    list-style-type: circle;
+  }
+  .prose ul ul ul {
+    list-style-type: square;
+  }
+  .prose h4 {
+    margin: 1.33em 0;
+    font-weight: bold;
+  }
+
+  /* Code is always left-to-right, whatever direction the answer around it runs. */
+  .codeblock {
+    margin: 0 0 0.9em;
+    border-radius: var(--r-1);
+    background: var(--sheet-2);
+    direction: ltr;
+    text-align: left;
+    overflow: hidden;
+  }
+  .codeblock header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--s-1) var(--s-2) var(--s-1) var(--s-4);
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink-2);
+    font-size: var(--t-1);
+  }
+  .codeblock pre {
+    margin: 0;
+    padding: var(--s-3) var(--s-4);
+    overflow-x: auto; /* the block scrolls, never the page */
+    font-size: var(--t-2);
+    line-height: 1.55;
+  }
+  .codeblock pre code {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+  }
+  .copy-btn {
+    padding: var(--s-1) var(--s-2);
+    border: 0;
+    border-radius: var(--r-1);
+    background: none;
+    color: var(--ink-2);
+    font-size: var(--t-1);
+    cursor: pointer;
+  }
+  .copy-btn:hover {
+    background: var(--sheet);
+    color: var(--ink);
+  }
+  /* "Copied" is said in ink: done is not the same as live. */
+  .copy-btn.ok {
+    color: var(--ink);
+  }
+
+  /* The writing position. It is the one thing in the thread that is live, so it
+   is the one thing in the thread that takes the live colour. */
+  .caret {
+    display: inline-block;
+    /* the same thin bar as the caret in the input above it */
+    width: 2px;
+    height: 1.1em;
+    margin-left: 1px;
+    vertical-align: -0.2em;
+    background: var(--live);
+    animation: caret 1s steps(2, start) infinite;
+  }
+  @keyframes caret {
+    50% {
+      opacity: 0.2;
+    }
+  }
+
+  /* Text that has just arrived (prose-stream.ts wraps it, and gives each stretch a
+   negative delay so a rebuild of the block does not restart it). Opacity
+   only: nothing here may move the line it is in. */
+  .fresh {
+    /* A gentler curve than the entrances use: with theirs the fade would be all
+     but over in the first 100ms, and the text arrives in 100ms steps. */
+    animation: ink-in 280ms cubic-bezier(0.5, 1, 0.89, 1) both;
+  }
+  @keyframes ink-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  /* A code block's Copy button is written by the markdown renderer, so it
+     cannot carry a utility class; on a touch screen it is a full-size target
+     like every other control. */
+  @media (pointer: coarse) {
+    .copy-btn {
+      min-height: 44px;
+      padding-inline: var(--s-3);
+    }
+  }
+
+  /* Reduced motion: the caret stays lit and stops blinking; new words are
+   simply there. */
+  @media (prefers-reduced-motion: reduce) {
+    .caret {
+      animation: none !important;
+    }
+    .fresh {
+      animation: none !important;
+      opacity: 1 !important;
+    }
+  }
+}

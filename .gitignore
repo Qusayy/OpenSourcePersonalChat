@@ -1,0 +1,45 @@
+# virtualenvs
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# local config — never commit the real one
+.env
+PRODUCT.md
+
+# runtime data: conversations, benchmark history
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# model weights (~1 GB each) — see README for the download command
+models/*
+!models/.gitkeep
+
+# output
+bench.json
+*.log
+
+# design tooling state: hook cache, review screenshots
+.impeccable/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# front-end: installed packages, build and test output. The built files are
+# published on the `release` branch, not kept here.
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/.e2e/

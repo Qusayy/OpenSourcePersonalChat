@@ -314,6 +314,149 @@ test.describe("against a stream the test controls", () => {
     await expect(route).toHaveText("Model's choice2.14s");
   });
 
+  test("each choice of a run is a row of its own in the route line", async ({ page }) => {
+    const choosing = (id: string, pass: number) =>
+      push(page, "step", {
+        id,
+        kind: "route",
+        status: "running",
+        label: "Choosing a tool",
+        pass,
+      });
+    const lookedUp = async (index: number, place: string) => {
+      const id = `tool-${index}`;
+      await push(page, "step", {
+        id,
+        kind: "tool",
+        status: "running",
+        label: "Weather",
+        tool: "weather",
+      });
+      await push(page, "step", {
+        id,
+        kind: "tool",
+        status: "ok",
+        label: "Weather",
+        tool: "weather",
+        ms: 400,
+      });
+      await push(page, "card", {
+        step_id: id,
+        card: "weather",
+        tool: "weather",
+        data: { place, temperature: 12 },
+      });
+    };
+    await ask(page, "is Paris or Lisbon warmer right now?");
+    await push(page, "conversation", CONVERSATION);
+    const route = answerOf(page).locator('[data-part="route"]');
+
+    await choosing("route", 1);
+    await expect(route).toHaveText("Choosing a toolrunning");
+    await push(page, "step", {
+      id: "route",
+      kind: "route",
+      status: "ok",
+      label: "Weather",
+      detail: "model",
+      tool: "weather",
+      ms: 3100,
+      pass: 1,
+    });
+    await lookedUp(0, "Paris");
+
+    // The second choice is being made: the first stays, a second row runs.
+    await choosing("route-2", 2);
+    await expect(route).toHaveText("Model's choice3.10sChoosing a toolrunning");
+    await push(page, "step", {
+      id: "route-2",
+      kind: "route",
+      status: "ok",
+      label: "Weather",
+      detail: "model",
+      tool: "weather",
+      ms: 2600,
+      pass: 2,
+    });
+    await lookedUp(1, "Lisbon");
+
+    await choosing("route-3", 3);
+    await push(page, "step", {
+      id: "route-3",
+      kind: "route",
+      status: "ok",
+      label: "No tool needed",
+      detail: "model",
+      tool: null,
+      ms: 2200,
+      pass: 3,
+    });
+    // Three passes were paid for, and each is there with what it cost.
+    await expect(route).toHaveText("Model's choice3.10sModel's choice2.60sNo tool needed2.20s");
+    await expect(route.locator("[data-id]")).toHaveCount(3);
+    await expect(answerOf(page).locator('[data-part="cards"] > *')).toHaveCount(2);
+
+    await push(page, "start", START);
+    await push(page, "token", { t: "Lisbon.", ttft_ms: 86.4 });
+    await push(page, "done", { ...DONE, tool_calls: 2 });
+    // The last event of every stream. The page has no use for it yet.
+    await push(page, "run", {
+      id: "req-1",
+      outcome: "answered",
+      steps: 6,
+      passes: 4,
+      total_ms: 9800,
+      waiting_ms: 0,
+      reading_ms: 5200,
+      writing_ms: 3800,
+      tools_ms: 800,
+      wall_ms: 9850,
+    });
+    await end(page);
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    await expect(route).toHaveText("Model's choice3.10sModel's choice2.60sNo tool needed2.20s");
+    await expect(answerOf(page).locator(".prose")).toHaveText("Lisbon.");
+    await expect(notice(page)).toHaveCount(0);
+  });
+
+  test("a run that waits before its first choice stops saying so once it chooses", async ({
+    page,
+  }) => {
+    await ask(page, "is Paris or Lisbon warmer right now?");
+    await push(page, "conversation", CONVERSATION);
+    // It waits for the engine once, for all its passes, before its first step.
+    await push(page, "queue", { position: 1, first: true });
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "queued");
+    await expect(notice(page)).toHaveCount(1);
+
+    await push(page, "step", {
+      id: "route",
+      kind: "route",
+      status: "running",
+      label: "Choosing a tool",
+      pass: 1,
+    });
+    await expect(notice(page)).toHaveCount(0);
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "working");
+    await expect(answerOf(page).locator('[data-part="route"]')).toHaveText(
+      "Choosing a toolrunning",
+    );
+
+    await push(page, "step", {
+      id: "route",
+      kind: "route",
+      status: "ok",
+      label: "No tool needed",
+      detail: "model",
+      tool: null,
+      ms: 2200,
+      pass: 1,
+    });
+    await answer(page, "Lisbon, probably.");
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    await expect(notice(page)).toHaveCount(0);
+  });
+
   test("a failed tool is announced", async ({ page }) => {
     await ask(page, "what is the weather in Atlantis?");
     await push(page, "conversation", CONVERSATION);

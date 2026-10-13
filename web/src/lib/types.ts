@@ -200,6 +200,9 @@ export interface StepEvent {
    *  tokens it read and the tokens it wrote. Null if the pass never ran. */
   tokens_in?: number | null;
   tokens_out?: number | null;
+  /** Which choice of the run this is, counting from one, when a run may make
+   *  several: "route" is the first, "route-2" the second, and so on. */
+  pass?: number;
 }
 
 /** The whole run in a line, sent last, after `done` or `error`. */
@@ -214,6 +217,12 @@ export interface RunEvent {
   passes: number;
   /** What the steps cost, added up. */
   total_ms: number;
+  /** Where that went. The four add up to `total_ms`: waiting for the engine,
+   *  the model reading, the model writing, and tools. */
+  waiting_ms: number;
+  reading_ms: number;
+  writing_ms: number;
+  tools_ms: number;
   /** First step to last by the clock; a little more than `total_ms`. */
   wall_ms: number | null;
 }

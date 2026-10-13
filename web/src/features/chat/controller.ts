@@ -301,6 +301,15 @@ export async function send(text: string): Promise<void> {
             livePhase("queued", ahead);
           }
         } else if (event === "step") {
+          // A run that keeps the engine for all its passes waits for it once,
+          // before its first step, and not before `start`. A step arriving
+          // while the queue notice is up means that wait is over.
+          if (queueKey !== null) {
+            dismiss(queueKey);
+            queueKey = null;
+            queuedAs = null;
+            livePhase("working");
+          }
           stepBot(bot.key, data);
           if (data.kind === "tool") stepMeta.set(data.id, { label: data.label, ms: data.ms });
           if (data.status === "failed") {

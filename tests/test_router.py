@@ -15,6 +15,7 @@ try:
     from app.llm import Completion
     from app.router import (
         ROUTE_SYSTEM,
+        ask_reply,
         decision_grammar,
         decision_limit,
         decision_messages,
@@ -159,13 +160,13 @@ class DecisionPromptTests(unittest.TestCase):
 
     def test_it_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
         tools = available()
-        self.assertEqual(decision_limit(tools), decision_ceiling(tools, ask=False))
+        self.assertEqual(decision_limit(tools), decision_ceiling(tools))
         # A setting above that is honoured; one below it is not, because a
         # reply cut off before it closes is not a reply.
         support.with_settings(self, route_max_tokens=5000)
         self.assertEqual(decision_limit(tools), 5000)
         support.with_settings(self, route_max_tokens=1)
-        self.assertEqual(decision_limit(tools), decision_ceiling(tools, ask=False))
+        self.assertEqual(decision_limit(tools), decision_ceiling(tools))
 
     def test_with_outgoing_requests_off_only_local_tools_are_offered(self) -> None:
         support.with_settings(self, allow_outbound=False)
@@ -175,8 +176,44 @@ class DecisionPromptTests(unittest.TestCase):
         self.assertNotIn("- weather(", menu)
         self.assertNotIn("t-weather", decision_grammar(tools))
 
-    def test_asking_the_user_is_not_on_offer(self) -> None:
-        self.assertNotIn("t-ask", decision_grammar(available()))
+    def test_asking_the_user_is_on_offer_and_the_prompt_says_when(self) -> None:
+        self.assertIn("t-ask", decision_grammar(available()))
+        self.assertEqual(
+            ROUTE_SYSTEM,
+            "You choose a tool for the user's message. Reply with one JSON object only.\n"
+            "Tools:\n{menu}\n"
+            'If no tool is needed, reply {{"tool": "none"}}.\n'
+            "If a tool is needed and the message leaves out something it must be given, "
+            'reply {{"tool": "ask", "args": {{"question": "..."}}}} with one short question.',
+        )
+
+    def test_a_reply_to_a_question_is_read_with_the_exchange_it_answers(self) -> None:
+        tools = available()
+        messages = decision_messages(
+            "Lisbon", tools, asked=("what's the weather like", "Which city do you mean?")
+        )
+        self.assertEqual(
+            messages,
+            [
+                {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
+                {"role": "user", "content": "what's the weather like"},
+                {"role": "assistant",
+                 "content": '{"tool": "ask", "args": {"question": "Which city do you mean?"}}'},
+                {"role": "user", "content": "Lisbon"},
+            ],
+        )
+
+    def test_the_question_is_written_back_as_the_grammar_has_the_model_write_it(self) -> None:
+        from tests.gbnf import Grammar
+
+        grammar = Grammar(decision_grammar(available()))
+        for question in ("Which city do you mean?", 'The "old" town or the new?', "¿Qué ciudad?"):
+            with self.subTest(question=question):
+                self.assertTrue(grammar.accepts(ask_reply(question)))
+
+    def test_the_earlier_exchange_is_cut_like_any_message(self) -> None:
+        messages = decision_messages("Lisbon", available(), asked=("x" * 900, "Which city?"))
+        self.assertEqual(len(messages[1]["content"]), 600)
 
 
 class RepairPromptTests(unittest.TestCase):
@@ -224,6 +261,22 @@ class ParseActionTests(unittest.TestCase):
     def test_none_is_the_end_of_choosing(self) -> None:
         action = parse_action(said('{"tool": "none"}'))
         self.assertEqual((action.kind, action.call, action.note), ("final", None, None))
+
+    def test_a_question_is_a_question_to_put_to_the_user(self) -> None:
+        raw = '{"tool": "ask", "args": {"question": " Which city do you mean? "}}'
+        action = parse_action(said(raw))
+        self.assertEqual(
+            (action.kind, action.question, action.call, action.raw, action.note),
+            ("ask", "Which city do you mean?", None, raw, None),
+        )
+
+    def test_asking_nothing_is_not_asking(self) -> None:
+        for raw in ('{"tool": "ask", "args": {"question": "  "}}', '{"tool": "ask", "args": {}}',
+                    '{"tool": "ask"}', '{"tool": "ask", "args": {"question": 7}}'):
+            with self.subTest(raw=raw):
+                action = parse_action(said(raw))
+                self.assertEqual((action.kind, action.question), ("final", None))
+                self.assertEqual(action.note, "asked without a question")
 
     def test_a_tool_that_does_not_exist_is_no_call_and_is_noted(self) -> None:
         action = parse_action(said('{"tool": "telescope", "args": {}}'))

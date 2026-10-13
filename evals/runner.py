@@ -100,11 +100,14 @@ async def run_task(task: Task, *, engine: Engine, seed: int | None = None) -> Ou
     with fixtures.recorded(task.tools):
         for text in task.turns:
             trace = agent.Trace()
+            # As the site works it out from what it stored of the last message.
+            follows_ask = bool(turns) and turns[-1].trace.outcome == "asked"
             events = [
                 event
                 async for event in agent.run(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
+                    follows_ask=follows_ask,
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))

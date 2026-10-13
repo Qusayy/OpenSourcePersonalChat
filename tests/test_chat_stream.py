@@ -782,5 +782,64 @@ class StoredTraceTests(ChatCase):
         self.assertEqual(len(self.conversation(stream)["messages"]), 2)
 
 
+class AskTests(ChatCase):
+    """The model asks the visitor for what the message left out."""
+
+    QUESTION = {"tool": "ask", "args": {"question": "Which city do you mean?"}}
+
+    def test_the_question_is_the_reply_and_is_stored_as_one(self) -> None:
+        self.use_engine(PlayedEngine(decision=self.QUESTION))
+        stream = self.chat("what's the weather like", persona="agent")
+        self.assertEqual(
+            shape(stream),
+            ["conversation", "step:route:running", "step:route:ok", "token", "done", "run"],
+        )
+        self.assertEqual(only(stream, "token")[0]["t"], "Which city do you mean?")
+        self.assertIs(only(stream, "done")[0]["asked"], True)
+        self.assertEqual(self.engine.answer_prompts, [])  # no answer pass was made
+        asked, answered = self.conversation(stream)["messages"]
+        self.assertEqual(answered["role"], "assistant")
+        self.assertEqual(answered["content"], "Which city do you mean?")
+        self.assertIsNone(answered["gen_tps"])
+
+    def test_a_question_is_not_a_sample_of_how_fast_answers_are_written(self) -> None:
+        self.use_engine(PlayedEngine(decision=self.QUESTION))
+        self.chat("what's the weather like", persona="agent")
+        self.assertEqual(db.recent_runs("chat"), [])
+        self.assertEqual(db.chat_stats()["n"], 0)
+
+    def test_the_visitors_reply_is_routed_with_the_question_they_were_asked(self) -> None:
+        self.use_engine(PlayedEngine(decision=self.QUESTION))
+        first = self.chat("what's the weather like", persona="agent")
+        cid = only(first, "conversation")[0]["id"]
+
+        self.use_engine(PlayedEngine(decision={"tool": "weather", "args": {"location": "Lisbon"}}))
+        looked_up = support.played_tools(self, {"weather": WEATHER})
+        self.chat("Lisbon", persona="agent", conversation_id=cid)
+        self.assertEqual(
+            [m["content"] for m in self.engine.route_prompts[0][1:]],
+            ["what's the weather like",
+             '{"tool": "ask", "args": {"question": "Which city do you mean?"}}',
+             "Lisbon"],
+        )
+        self.assertEqual(looked_up["weather"], [{"location": "Lisbon"}])
+
+    def test_a_message_after_an_ordinary_answer_is_routed_alone(self) -> None:
+        first = self.chat("Suggest a name for my boat", persona="agent")
+        cid = only(first, "conversation")[0]["id"]
+        self.chat("Something shorter", persona="agent", conversation_id=cid)
+        self.assertEqual(len(self.engine.route_prompts[1]), 2)
+
+    def test_only_the_message_straight_after_the_question_is_read_with_it(self) -> None:
+        self.use_engine(PlayedEngine(decision=self.QUESTION))
+        first = self.chat("what's the weather like", persona="agent")
+        cid = only(first, "conversation")[0]["id"]
+        self.use_engine(PlayedEngine())
+        self.chat("Lisbon", persona="agent", conversation_id=cid)
+        self.chat("And tomorrow", persona="agent", conversation_id=cid)
+        self.assertEqual(len(self.engine.route_prompts[0]), 4)
+        self.assertEqual(len(self.engine.route_prompts[1]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

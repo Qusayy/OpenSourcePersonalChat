@@ -796,5 +796,119 @@ class FailureTests(AgentCase):
         )
 
 
+ASK = '{"tool": "ask", "args": {"question": "Which city do you mean?"}}'
+LISBON = '{"tool": "weather", "args": {"location": "Lisbon"}}'
+
+
+class AskTests(AgentCase):
+    """The message leaves out something a tool must have. The model may ask
+    for it, once, instead of guessing."""
+
+    async def test_a_question_is_the_reply_and_nothing_more_is_written(self) -> None:
+        engine = self.scripted(ASK)
+        trace = agent.Trace()
+        stream = await collect(self.run_message("what's the weather like", engine, trace=trace))
+        self.assertEqual(
+            shape(stream), ["step:route:running", "step:route:ok", "token", "done", "run"]
+        )
+        self.assertEqual(only(stream, "token"), [{
+            "t": "Which city do you mean?", "ttft_ms": trace.steps[0].first_token_ms,
+        }])
+        self.assertEqual(len(engine.passes), 1)  # the pass that asked wrote the question
+        self.assertEqual(trace.answer, "Which city do you mean?")
+        self.assertEqual(trace.outcome, "asked")
+        self.assertEqual([s.kind for s in trace.steps], ["route"])
+        self.assertEqual(stream[-1][1]["outcome"], "asked")
+        self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (1, 1))
+        self.assertTrue(engine.free)
+
+    async def test_the_question_ends_in_done_marked_as_asked_with_that_passes_figures(self) -> None:
+        engine = self.scripted(ASK)
+        trace = agent.Trace()
+        stream = await collect(self.run_message("what's the weather like", engine, trace=trace))
+        done = only(stream, "done")[0]
+        asked = trace.steps[0]
+        self.assertEqual(
+            set(done),
+            {"cancelled", "asked", "ttft_ms", "queue_wait_ms", "prompt_tokens",
+             "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb", "tool_calls"},
+        )
+        self.assertIs(done["asked"], True)
+        self.assertIs(done["cancelled"], False)
+        self.assertEqual(done["prompt_tokens"], asked.prompt_tokens)
+        self.assertEqual(done["completion_tokens"], asked.output_tokens)
+        self.assertEqual(done["tool_calls"], 0)
+        # It wrote JSON under a grammar: not a speed to report as an answer's.
+        self.assertIsNone(done["gen_tps"])
+        self.assertIsNone(done["prefill_tps"])
+
+    async def test_the_step_on_the_page_says_a_question_is_coming(self) -> None:
+        engine = self.scripted(ASK)
+        stream = await collect(self.run_message("what's the weather like", engine))
+        routed = support.step(stream, "route", "ok")
+        self.assertEqual((routed["label"], routed["detail"], routed["tool"]),
+                         ("Asking you first", "model", None))
+
+    async def test_an_ordinary_answer_is_not_marked_as_asked(self) -> None:
+        engine = self.scripted(NONE, "Wren.")
+        stream = await collect(self.run_message("Suggest a name for my boat", engine))
+        self.assertNotIn("asked", only(stream, "done")[0])
+
+    async def test_the_reply_to_a_question_is_routed_with_the_question_in_view(self) -> None:
+        engine = self.scripted(LISBON, "Light rain; take an umbrella.")
+        asked = support.played_tools(self, {"weather": PARIS})
+        history = [{"role": "user", "content": "what's the weather like"},
+                   {"role": "assistant", "content": "Which city do you mean?"}]
+        stream = await collect(agent.run(
+            "Lisbon", persona=get_persona("agent"), history=history, engine=engine,
+            follows_ask=True,
+        ))
+        self.assertEqual(
+            [m["content"] for m in engine.passes[0].messages[1:]],
+            ["what's the weather like", ASK, "Lisbon"],
+        )
+        self.assertEqual(asked["weather"], [{"location": "Lisbon"}])
+        self.assertEqual(only(stream, "done")[0]["tool_calls"], 1)
+
+    async def test_a_message_that_answers_no_question_is_routed_alone(self) -> None:
+        history = [{"role": "user", "content": "what's the weather like"},
+                   {"role": "assistant", "content": "Which city do you mean?"}]
+        for follows_ask, turns in ((False, history), (True, []), (True, history[:1]),
+                                   (True, list(reversed(history)))):
+            with self.subTest(follows_ask=follows_ask, turns=len(turns)):
+                engine = self.scripted(NONE, "Wren.")
+                await collect(agent.run(
+                    "Lisbon", persona=get_persona("agent"), history=turns, engine=engine,
+                    follows_ask=follows_ask,
+                ))
+                self.assertEqual(len(engine.passes[0].messages), 2)
+
+    async def test_a_question_with_nothing_in_it_is_not_asked_and_the_run_answers(self) -> None:
+        engine = self.scripted('{"tool": "ask", "args": {"question": " "}}', "It depends where.")
+        trace = agent.Trace()
+        stream = await collect(self.run_message("what's the weather like", engine, trace=trace))
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:ok", *ANSWER])
+        self.assertEqual((trace.steps[0].ok, trace.steps[0].error),
+                         (False, "asked without a question"))
+        self.assertEqual(trace.outcome, "answered")
+
+    async def test_stopped_while_deciding_to_ask_nothing_is_asked(self) -> None:
+        engine = self.scripted(ASK, gated=True)
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "what's the weather like", persona=get_persona("agent"), history=[], trace=trace,
+            engine=engine, request_id="run",
+        )))
+        await engine.entered(1)
+        engine.cancel("run")
+        engine.release()
+        stream = await reading
+        self.assertEqual(
+            shape(stream), ["step:route:running", "step:route:stopped", "done", "run"]
+        )
+        self.assertEqual(only(stream, "token"), [])
+        self.assertEqual(trace.outcome, "stopped")
+
+
 if __name__ == "__main__":
     unittest.main()

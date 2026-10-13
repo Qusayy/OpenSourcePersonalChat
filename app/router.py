@@ -17,6 +17,7 @@ hardware is the difference between an instant answer and a five-second wait.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -221,31 +222,39 @@ def heuristic(text: str) -> ToolCall | None:
 ROUTE_SYSTEM = (
     "You choose a tool for the user's message. Reply with one JSON object only.\n"
     "Tools:\n{menu}\n"
-    'If no tool is needed, reply {{"tool": "none"}}.'
+    'If no tool is needed, reply {{"tool": "none"}}.\n'
+    "If a tool is needed and the message leaves out something it must be given, "
+    'reply {{"tool": "ask", "args": {{"question": "..."}}}} with one short question.'
 )
 
 # How much of a message the routing pass reads. A choice of tool is made from
 # the first lines; a pasted document after them only costs seconds to read.
 ROUTE_TEXT = 600
 
-# Asking the user a question is something the grammar can say and nothing can
-# act on yet, so it is not offered.
-ASK = False
+# Whether the model is offered the choice of asking the user a question.
+ASK = True
 
 
 @dataclass
 class Action:
     """What the model chose to do next, read from its reply.
 
-    ``tool`` is a call to make. ``final`` is "write the answer now": the model
-    said no tool is needed, or said something that could not be used, in which
-    case ``note`` says what was wrong with it.
+    ``tool`` is a call to make. ``ask`` is a question to put to the user in
+    place of an answer. ``final`` is "write the answer now": the model said no
+    tool is needed, or said something that could not be used, in which case
+    ``note`` says what was wrong with it.
     """
 
-    kind: str  # tool | final
+    kind: str  # tool | ask | final
     call: ToolCall | None = None
+    question: str | None = None
     raw: str = ""
     note: str | None = None
+
+
+def ask_reply(question: str) -> str:
+    """A question, as the grammar has the model write one."""
+    return json.dumps({"tool": "ask", "args": {"question": question}}, ensure_ascii=False)
 
 
 def free_route(text: str, *, tools_enabled: bool) -> tuple[ToolCall | None, str | None]:
@@ -265,13 +274,28 @@ def free_route(text: str, *, tools_enabled: bool) -> tuple[ToolCall | None, str 
     return None, None
 
 
-def decision_messages(text: str, tools: list) -> list[dict]:
+def decision_messages(
+    text: str, tools: list, asked: tuple[str, str] | None = None
+) -> list[dict]:
     """What the model reads when it is asked to choose: the menu and the
-    start of the message, and nothing of the conversation before it."""
-    return [
-        {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
-        {"role": "user", "content": text[:ROUTE_TEXT]},
-    ]
+    start of the message, and nothing of the conversation before it.
+
+    With one exception. ``asked`` is ``(what the user had sent, the question
+    they were asked back)``, given when the last thing said to them was a
+    question the model itself chose to ask. This message is then the answer to
+    that question and means nothing alone: "Lisbon" is a place to look the
+    weather up for only beside "what's the weather like". So that one exchange
+    is read first, with the question as the model's own earlier reply.
+    """
+    messages = [{"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))}]
+    if asked is not None:
+        earlier, question = asked
+        messages += [
+            {"role": "user", "content": earlier[:ROUTE_TEXT]},
+            {"role": "assistant", "content": ask_reply(question)},
+        ]
+    messages.append({"role": "user", "content": text[:ROUTE_TEXT]})
+    return messages
 
 
 def decision_grammar(tools: list) -> str:
@@ -322,8 +346,13 @@ def parse_action(said) -> Action:
     name = parsed.get("tool")
     if name in (None, "none"):
         return Action("final", raw=said.raw)
+    args = parsed.get("args")
+    if name == "ask" and ASK:
+        question = args.get("question") if isinstance(args, dict) else None
+        if isinstance(question, str) and question.strip():
+            return Action("ask", question=question.strip(), raw=said.raw)
+        return Action("final", raw=said.raw, note="asked without a question")
     if name not in REGISTRY:
         return Action("final", raw=said.raw, note=f"model picked an unknown tool: {name}")
-    args = parsed.get("args")
     call = ToolCall(name, args if isinstance(args, dict) else {}, via="model", ms=said.ms, raw=said.raw)
     return Action("tool", call=call, raw=said.raw)

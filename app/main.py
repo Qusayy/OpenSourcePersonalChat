@@ -184,6 +184,8 @@ async def api_chat(payload: ChatRequest):
         created = True
 
     history = db.conversation_messages(cid)
+    # Whether this message answers a question the model put to the visitor.
+    follows_ask = db.last_message_asked(cid)
     db.add_message(cid, "user", user_text)
     db.touch_conversation(cid, persona.id)
 
@@ -211,7 +213,7 @@ async def api_chat(payload: ChatRequest):
             keeper = _Keeper(cid, persona.id, trace)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
-                engine=engine, request_id=run_id,
+                engine=engine, request_id=run_id, follows_ask=follows_ask,
             )
             try:
                 # Closed with this response, not whenever it is collected: a
@@ -283,6 +285,11 @@ class _Keeper:
         db.attach_tool_calls(mid, self.call_ids)
         db.attach_steps(mid, self.trace.run_id)
         db.touch_conversation(self.cid)
+        if usage.get("asked"):
+            # A question put back to the visitor was written by a routing
+            # pass. It is a message, and it is not a sample of how fast this
+            # machine writes answers.
+            return
         db.add_run(
             "chat",
             label=self.persona_id,

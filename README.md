@@ -294,7 +294,7 @@ Eight tools, no API keys anywhere:
 ### How a 1.5B model is made to route reliably
 
 It isn't, on its own — asked politely for JSON it produces trailing commas,
-prose preambles and invented keys. Four layers, cheapest first:
+prose preambles and invented keys. Five layers, cheapest first:
 
 1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. Free
    and certain. Press `/` in the composer for the palette.
@@ -304,12 +304,29 @@ prose preambles and invented keys. Four layers, cheapest first:
 3. **Grammar-constrained routing** — only for the *Agent* persona, and only
    when the first two miss. A short pass runs under a GBNF grammar generated
    from the tool registry, so malformed output is not unlikely, it is
-   unrepresentable.
-4. **Failure is visible** — a tool that errors or times out renders as a failed
-   step in the timeline and the model answers without it.
+   unrepresentable. The grammar holds what goes into a call as well as its
+   shape. Text has a ceiling, so a reply always closes instead of being cut
+   off mid-string by the token limit. An argument with a known set of values
+   can only be given one of them: the model cannot invent a currency, and a
+   unit is its own name or a word for it. An optional argument may be given
+   or left out. And where the message leaves out something a tool must have,
+   the pass may reply with one short question for the user instead of
+   guessing; their reply is then routed with that question in view.
+4. **One second try** — a call the tool still cannot take is sent back to the
+   model once, with what was wrong, stated as fact. After that it is not
+   argued with.
+5. **Failure is visible** — a tool that errors or times out renders as a failed
+   step in the timeline. The model is told too: what happened, not the advice
+   the person is given beside it, and it is asked to say plainly what could
+   not be looked up rather than answer from memory.
 
 A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
-for it. The per-step timings are printed in the UI rather than hidden.
+for it. It is announced on the page at the moment it is made and at no other
+time, and the per-step timings are printed in the UI rather than hidden.
+
+The grammar cannot be compiled without llama.cpp, so where the tests run it is
+read instead: `tests/gbnf.py` understands the subset of GBNF the generator
+emits and says what a grammar accepts and what it refuses.
 
 ### Safety
 

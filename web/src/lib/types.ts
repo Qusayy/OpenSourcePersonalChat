@@ -206,7 +206,8 @@ export interface StepEvent {
 export interface RunEvent {
   /** The run's name: the `request_id` it was announced under. */
   id: string;
-  outcome: "answered" | "stopped" | "failed";
+  /** "asked": the reply was a question put back to the user. */
+  outcome: "answered" | "asked" | "stopped" | "failed";
   /** Everything it did: routing, each tool, the answer. */
   steps: number;
   /** How many of those were passes through the model. */
@@ -231,6 +232,9 @@ export interface DoneEvent {
   total_ms: number | null;
   rss_mb: number | null;
   tool_calls: number;
+  /** Set when the reply is a question the model put back to the user in place
+   *  of an answer. The figures are then those of the pass that chose to ask. */
+  asked?: boolean;
 }
 
 /** Every event of the chat stream, by name. A type, not an interface, so it

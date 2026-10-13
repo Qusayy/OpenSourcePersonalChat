@@ -101,7 +101,8 @@ class Trace:
     # The prompt that pass was given, as it was sent: after the tool results
     # were folded in and after any trimming. None if no answer was begun.
     prompt: list[dict] | None = None
-    # How it ended: answered | stopped | failed. None while it is running.
+    # How it ended: answered | asked | stopped | failed. None while it is
+    # running. "asked" is a question put to the user in place of an answer.
     outcome: str | None = None
     # The run's own stopwatch, first stage to last. It is a little more than
     # the steps add up to: the difference is the time between them.
@@ -158,6 +159,7 @@ def run(
     tools_enabled: bool | None = None,
     request_id: str | None = None,
     seed: int | None = None,
+    follows_ask: bool = False,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -170,6 +172,10 @@ def run(
 
     ``seed`` is given to every pass of the run, so that the same message
     against the same model gives the same run. The site leaves it unset.
+
+    ``follows_ask`` says the last thing in ``history`` is a question the model
+    chose to ask the user. This message is then their answer to it, and is
+    routed with that question in view.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -188,6 +194,7 @@ def run(
         tools_enabled=settings.tools_enabled if tools_enabled is None else tools_enabled,
         request_id=trace.run_id,
         seed=seed,
+        follows_ask=follows_ask,
     ).go()
 
 
@@ -203,6 +210,11 @@ class _Run:
     tools_enabled: bool
     request_id: str
     seed: int | None = None
+    follows_ask: bool = False
+    # A question the model chose to ask in place of an answer, and the pass
+    # that wrote it.
+    question: str | None = None
+    asked_by: Completion | None = None
     # The calls this message was routed to, and the line each successful one
     # gave back for the model to read.
     calls: list[ToolCall] = field(default_factory=list)
@@ -236,6 +248,10 @@ class _Run:
     async def _stages(self) -> AsyncIterator[Event]:
         async for event in self._route():
             yield event
+        if self.question is not None and not self.stop.is_set():
+            for event in self._ask():
+                yield event
+            return
         for index, call in enumerate(self.calls):
             if self.stop.is_set():
                 break
@@ -247,6 +263,36 @@ class _Run:
         async with aclosing(self._answer(self._prompt())) as events:
             async for event in events:
                 yield event
+
+    def _ask(self) -> list[Event]:
+        """How a run ends when the model asked a question instead of choosing.
+
+        The question is the reply. It was written by the pass that chose to
+        ask, so nothing more is generated: it is sent whole, with that pass's
+        own figures, and no answer pass is made.
+        """
+        said = self.asked_by
+        self.trace.outcome = "asked"
+        self.trace.answer = self.question
+        self.trace.usage = {
+            "cancelled": False,
+            "asked": True,
+            "ttft_ms": said.ttft_ms,
+            "queue_wait_ms": said.queue_wait_ms,
+            "prompt_tokens": said.prompt_tokens,
+            "completion_tokens": said.completion_tokens or 0,
+            # The pass wrote JSON under a grammar. Its speed is not the speed
+            # of an answer, and is not passed off as one.
+            "prefill_tps": None,
+            "gen_tps": None,
+            "total_ms": said.total_ms,
+            "rss_mb": None,
+            "tool_calls": 0,
+        }
+        token = {"t": self.question}
+        if said.ttft_ms is not None:
+            token["ttft_ms"] = said.ttft_ms
+        return [("token", token), ("done", self.trace.usage)]
 
     def _stopped(self) -> Event:
         """How a run ends when it was stopped before any answer was begun.
@@ -322,7 +368,11 @@ class _Run:
             return
         if action.kind == "tool":
             self.calls = [action.call]
+        elif action.kind == "ask":
+            self.question, self.asked_by = action.question, passes[-1]
         closing = self._routed(action.call, "model", ms=ms)
+        if action.kind == "ask":
+            closing["label"] = "Asking you first"
         # The choice cost passes, and a pass is counted in tokens.
         closing["tokens_in"] = _total(said.prompt_tokens for said in passes)
         closing["tokens_out"] = _total(said.completion_tokens for said in passes)
@@ -351,7 +401,7 @@ class _Run:
         second time. It is handed to the dispatcher, which refuses it where the
         visitor can see.
         """
-        messages = decision_messages(self.message, tools)
+        messages = decision_messages(self.message, tools, self._asked())
         action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
         passes = [said]
         if action.kind != "tool" or self.stop.is_set():
@@ -373,6 +423,16 @@ class _Run:
                 self.trace.steps[-1].ok = False
                 self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
         return action, [*passes, said]
+
+    def _asked(self) -> tuple[str, str] | None:
+        """The exchange this message answers, if it answers a question the
+        model asked: what the user had sent, and what they were asked back."""
+        if not self.follows_ask or len(self.history) < 2:
+            return None
+        sent, question = self.history[-2], self.history[-1]
+        if sent["role"] != "user" or question["role"] != "assistant":
+            return None
+        return sent["content"], question["content"]
 
     def _refusal(self, call: ToolCall) -> Rejection | None:
         """Why a call the model chose cannot be made as it stands, if it cannot."""

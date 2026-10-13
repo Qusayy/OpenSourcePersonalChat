@@ -138,5 +138,59 @@ class StepStorageTests(unittest.TestCase):
         self.assertIs(db.run_steps("mock")[0]["mock"], True)
 
 
+class LastMessageAskedTests(unittest.TestCase):
+    """Whether the last thing said was a question put to the visitor."""
+
+    ASK = '{"tool": "ask", "args": {"question": "Which city?"}}'
+
+    def setUp(self) -> None:
+        self.settings = support.temp_database(self)
+        self.cid = db.create_conversation("agent", "what is the weather like")
+        db.add_message(self.cid, "user", "what is the weather like")
+
+    def reply(self, text: str, *steps: tuple[str, str | None]) -> str:
+        mid = db.add_message(self.cid, "assistant", text)
+        for idx, (kind, output) in enumerate(steps):
+            db.add_step(f"run-{mid}", self.cid, idx, kind, output=output)
+        db.attach_steps(mid, f"run-{mid}")
+        return mid
+
+    def test_a_question_the_model_chose_to_ask_is_one(self) -> None:
+        self.reply("Which city?", ("route", self.ASK))
+        self.assertIs(db.last_message_asked(self.cid), True)
+
+    def test_a_question_asked_on_the_second_try_is_one_too(self) -> None:
+        self.reply("Which city?", ("route", '{"tool": "weather", "args": {}}'), ("repair", self.ASK))
+        self.assertIs(db.last_message_asked(self.cid), True)
+
+    def test_an_answer_is_not_even_if_it_ends_in_a_question_mark(self) -> None:
+        self.reply("Lisbon or Porto?", ("route", '{"tool": "none"}'), ("answer", None))
+        self.assertIs(db.last_message_asked(self.cid), False)
+
+    def test_an_answer_that_used_no_routing_is_not(self) -> None:
+        self.reply("Fine.", ("answer", None))
+        self.assertIs(db.last_message_asked(self.cid), False)
+
+    def test_it_is_the_last_message_that_counts(self) -> None:
+        self.reply("Which city?", ("route", self.ASK))
+        db.add_message(self.cid, "user", "Lisbon")
+        self.assertIs(db.last_message_asked(self.cid), False)
+        self.reply("Light rain.", ("route", '{"tool": "weather", "args": {}}'), ("answer", None))
+        self.assertIs(db.last_message_asked(self.cid), False)
+
+    def test_a_conversation_with_nothing_said_back_has_asked_nothing(self) -> None:
+        self.assertIs(db.last_message_asked(self.cid), False)
+        self.assertIs(db.last_message_asked("no-such-conversation"), False)
+
+    def test_a_reply_that_is_not_json_is_not_a_question(self) -> None:
+        self.reply("Hm.", ("route", '{"tool": "ask", "args": {"question": "Whi'))
+        self.assertIs(db.last_message_asked(self.cid), False)
+
+    def test_where_steps_are_not_kept_nothing_is_known_to_have_been_asked(self) -> None:
+        self.settings.steps_keep_days = 0
+        self.reply("Which city?", ("route", self.ASK))
+        self.assertIs(db.last_message_asked(self.cid), False)
+
+
 if __name__ == "__main__":
     unittest.main()

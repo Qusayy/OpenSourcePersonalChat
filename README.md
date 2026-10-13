@@ -275,9 +275,10 @@ stays marked until the tab is seen.
 **One effect, and only while the model is working.** While an answer is being
 read or written a strip of light in the page's one accent colour rises from
 the status line, behind everything else on the page. Its brightness and reach
-follow the measured tokens per second, with a small lift as each token lands;
-it is off while a request is queued behind someone else's, and when the answer
-ends it fades and is removed. It is a WebGL2 fragment shader on a transparent
+follow the measured tokens per second as a share of the fastest steady rate the
+page has seen, so a slow machine at its own full speed is as bright as a fast
+one, with a small lift as each token lands; it is off while a request is queued
+behind someone else's, and when the answer ends it fades and is removed. It is a WebGL2 fragment shader on a transparent
 half-resolution canvas (`static/js/aurora.js`), compiled when the page is idle,
 with a CSS strip driven by the same value where WebGL2 is missing. Its alpha is
 capped so that the page's secondary text still clears 4.5:1 over its brightest

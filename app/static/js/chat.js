@@ -39,12 +39,10 @@ const els = {
   waitLead: $("#st-wait-lead"),
   waitS: $("#st-wait-s"),
   tpsFig: $(".st-tps"),
-  outFig: $(".st-out"),
   ttftFig: $(".st-ttft"),
   sparkDot: $("#spark-dot"),
   tps: $("#tps-value"),
   ttft: $("#ttft-value"),
-  out: $("#out-value"),
   ctxValue: $("#ctx-value"),
   ctxFill: $("#ctx-fill"),
   sparkLine: $("#spark-line"),
@@ -428,7 +426,6 @@ const meter = new Meter({
     // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
     if (!total) return;
     els.tps.textContent = fmt(rate, 1);
-    els.out.textContent = fmtInt(total);
     els.sparkLine.setAttribute("d", sparkPaths(history)[0]);
     // The newest sample, marked on the trace: where the rate is now. Same
     // scale as sparkPaths, which plots against the tallest sample or 1.
@@ -441,7 +438,7 @@ function setContext(tokens) {
   const max = window.AURORA.info.n_ctx || 4096;
   const pct = Math.max(0, Math.min(1, tokens / max));
   els.ctxValue.textContent = fmtInt(tokens);
-  els.ctxFill.style.transform = `scaleX(${pct.toFixed(4)})`;
+  els.ctxFill.style.setProperty("--v", pct.toFixed(4));
   // Past this the next long answer is likely to push old turns out.
   els.bar.dataset.ctx = pct > 0.85 ? "high" : "ok";
 }
@@ -452,9 +449,8 @@ function setContext(tokens) {
  * showing them here as well would say the same thing twice.
  */
 function resetFigures() {
-  els.tpsFig.hidden = els.outFig.hidden = els.ttftFig.hidden = true;
+  els.tpsFig.hidden = els.ttftFig.hidden = true;
   els.tps.textContent = "—";
-  els.out.textContent = "—";
   els.ttft.textContent = "—";
   els.sparkLine.setAttribute("d", "");
   els.sparkDot.hidden = true;
@@ -462,7 +458,7 @@ function resetFigures() {
 
 /** The first token has landed: the figures have something to report. */
 function showFigures(ttftMs) {
-  els.tpsFig.hidden = els.outFig.hidden = false;
+  els.tpsFig.hidden = false;
   if (ttftMs !== null && ttftMs !== undefined) {
     els.ttft.textContent = fmtMs(ttftMs);
     els.ttftFig.hidden = false;

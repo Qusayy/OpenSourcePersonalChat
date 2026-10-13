@@ -80,12 +80,26 @@ const STATE_WORDS = {
 // Set by the chat page while a request is in flight; null means "show what
 // the health poll says".
 let phase = null;
+// The engine is answering somebody else. Said on the line, so cores at full
+// load beside the word "ready" are explained rather than left to puzzle over.
+let otherBusy = false;
 
 function paintState() {
   if (!bar) return;
   const info = window.AURORA?.info || {};
-  bar.dataset.phase = phase?.key || info.status || "cold";
-  if (stateEl) stateEl.textContent = phase?.text || STATE_WORDS[info.status] || info.status || "";
+  let key = phase?.key || info.status || "cold";
+  let text = phase?.text || STATE_WORDS[info.status] || info.status || "";
+  if (!phase && info.status === "ready" && otherBusy) {
+    key = "busy";
+    text = "busy";
+  }
+  bar.dataset.phase = key;
+  if (stateEl && stateEl.textContent.trim() !== text) setStateWord(text);
+}
+
+/** Change the state word. Its own function so the change can be animated. */
+function setStateWord(text) {
+  stateEl.textContent = text;
 }
 
 /**
@@ -94,8 +108,17 @@ function paintState() {
  * health poll.
  */
 export function setPhase(key, text) {
+  const was = Boolean(phase);
   phase = key ? { key, text } : null;
   paintState();
+  // A request starting or ending changes how often the machine is sampled;
+  // do not wait out the slower interval to notice.
+  if (was !== Boolean(phase)) scheduleTelemetry(250);
+}
+
+/** The phase a request is in right now, or null. */
+export function currentPhase() {
+  return phase?.key || null;
 }
 
 /**
@@ -142,6 +165,128 @@ if (bar && "ResizeObserver" in window) {
   }).observe(bar);
 }
 
+/* ---------------------------------------------------------- telemetry --- */
+
+// What the machine is doing, from /api/telemetry: the CPUs this process can
+// use and how loaded each is, the machine's memory, this app's share of it.
+// These are measurements taken on the server, not estimates made here.
+
+const sys = {
+  cpu: $("#st-cpu"),
+  count: $("#cpu-count"),
+  noun: $("#cpu-noun"),
+  bars: $("#cpu-bars"),
+  pct: $("#cpu-pct"),
+  ram: $("#st-ram"),
+  used: $("#ram-used"),
+  total: $("#ram-total"),
+  fill: $("#ram-fill"),
+};
+const MAX_CORE_BARS = 8; // past this, columns would be a comb; one bar for all
+const gb = (mb) => (mb / 1024).toFixed(1);
+const cpuText = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+/** Fill a named slot on the line or on a page, hiding its row when there is nothing to say. */
+function fact(name, value) {
+  for (const el of $$(`[data-sys="${name}"]`)) {
+    el.textContent = value ?? "";
+    const row = el.closest("[data-sys-row]");
+    if (row) row.hidden = value === null || value === undefined;
+  }
+}
+
+function paintSystem(s) {
+  if (!s) return;
+
+  if (sys.cpu) {
+    sys.cpu.hidden = s.cpus === null;
+    if (s.cpus !== null) {
+      sys.count.textContent = cpuText(s.cpus);
+      sys.noun.textContent = s.cpus === 1 ? "core" : "cores";
+    }
+    const cores = s.cores_pct;
+    if (cores && s.cpu_pct !== null) {
+      const one = cores.length > MAX_CORE_BARS;
+      const want = one ? 1 : cores.length;
+      sys.bars.classList.toggle("agg", one);
+      while (sys.bars.children.length < want) sys.bars.appendChild(document.createElement("i"));
+      while (sys.bars.children.length > want) sys.bars.lastElementChild.remove();
+      [...sys.bars.children].forEach((el, i) =>
+        el.style.setProperty("--v", ((one ? s.cpu_pct : cores[i]) / 100).toFixed(3))
+      );
+      sys.pct.textContent = `${Math.round(s.cpu_pct)}%`;
+    }
+    sys.cpu.title =
+      "The whole machine, measured now" + (s.load ? ` · load average ${s.load.join(" ")}` : "");
+  }
+
+  if (sys.ram) {
+    const known = s.mem_total_mb !== null && s.mem_used_mb !== null;
+    sys.ram.hidden = !known;
+    if (known) {
+      const share = s.mem_used_mb / s.mem_total_mb;
+      sys.used.textContent = gb(s.mem_used_mb);
+      sys.total.textContent = `${gb(s.mem_total_mb)} GB`;
+      sys.fill.style.setProperty("--v", share.toFixed(3));
+      bar.dataset.ram = share > 0.9 ? "high" : "ok";
+      sys.ram.title =
+        "The whole machine's memory, measured now" +
+        (s.rss_mb !== null ? ` · this app holds ${gb(s.rss_mb)} GB` : "");
+    }
+  }
+
+  // The same figures wherever a page names them (About, Benchmark, and the
+  // opened status line on a narrow screen).
+  fact("cpus", s.cpus === null ? null : `${cpuText(s.cpus)} ${s.cpus === 1 ? "core" : "cores"}`);
+  fact("cpu", s.cpu_pct === null ? null : `${Math.round(s.cpu_pct)}%`);
+  fact(
+    "ram",
+    s.mem_total_mb === null || s.mem_used_mb === null
+      ? null
+      : `${gb(s.mem_used_mb)} / ${gb(s.mem_total_mb)} GB`
+  );
+  fact("rss", s.rss_mb === null ? null : `${gb(s.rss_mb)} GB`);
+  // The ceiling that actually bites is the lower of the two the service has.
+  const limit = [s.limit_high_mb, s.limit_mb].filter((v) => v !== null);
+  fact("limit", limit.length ? `${gb(Math.min(...limit))} GB` : null);
+  fact("load", s.load ? s.load.map((v) => v.toFixed(2)).join("  ") : null);
+}
+
+let teleTimer = null;
+// Once a second while a request is running, when the figures are moving; every
+// three seconds otherwise. The server has two cores and other work to do.
+const teleDelay = () => (phase && phase.key !== "held" ? 1000 : 3000);
+
+async function pollTelemetry() {
+  teleTimer = null;
+  if (document.hidden) return; // picked up again when the tab is seen
+  try {
+    const res = await fetch("/api/telemetry");
+    const data = await res.json();
+    paintSystem(data.system);
+    const busy = Boolean(data.engine?.busy);
+    if (busy !== otherBusy) {
+      otherBusy = busy;
+      paintState();
+    }
+  } catch {
+    /* a missed sample is not worth a message; the next is seconds away */
+  }
+  scheduleTelemetry();
+}
+
+function scheduleTelemetry(delay = teleDelay()) {
+  clearTimeout(teleTimer);
+  teleTimer = setTimeout(pollTelemetry, delay);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleTelemetry(0);
+});
+
+paintSystem(window.AURORA?.system);
+scheduleTelemetry(1000);
+
 /* ------------------------------------------------------------- health --- */
 
 const listeners = new Set();
@@ -162,13 +307,6 @@ export async function pollHealth() {
     paintState();
     const mock = $("#b-mock");
     if (mock) mock.hidden = !info.mock;
-    // Resident memory is not measurable on every host. Where it is not, the
-    // figure is left off the line rather than shown as a dash.
-    const rss = $("#st-rss");
-    if (rss) {
-      rss.hidden = !info.rss_mb;
-      if (info.rss_mb) $("#b-rss").textContent = `${info.rss_mb} MB`;
-    }
 
     if (info.status !== lastStatus) {
       if (info.status === "ready" && lastStatus === "loading") toast("Model warm — ready to go");

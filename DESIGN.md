@@ -187,7 +187,7 @@ The system refuses gradients, glass and backdrop blur, glow, pills, message bubb
 
 **Key Characteristics:**
 - Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
-- Everything is centred: the top bar and the reading column share one axis, with equal margins either side at every width.
+- Everything is centred: the top bar, the reading column and the status line share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
 - One typeface. Numerals and units fixed-width, words proportional.
@@ -257,15 +257,15 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 The body is a three-row grid: a 56px top bar, the sheet taking the rest, the status line at its natural height. The page itself does not scroll; the sheet does.
 
-Everything is centred. The top bar's content sits in a container `--page` wide (76rem), inset `max(24px, (100vw - 76rem) / 2)` each side, so it starts and ends on the same two lines at any window width. The reading column, `--col` (42rem), is centred in the window; the long-form pages centre a 56rem block for charts and hold their text to 40rem inside it. `--edge` (24px) is the least space anything keeps from the window. Columns inside a scroller are centred with auto margins, not viewport arithmetic, and each scroller reserves a scrollbar gutter on both sides so a scrollbar cannot pull the column off the axis.
+Everything is centred. The top bar's content and the status line's sit in one container `--page` wide (76rem), inset `max(24px, (100vw - 76rem) / 2)` each side, so both start and end on the same two lines at any window width. The reading column, `--col` (42rem), is centred in the window; the long-form pages centre a 56rem block for charts and hold their text to 40rem inside it. `--edge` (24px) is the least space anything keeps from the window. Columns inside a scroller are centred with auto margins, not viewport arithmetic, and each scroller reserves a scrollbar gutter on both sides so a scrollbar cannot pull the column off the axis.
 
 Spacing is a nine-step scale: 4, 8, 12, 16, 24, 32, 48, 64, 96px. Sections on the long-form pages are parted by 64px; a question takes 48px above and 12px below, like any heading.
 
 The chat page has two views. Empty: headline, one paragraph, the composer directly under them, then the skills, all scrolling as one sheet. Thread: the composer sits above the status line under a hairline and the thread scrolls above it. DOM order is visual order in both, so tab order never disagrees with the screen.
 
-Responsive behaviour is by need rather than by device. Below 1440px the rate trace narrows. Below 1340px the chat page's status line gives its figures a row of their own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, skill rows stack, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
+Responsive behaviour is by need rather than by device. Below 1264px, where the window is narrower than the container, the chat page's status line gives the conversation a row of its own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go and the status line's small bars go with them, leaving the figures. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, skill rows stack, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
 
-**The One Axis Rule.** The top bar, the column and the composer are centred on one axis, with equal margins left and right. Nothing hangs from a left edge of its own. The status line is the single exception: it runs the full width of the window, `--edge` in from each side, on every page, because what the machine is and what a request is costing do not fit one row from the column's edge, and the same line on every page should start in the same place.
+**The One Axis Rule.** The top bar, the column, the composer and the status line are centred on one axis, with equal margins left and right. The top bar and the status line share a container and so share both edges. Nothing hangs from a left edge of its own.
 
 ## Elevation & Depth
 
@@ -342,15 +342,18 @@ A tool result is a `<figure>` between two hairlines: a 13px caption, then what t
 - **Tables:** right-aligned fixed-width figures, a proportional first column, hairlines under rows and a second-ink rule under the head.
 
 ### The status line (signature)
-One row along the bottom edge of every page, like an editor's: sheet-tint ground, a hairline above, 13px in the second ink, at least 2.5rem tall, 24px in from each side of the window.
+One row along the bottom edge of every page, like an editor's: sheet-tint ground, a hairline above, 13px in the second ink, at least 2.5rem tall, on the same centred container as the top bar.
 
-- **Left, and it does not move:** the state (an 8px dot and a word at 600), the model and its quantisation, the hardware and thread count. A bordered `mock` tag appears when answers are canned and is never hidden.
-- **Right, anchored to the right edge:** at rest, context use on the chat page (count, limit, a 56px by 4px bar) and resident memory when the server reports it. Each figure sits in a slot as wide as its largest value, so a number that ticks changes in place.
-- **States:** ready in ink; starting, loading and queued in caution; model unavailable in fault; working, reading and writing in the live colour, as is a result held for a tab that was not being watched. The word slot is fixed-width, so states swap in place. While waiting, the dot breathes (1.4s) and a seconds count appears after two seconds. Once tokens arrive the dot holds still and the figures do the moving.
-- **In flight:** on the first token, tok/s with a live-coloured trace (newest sample dotted), tokens so far, and time to first token join the right side. The context bar turns caution above 85%.
-- **Narrow:** below 1340px the chat page's figures take their own row. Below 620px the line is a corridor: state plus the one figure that matters now (the rate while writing, context otherwise), with the rest behind a "Details" word button.
+- **Left, the machine, and it is live:** the state (an 8px dot and a word at 600), the model and its quantisation, then two figures measured on the server and repainted about once a second: the cores this process can use, with one small column per core filled to its load and the total as a percentage; and the machine's memory in use against its total, with a thin meter. Past eight cores the columns become one horizontal bar. A bordered `mock` tag appears when answers are canned and is never hidden. These are the whole machine's figures, which the site shares with others; a tooltip on each says so and gives the app's own share.
+- **Right, the conversation, anchored to the right edge:** context use on the chat page (count, limit, a 48px by 4px meter). Each figure sits in a slot as wide as its largest value, so a number that ticks changes in place.
+- **States:** ready in ink; starting, loading, queued and busy in caution; model unavailable in fault; working, reading and writing in the live colour, as is a result held for a tab that was not being watched. "Busy" means the engine is answering someone else, which explains cores at full load beside an idle conversation. The word slot is wide enough for the request states, so they swap in place; a longer word widens it. While waiting, the dot breathes (1.4s) and a seconds count, with the queue position when there is one, appears on the right. Once tokens arrive the dot holds still and the figures do the moving.
+- **In flight:** on the first token, tok/s with a live-coloured trace (newest sample dotted) and time to first token join the right side. While this visitor's request runs, the core columns take the live colour: that load is the request. The context meter turns caution above 85%, the memory meter above 90%.
+- **Sampling:** once a second while a request is running, every three seconds otherwise, not at all in a hidden tab.
+- **Narrow:** below 1264px the chat page's conversation figures take their own row, context first. Below 620px the line is a corridor: state plus the one figure that matters now (the rate while writing, context otherwise; memory on the other pages), with the rest behind a "Details" word button, which also lists the model's thread count, the app's own memory, the limit on the service and the load average.
 
 **The Say It Once Rule.** What the machine is and what state it is in are here and only here. What a request is costing is here only while the request is in flight; when it ends, the figures leave the line and are printed under the reply they belong to. A figure with nothing to report is absent, not a dash and not a zero.
+
+**The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off.
 
 ### Motion
 State changes only: 120ms for colour, 200ms for position, on `cubic-bezier(0.16, 1, 0.3, 1)`. There is one entrance, for things that arrive in the thread (6 to 8px rise, 200ms), and one authored move: the composer travels from under the headline to the foot of the sheet when the first question is sent. The status line is the one place the page moves on its own. Bars and meters animate `scaleX`, never width. Under reduced motion the loops stop and travel is removed, while colour and opacity transitions stay so the interface still acknowledges input.
@@ -359,7 +362,7 @@ State changes only: 120ms for colour, 200ms for position, on `cubic-bezier(0.16,
 
 ### Do:
 - **Do** centre new content and stop it at the column measure (42rem for chat, 40rem for long-form text).
-- **Do** run the status line the full width of the window, 24px in from each side, on every page.
+- **Do** keep the status line on the same container as the top bar, on every page.
 - **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar.
 - **Do** mark selection and location in ink with a 2px underline.
 - **Do** set numerals and units fixed-width with tabular figures, and the words beside them proportional.

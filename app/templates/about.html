@@ -22,10 +22,22 @@
 
     <section class="section">
       <h2>Server</h2>
+      {# Measured on the machine and repainted while the page is open (app.js,
+         /api/telemetry). A row with nothing measured behind it is left out. #}
+      <p class="sub">
+        Read from the machine as you look at it. The CPU and memory figures are
+        the whole machine's, which this site shares with others.
+      </p>
       <dl class="facts">
         <div><dt>Params</dt><dd class="num">{{ info.params }}</dd></div>
         <div><dt>Context</dt><dd class="num">{{ info.n_ctx }}</dd></div>
-        <div><dt>Threads</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
+        <div><dt>Threads for the model</dt><dd class="num">{{ info.n_threads }} / {{ info.cpu_count or '?' }}</dd></div>
+        <div data-sys-row {% if system.cpus is none %}hidden{% endif %}><dt>CPUs this app can use</dt><dd class="num" data-sys="cpus"></dd></div>
+        <div data-sys-row hidden><dt>CPU load now</dt><dd class="num" data-sys="cpu"></dd></div>
+        <div data-sys-row {% if system.mem_total_mb is none %}hidden{% endif %}><dt>Memory in use, whole machine</dt><dd class="num" data-sys="ram"></dd></div>
+        <div data-sys-row {% if system.rss_mb is none %}hidden{% endif %}><dt>Memory held by this app</dt><dd class="num" data-sys="rss"></dd></div>
+        <div data-sys-row hidden><dt>Memory limit on the service</dt><dd class="num" data-sys="limit"></dd></div>
+        <div data-sys-row hidden><dt>Load average, 1 / 5 / 15 min</dt><dd class="num" data-sys="load"></dd></div>
         {% if info.load_ms %}<div><dt>Load time</dt><dd class="num">{{ info.load_ms }} ms</dd></div>{% endif %}
       </dl>
     </section>

@@ -57,20 +57,38 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   {% block main %}{% endblock %}
 </main>
 
-{# The status line. What the machine is and what state it is in are always
-   here, and only here. What a request is costing joins them while the request
-   is in flight; once it has finished, that is printed under the answer it
-   belongs to and leaves this line. The words for each state live in app.js as
-   well, which repaints them on every poll. #}
+{# The status line. On the left, the machine: its state, the model, and what
+   its CPUs and memory are doing right now, measured and repainted about once
+   a second (app.js, /api/telemetry). On the right, the conversation: what a
+   request is costing while it is in flight, and how full the context is. When
+   an answer ends its figures are printed under it and leave this line.
+
+   The first values are rendered here so nothing pops in after load. The words
+   for each state live in app.js as well, which repaints them on every poll. #}
 {% set state_words = {'cold': 'starting', 'loading': 'loading', 'ready': 'ready', 'error': 'model unavailable'} %}
+{% set cpus = system.cpus %}
+{% set cpus_text = (cpus | int) if cpus is not none and cpus == (cpus | int) else (cpus | round(1) if cpus is not none else none) %}
+{% set core_bars = (system.cores_pct | length) if system.cores_pct else ((cpus | round(0, 'ceil') | int) if cpus is not none else 0) %}
 <footer class="status" id="status" data-phase="{{ info.status }}" aria-label="Server status">
   <div class="status-id">
     <span class="st-state">
       <span class="dot" aria-hidden="true"></span>
       <span class="st-word" id="b-state">{{ state_words.get(info.status, info.status) }}</span>
     </span>
-    <span class="st-seg">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
-    <span class="st-seg">{{ info.hardware }}, <span class="num">{{ info.n_threads }}</span> threads</span>
+    <span class="st-seg st-model">{{ info.model }} <span class="num">{{ info.quant }}</span></span>
+    <span class="st-seg st-cpu" id="st-cpu" {% if cpus is none %}hidden{% endif %}>
+      <span><span class="num" id="cpu-count">{{ cpus_text }}</span> <span id="cpu-noun">{{ 'core' if cpus == 1 else 'cores' }}</span></span>
+      {# One bar per core up to eight; past that the bars would be a comb, so one bar for all of them. #}
+      <span class="cpu-bars{{ ' agg' if core_bars > 8 }}" id="cpu-bars" aria-hidden="true">
+        {%- for i in range(1 if core_bars > 8 else core_bars) %}<i></i>{% endfor -%}
+      </span>
+      <b class="num" id="cpu-pct">{% if system.cpu_pct is not none %}{{ system.cpu_pct | round | int }}%{% endif %}</b>
+    </span>
+    <span class="st-seg st-ram" id="st-ram" {% if system.mem_total_mb is none %}hidden{% endif %}>
+      RAM <b class="num" id="ram-used">{% if system.mem_used_mb is not none %}{{ '%.1f' | format(system.mem_used_mb / 1024) }}{% endif %}</b>
+      / <span class="num" id="ram-total">{% if system.mem_total_mb is not none %}{{ '%.1f' | format(system.mem_total_mb / 1024) }} GB{% endif %}</span>
+      <span class="meter" aria-hidden="true"><i id="ram-fill"></i></span>
+    </span>
     {# Says the answers are canned, so it is never hidden with the rest. #}
     <span class="st-tag" id="b-mock" {% if not info.mock %}hidden{% endif %}>mock</span>
   </div>
@@ -84,16 +102,22 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <i class="spark-dot" id="spark-dot" hidden></i>
       </span>
     </span>
-    <span class="st-fig st-out" hidden><b class="num" id="out-value">—</b> tokens</span>
     <span class="st-fig st-ttft" hidden>first token <b class="num" id="ttft-value">—</b></span>
     <span class="st-fig st-ctx">
       <b class="num" id="ctx-value">0</b> / <span class="num">{{ "{:,}".format(info.n_ctx) }}</span> ctx
-      <span class="ctx-bar" aria-hidden="true"><i id="ctx-fill"></i></span>
+      <span class="meter" aria-hidden="true"><i id="ctx-fill"></i></span>
     </span>
     {% endif %}
-    <span class="st-fig st-rss" id="st-rss" {% if not info.rss_mb %}hidden{% endif %}>memory <b class="num" id="b-rss">{% if info.rss_mb %}{{ info.rss_mb }} MB{% endif %}</b></span>
   </div>
-  <button class="status-more" id="status-more" type="button" aria-expanded="false" aria-controls="status-figs">Details</button>
+  {# Shown only when the line is opened on a narrow screen: the figures that are
+     worth having but not worth a place on the line itself. #}
+  <div class="status-extra" id="status-extra">
+    <span class="st-seg"><span class="num">{{ info.n_threads }}</span> threads for the model</span>
+    <span class="st-seg" data-sys-row hidden>this app holds <b class="num" data-sys="rss"></b></span>
+    <span class="st-seg" data-sys-row hidden>service limit <b class="num" data-sys="limit"></b></span>
+    <span class="st-seg" data-sys-row hidden>load average <b class="num" data-sys="load"></b></span>
+  </div>
+  <button class="status-more" id="status-more" type="button" aria-expanded="false" aria-controls="status-figs status-extra">Details</button>
 </footer>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
@@ -107,6 +131,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <script>
   window.AURORA = {
     info: {{ info | tojson }},
+    system: {{ system | tojson }},
     personas: {{ personas | tojson }},
     defaultPersona: {{ default_persona | tojson }},
     skills: {{ skills | tojson }},

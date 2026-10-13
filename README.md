@@ -24,7 +24,8 @@ app/
   db.py          SQLite (WAL): conversations, messages, tool_calls, runs
   templates/     Jinja2 — chat, bench, about
   static/        hand-written CSS + ES modules, no build step
-    js/canvas.js   WebGL2 aurora that reacts to the token stream
+    js/app.js      shell: status line, history drawer, health polling
+    fonts/         Recursive, self-hosted (SIL OFL 1.1)
     js/cards.js    visual answers — weather, calculator tape, clock, …
 scripts/bench_cli.py    headless benchmark → JSON
 deploy/                 systemd unit + nginx site
@@ -128,7 +129,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
-| `AURORA_HARDWARE_LABEL` | `2 vCPU · 4 GB VPS` | shown throughout the UI |
+| `AURORA_HARDWARE_LABEL` | `2 vCPU · 4 GB VPS` | shown in the status line |
 | `AURORA_MOCK` | `false` | run the site with no model present |
 | `AURORA_MOCK_DELAY` | `0.085` | seconds between fake tokens; `0` runs the mock at full speed |
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
@@ -223,20 +224,26 @@ Routing every turn through `<|im_start|>` / `<|im_end|>` lets the model stop on
 its own token and lets sampling sit at a normal `0.7` with a light
 `repeat_penalty`.
 
-**The front-end has no dependencies.** No build step, no CDN, no third-party
-JavaScript — the markdown renderer is ~150 lines in `static/js/md.js` and
-escapes everything before producing a tag; the icons are inline SVG, because
-symbols like `⧉` and `⇹` are missing from plenty of font stacks and render as
-tofu boxes on somebody else's machine.
+**The front-end has no build step, no CDN and no third-party JavaScript.** The
+markdown renderer is ~150 lines in `static/js/md.js` and escapes everything
+before producing a tag; the icons are inline SVG, because symbols like `⧉` and
+`⇹` are missing from plenty of font stacks and render as tofu boxes on somebody
+else's machine. The one borrowed asset is the typeface: Recursive, a variable
+font served from `static/fonts/` under the SIL Open Font License. Its `MONO`
+axis sets every figure fixed-width in the same letterforms as the prose.
 
-**The background is a shader that reacts to generation.** `static/js/canvas.js`
-is a hand-written WebGL2 fragment shader: domain-warped fbm noise whose
-`u_energy` uniform spikes on every token and decays, so the aurora surges while
-the model writes and settles when it stops. It renders at half resolution, caps
-`devicePixelRatio` at 1.5, runs at 30 fps idle and 60 fps while generating, and
-cancels its frame loop when the tab is hidden. Three fallbacks: no WebGL2 keeps
-the CSS gradient layers, `prefers-reduced-motion` paints one static frame, and
-a hidden tab paints nothing. All of it is client-side — the VPS pays nothing.
+**The status line reports generation as it happens.** One line along the bottom
+of every page carries the model, the hardware and the server's state, each
+shown once. On the chat page it also carries what the current answer is
+costing: a rolling tokens-per-second figure sampled four times a second with
+its trace, tokens out, time to first token, and how much of the context window
+is in use. It names each phase of a request — queued, reading the prompt,
+writing — and counts the seconds through the waits. An answer that finishes
+while the tab is in the background stays marked until the tab is seen. The
+live figures are client-side arithmetic over the token stream; the ones left
+on the line afterwards are the server's own measurements. The page follows the
+visitor's light or dark setting, and under `prefers-reduced-motion` nothing
+loops or travels.
 
 ---
 

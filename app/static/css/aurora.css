@@ -616,6 +616,11 @@ body {
   :root:not([data-page="chat"]) .status-figs > .st-rss {
     display: inline-flex;
   }
+  /* Collapsed, the number is enough; the bar would push Details onto a row
+     of its own. */
+  .ctx-bar {
+    display: none;
+  }
   .status-more {
     display: inline-flex;
     margin-left: auto;
@@ -648,10 +653,17 @@ body {
     grid-column: 2;
     grid-row: 1;
   }
-  .status[data-open="true"] .status-id .st-seg,
+  /* Block, not flex: these are a sentence with a figure inside it, and a
+     flex container would drop the space between the two. */
+  .status[data-open="true"] .status-id .st-seg {
+    display: block;
+    white-space: normal;
+  }
   .status[data-open="true"] .status-figs > *:not([hidden]) {
     display: inline-flex;
-    white-space: normal;
+  }
+  .status[data-open="true"] .ctx-bar {
+    display: block;
   }
 }
 

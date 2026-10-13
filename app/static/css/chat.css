@@ -22,6 +22,13 @@
 .center[data-view="empty"] {
   overflow-y: auto;
 }
+/* <main> is a flex column so the thread can take the spare height. On the
+   empty sheet nothing should give: a flex item may shrink below its content,
+   and here that stacked the headline, the input and the skills on top of one
+   another on any screen too short to hold all three. */
+.center[data-view="empty"] > * {
+  flex-shrink: 0;
+}
 .center[data-view="empty"] .thread,
 .center[data-view="thread"] .hero,
 .center[data-view="thread"] .skills {
@@ -40,7 +47,7 @@
 /* ------------------------------------------------------------ empty state */
 
 .hero {
-  padding-top: clamp(var(--s-6), 9vh, var(--s-9));
+  padding-top: clamp(var(--s-6), 7vh, var(--s-9));
   padding-bottom: var(--s-5);
 }
 
@@ -55,14 +62,13 @@
 
 .hero p {
   margin: 0;
-  max-width: 38rem;
   font-size: var(--t-3);
   text-wrap: pretty;
 }
 
 .skills {
   padding-top: var(--s-6);
-  padding-bottom: var(--s-7);
+  padding-bottom: var(--s-6);
 }
 .skills h2 {
   margin: 0 0 var(--s-2);
@@ -365,6 +371,7 @@
   -webkit-line-clamp: 5;
   overflow: hidden;
   font-size: var(--t-3);
+  font-weight: 500;
   line-height: 1.5;
   letter-spacing: 0;
 }

@@ -230,6 +230,20 @@ function addAssistant() {
  * measured 8.9ms per tick at 1200 tokens and rose with length — the cost was
  * DOM teardown and relayout, not the markdown parse (0.55ms of it).
  */
+/**
+ * Where the caret goes: inside the last block being written, at the end of its
+ * text. Appended after that block instead, an inline caret following a <p>
+ * starts a line of its own and sits under the sentence it is meant to end.
+ */
+const CARET_INSIDE = /^(P|UL|OL|LI|H[1-6]|BLOCKQUOTE|DIV|PRE|CODE|TABLE|TBODY|TR|TD)$/;
+function caretHost(root) {
+  let el = root;
+  while (el.lastElementChild && CARET_INSIDE.test(el.lastElementChild.tagName)) {
+    el = el.lastElementChild;
+  }
+  return el;
+}
+
 function proseRenderer(host) {
   const stable = document.createElement("div");
   const tail = document.createElement("div");
@@ -249,7 +263,7 @@ function proseRenderer(host) {
       }
       const last = blocks[blocks.length - 1];
       tail.innerHTML = last === undefined ? "" : renderMarkdown(last);
-      if (caretOn) tail.appendChild(caret);
+      if (caretOn) caretHost(tail).appendChild(caret);
       else caret.remove();
     },
     finish(raw) {
@@ -384,6 +398,9 @@ els.thread.addEventListener("click", (e) => {
 
 const meter = new Meter({
   onSample: ({ rate, total, history }) => {
+    // The meter ticks from the moment a request is sent. Until a token has
+    // arrived there is no rate to report, and "0.0 tok/s" would be a claim.
+    if (!total) return;
     els.tps.dataset.empty = "false";
     els.tps.textContent = fmt(rate, 1);
     els.out.textContent = fmtInt(total);

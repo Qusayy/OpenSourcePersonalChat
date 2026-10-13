@@ -38,10 +38,11 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <header class="flex items-center gap-5 min-w-0 border-b border-rule pl-[max(var(--inset),env(safe-area-inset-left))] pr-[max(var(--inset),env(safe-area-inset-right))] le-620:gap-4">
     <a class="text-3 font-bold tracking-[-0.01em] no-underline" href="/" tabindex="-1">Aurora</a>
   </header>
-  <main></main>
+  <!-- Read only where scripts are off. It is inside the sheet: as a child of
+       <body> it would be a fourth row of the page grid, under the status line. -->
+  <main><noscript><p class="mx-auto w-full max-w-col px-edge pt-8 text-3">Aurora needs JavaScript to run: the page streams its answers and measures them as they arrive.</p></noscript></main>
   <footer class="status" aria-hidden="true"></footer>
 </div>
-<noscript><p style="margin: 24px; font: 17px/1.55 system-ui, sans-serif">Aurora needs JavaScript to run: the page streams its answers and measures them as they arrive.</p></noscript>
 <!-- The server replaces this element's contents with the first values the page
      shows, so they are on screen without a request. Under the Vite dev server
      it stays null and the page asks /api/bootstrap instead. -->

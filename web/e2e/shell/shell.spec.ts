@@ -123,6 +123,27 @@ test.describe("moving between pages", () => {
   });
 });
 
+test.describe("a link to a part of another page", () => {
+  test("goes to that part, and the keyboard carries on from there", async ({ page }) => {
+    await page.goto("/about");
+    await page.locator('main a[href="/bench#memory"]').click();
+    await expect(page).toHaveURL(/\/bench#memory$/);
+    const memory = page.locator("#memory");
+    await expect(memory).toBeInViewport();
+    // A loaded page leaves the keyboard's place at the target. It is a place,
+    // not a control: focused, with no ring drawn round the whole section.
+    await expect(memory).toBeFocused();
+    expect(await memory.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("none");
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => Boolean(document.activeElement?.closest("#main")))).toBe(true);
+  });
+
+  test("works on a fresh load of that address too", async ({ page }) => {
+    await page.goto("/bench#memory");
+    await expect(page.locator("#memory")).toBeInViewport();
+  });
+});
+
 test.describe("what the server sends", () => {
   // These are about the app's own responses; the dev server's are not them.
   test.skip(FOREIGN_PAGE, "the page under test is not served by the app");

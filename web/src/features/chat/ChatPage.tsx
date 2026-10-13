@@ -42,8 +42,15 @@ export function ChatPage() {
     };
   }, []);
 
+  // The field takes focus when the page is come to, so typing can start at
+  // once. Not after a tap on a touch screen: there, focus raises the keyboard
+  // over the page that was just asked for. (A loaded page, and Back, arrive
+  // as "POP"; a link arrives as "PUSH".)
+  const arrivedByLink = useNavigationType() !== "POP";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: decided once, as the page arrives
   useEffect(() => {
-    dom.input?.focus();
+    const touch = window.matchMedia("(pointer: coarse)").matches;
+    if (!(touch && arrivedByLink)) dom.input?.focus();
     // Leaving the page with an answer in flight stops it, as Stop does.
     return () => leave();
   }, []);

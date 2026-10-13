@@ -85,6 +85,12 @@
     border-radius: var(--r-1);
   }
 
+  /* The part of a page a link pointed at (/bench#memory). Focus is put there
+     so the keyboard carries on from it; it is a place, not a control. */
+  [data-hash-target]:focus {
+    outline: none;
+  }
+
   button,
   input,
   textarea,

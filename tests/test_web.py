@@ -89,6 +89,13 @@ class SourceMarkerTests(unittest.TestCase):
             with self.subTest(marker=name):
                 self.assertEqual(source.count(getattr(web, name)), 1)
 
+    def test_the_notice_for_no_scripts_is_inside_the_sheet(self) -> None:
+        # <body> is a three-row grid. As a child of <body> the notice would be
+        # a fourth row, under the status line; inside <main> it is on the sheet.
+        source = (REPO / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(source.count("<noscript>"), 1)
+        self.assertIn("<main><noscript>", source)
+
 
 class FrontendTests(unittest.TestCase):
     def setUp(self) -> None:

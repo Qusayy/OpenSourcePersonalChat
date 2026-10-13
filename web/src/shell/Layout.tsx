@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { Outlet, useLocation } from "react-router";
 import { mountAurora } from "@/lib/aurora";
 import { installCopyButtons } from "@/lib/clipboard";
@@ -175,15 +175,27 @@ function usePageChange(): void {
     const main = document.getElementById("main");
     if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
   }, [pathname]);
+  // A layout effect, so the scroll is part of the same commit as the page: on
+  // a fresh load the browser looked for the target before there was one, and
+  // when the change of page is animated the new page is pictured already at
+  // the target instead of jumping to it afterwards.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the same #part on another page is a new place to scroll to
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hash || hash === "#main") return;
-    // After the page has drawn: on a fresh load the browser looked for the
-    // target before there was one.
-    const frame = requestAnimationFrame(() => {
-      document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView();
-    });
-    return () => cancelAnimationFrame(frame);
+    let target: HTMLElement | null = null;
+    try {
+      target = document.getElementById(decodeURIComponent(hash.slice(1)));
+    } catch {
+      return; // not a well-formed fragment; nothing to go to
+    }
+    if (!target) return;
+    target.scrollIntoView();
+    // A loaded page leaves the keyboard's place at the target, so the next Tab
+    // goes on from there. Without a load, that takes moving focus to it; it
+    // is a place, not a control, and draws no ring (see base.css).
+    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+    target.dataset.hashTarget = "";
+    target.focus({ preventScroll: true });
   }, [hash, pathname]);
 }
 

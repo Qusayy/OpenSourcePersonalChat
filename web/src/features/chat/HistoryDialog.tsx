@@ -140,8 +140,12 @@ export function HistoryDialog() {
         {/* The page links join the drawer only where the top bar has no room
             for them. */}
         <nav aria-label="Pages" className="hidden le-620:flex gap-5 pt-4 text-2">
-          <Link to="/bench">Benchmark</Link>
-          <Link to="/about">About</Link>
+          <Link to="/bench" viewTransition>
+            Benchmark
+          </Link>
+          <Link to="/about" viewTransition>
+            About
+          </Link>
         </nav>
       </div>
     </dialog>

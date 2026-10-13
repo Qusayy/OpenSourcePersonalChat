@@ -62,6 +62,14 @@ tree="$(
   git write-tree
 )"
 
+# `set -e` does not reach inside the $( ) above in every bash, so a failed
+# `git add` there could still hand back a tree: the source without its built
+# files, which is exactly what must never be published. Look, do not assume.
+if [ -z "$(git ls-tree -r --name-only "$tree" -- "$DIST/index.html")" ]; then
+  echo "publish: the tree to publish has no $DIST/index.html; refusing" >&2
+  exit 1
+fi
+
 # The previous release, if there is one. Asked of the remote, not of whatever
 # this clone happens to remember.
 parent=""

@@ -18,7 +18,6 @@ Design notes that matter on a 2 vCPU box:
 from __future__ import annotations
 
 import asyncio
-import os
 import platform
 import threading
 import time
@@ -29,6 +28,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
 from .config import Settings, settings as default_settings
+from .telemetry import describe, process_rss_mb, usable_cpu_count
 
 # ---------------------------------------------------------------- ChatML ----
 
@@ -48,26 +48,6 @@ def render_chatml(messages: list[dict]) -> str:
         parts.append(f"{IM_START}{m['role']}\n{m['content']}{IM_END}\n")
     parts.append(f"{IM_START}assistant\n")
     return "".join(parts)
-
-
-# ------------------------------------------------------------- utilities ----
-
-
-def process_rss_mb() -> float | None:
-    """Resident set size in MB, or None where it cannot be read cheaply."""
-    try:
-        with open("/proc/self/status", "r", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024, 1)
-    except OSError:
-        pass
-    try:  # Windows / macOS dev machines
-        import psutil  # type: ignore
-
-        return round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
-    except Exception:
-        return None
 
 
 MOCK_VOCAB = (
@@ -201,7 +181,9 @@ class Engine:
             "n_ctx": self.cfg.n_ctx,
             "n_threads": self.cfg.n_threads,
             "n_batch": self.cfg.n_batch,
-            "hardware": self.cfg.hardware_label,
+            # A label the operator set wins; otherwise the machine is described
+            # from what was measured, never from a default that may not be true.
+            "hardware": self.cfg.hardware_label or describe(),
             "mock": self.cfg.mock,
             "busy": self._busy,
             "queued": len(self._waiting),
@@ -210,7 +192,9 @@ class Engine:
             "uptime_s": round(time.time() - self.state.started_at, 1),
             "rss_mb": process_rss_mb(),
             "platform": f"{platform.system()} {platform.machine()}",
-            "cpu_count": os.cpu_count(),
+            # CPUs this process can actually use (affinity and cgroup quota),
+            # not every CPU the kernel can see.
+            "cpu_count": usable_cpu_count(),
         }
 
     # -- cancellation -------------------------------------------------------

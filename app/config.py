@@ -56,7 +56,9 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     db_path: str = str(BASE_DIR / "data" / "aurora.db")
-    hardware_label: str = "2 vCPU · 4 GB VPS"
+    # How pages name the machine in prose ("running on a …"). Empty means
+    # describe it from what is measured at runtime; see telemetry.describe().
+    hardware_label: str = ""
     mock: bool = False
     # Seconds between fake tokens in mock mode. The default imitates this
     # hardware; drop it to near zero to drive the UI quickly in tests.

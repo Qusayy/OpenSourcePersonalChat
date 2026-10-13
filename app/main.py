@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from . import __version__, bench, db
+from . import __version__, bench, db, telemetry
 from .config import APP_DIR, settings
 from .llm import engine
 from .personas import DEFAULT_PERSONA, get_persona, persona_list
@@ -36,6 +36,9 @@ SSE_HEADERS = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    # CPU load is a difference between two readings; take the first now so the
+    # first page view has something to measure against.
+    telemetry.sampler.baseline()
     # Load off the event loop so the page renders (and shows "warming") while
     # ~1 GB of weights is being faulted in.
     threading.Thread(target=engine.load_blocking, name="model-load", daemon=True).start()
@@ -58,6 +61,9 @@ def sse(event: str, data: Any) -> str:
 def page_context(**extra) -> dict:
     ctx = {
         "info": engine.info(),
+        # Rendered into the first paint, so the live figures are there on load
+        # instead of appearing a second later.
+        "system": telemetry.snapshot(),
         "personas": persona_list(),
         "default_persona": DEFAULT_PERSONA,
         "settings": settings,
@@ -108,7 +114,22 @@ async def page_about(request: Request):
 
 @app.get("/api/health")
 async def api_health():
-    return {"engine": engine.info(), "chat": db.chat_stats()}
+    return {"engine": engine.info(), "system": telemetry.snapshot(), "chat": db.chat_stats()}
+
+
+@app.get("/api/telemetry")
+async def api_telemetry():
+    """The figures a page polls once a second: small, and nothing else.
+
+    Deliberately `async` with no awaits. It reads a few small files and updates
+    one shared sample; run in the threadpool, two visitors polling at once
+    would race on that sample.
+    """
+    info = engine.info()
+    return {
+        "system": telemetry.snapshot(),
+        "engine": {"status": info["status"], "busy": info["busy"], "queued": info["queued"]},
+    }
 
 
 class ChatRequest(BaseModel):

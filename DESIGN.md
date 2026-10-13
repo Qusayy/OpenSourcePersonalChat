@@ -149,7 +149,7 @@ components:
     backgroundColor: "{colors.sheet-2}"
     textColor: "{colors.ink-2}"
     typography: "{typography.caption}"
-    padding: "4px 24px"
+    padding: "4px max(24px, (100vw - 76rem) / 2)"
     height: "2.5rem"
   palette:
     backgroundColor: "{colors.sheet}"
@@ -244,7 +244,7 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 - **Display** (700, 3.25rem / 52px, line-height 1.04, -0.03em, balanced): the page headline. One per page. 2.25rem at phone width.
 - **Headline** (600, 1.5rem / 24px, line-height 1.2, -0.015em): section headings on the long-form pages.
 - **Title** (600, 1.25rem / 20px, line-height 1.35, -0.01em): the visitor's question heading its exchange; the dialog heading; a fetched page's title. Also the size of the input on the empty sheet.
-- **Body** (400, 1.0625rem / 17px, line-height 1.55): answers, paragraphs, the input. Long-form text stops at 40rem; the chat column at 42rem.
+- **Body** (400, 1.0625rem / 17px, line-height 1.55): answers, paragraphs, the input. Chat, Benchmark and About all set their text on the same 42rem column.
 - **Label** (600 on buttons, 500 on word-buttons, 400 on navigation and rows; 0.9375rem / 15px): controls, navigation, list rows, tables, tool figures.
 - **Caption** (400, 0.8125rem / 13px, line-height 1.5): the status line, figure captions, the cost line under a reply, the route line, chart axes. Sentence case, no tracking.
 - **Figure** (600, 2rem / 32px, line-height 1.1, -0.02em, fixed-width): a number that is the answer, the same size wherever it appears (calculator result, temperature, clock, converted amount).
@@ -371,7 +371,7 @@ The page's one luminous thing: a strip of light in the live colour that rises fr
 **The One Light Rule.** There is one gradient and one glow in the system, and this is it. It is made of the live colour and governed by the Live Rule: nothing in progress, no light. Nothing may borrow it: no glow on a button, no gradient on a surface, no second effect.
 
 ### Motion
-Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances.
+Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances. Two durations sit outside the tokens on purpose: the 240ms entrance run from script for route steps and tool figures, and the 280ms ink-in, which has a gentler curve of its own because the arrival curve spent the whole fade in its first tenth of a second.
 
 - **The arrival.** Come to from outside (a typed address, a link from elsewhere, a reload), a page assembles once in reading order: headline, what it is, where to type, what to try, each rising 10px out of nothing, 50ms apart. It does not replay on New chat or when moving between the site's own pages.
 - **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
@@ -380,7 +380,7 @@ Motion explains a change, acknowledges an action or reports work in progress; no
 - **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
 - **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
 - **In flight.** The rate eases between measurements, its trace scrolls, and the aurora rises with the rate (see The status line and The aurora). These run on one shared frame loop that exists only while something is subscribed to it; at rest the page asks for no frames.
-- **The thread.** Questions, route steps and tool figures enter from just below (6 to 8px, 240ms). An answer is inked in: each stretch of text fades up from nothing over 280ms as it arrives, opacity only, so nothing shifts the line it lands in. The block being written is rebuilt ten times a second, so the fade is carried across rebuilds rather than restarted, and across the final clean render too: the last words finish fading before their wrappers are removed.
+- **The thread.** Questions enter from 6px below over 200ms; route steps and tool figures from 8px over 240ms. An answer is inked in: each stretch of text fades up from nothing over 280ms as it arrives, opacity only, so nothing shifts the line it lands in. The block being written is rebuilt ten times a second, so the fade is carried across rebuilds rather than restarted, and across the final clean render too: the last words finish fading before their wrappers are removed.
 - **Charts.** Bars grow from the baseline, the memory budget fills segment by segment and the history line is drawn left to right, each when scrolled to and once only.
 
 Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed, charts are shown drawn, the rate and its trace step from sample to sample, the aurora holds still and an answer's text simply appears, while colour and opacity transitions stay so the interface still acknowledges input.

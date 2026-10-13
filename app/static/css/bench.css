@@ -599,7 +599,7 @@
 .reveal-ready .linechart .series {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  transition: stroke-dashoffset 640ms var(--ease);
+  transition: stroke-dashoffset var(--dur-4) var(--ease);
 }
 .reveal-ready .linechart.in-view .series {
   stroke-dashoffset: 0;

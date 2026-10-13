@@ -641,9 +641,6 @@
   .hero {
     padding-top: var(--s-6);
   }
-  .hero h1 {
-    font-size: 2.25rem;
-  }
   .skill {
     grid-template-columns: minmax(0, 1fr);
     row-gap: 2px;

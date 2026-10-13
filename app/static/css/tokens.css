@@ -122,6 +122,14 @@
   --bar-h: 56px;
 }
 
+/* At phone width the headline takes one step down. Set here, once, so every
+   page's headline follows and no stylesheet carries the size as a literal. */
+@media (max-width: 620px) {
+  :root {
+    --t-7: 2.25rem;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --sheet: oklch(17% 0.01 150);

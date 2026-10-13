@@ -126,6 +126,10 @@ let phase = null;
 // The engine is answering somebody else. Said on the line, so cores at full
 // load beside the word "ready" are explained rather than left to puzzle over.
 let otherBusy = false;
+// The engine is just as busy with this visitor's own request, and for a beat
+// after it ends. A sample asked for before this time says nothing about
+// anybody else, and must not turn "ready" into "busy" under a finished answer.
+let ownUntil = 0;
 
 function paintState() {
   if (!bar) return;
@@ -185,10 +189,15 @@ function setStateWord(text) {
 export function setPhase(key, text) {
   const was = Boolean(phase);
   phase = key ? { key, text } : null;
+  const changed = was !== Boolean(phase);
+  if (changed) {
+    otherBusy = false;
+    if (!phase) ownUntil = performance.now() + 1000;
+  }
   paintState();
   // A request starting or ending changes how often the machine is sampled;
   // do not wait out the slower interval to notice.
-  if (was !== Boolean(phase)) scheduleTelemetry(250);
+  if (changed) scheduleTelemetry(250);
 }
 
 /** The phase a request is in right now, or null. */
@@ -279,6 +288,8 @@ export function reveal(el) {
 
 document.documentElement.classList.add("reveal-ready");
 $$(".stack").forEach(reveal);
+// Paper cannot be scrolled: printed, every chart is shown drawn.
+window.addEventListener("beforeprint", () => document.documentElement.classList.remove("reveal-ready"));
 
 /* ---------------------------------------------------------- telemetry --- */
 
@@ -375,11 +386,14 @@ const teleDelay = () => (phase && phase.key !== "held" ? 1000 : 3000);
 async function pollTelemetry() {
   teleTimer = null;
   if (document.hidden) return; // picked up again when the tab is seen
+  const asked = performance.now();
+  const mine = Boolean(phase);
   try {
     const res = await fetch("/api/telemetry");
     const data = await res.json();
     paintSystem(data.system);
-    const busy = Boolean(data.engine?.busy);
+    // Only a sample taken wholly outside our own request can be about someone else's.
+    const busy = Boolean(data.engine?.busy) && !mine && !phase && asked >= ownUntil;
     if (busy !== otherBusy) {
       otherBusy = busy;
       paintState();

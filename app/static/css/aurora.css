@@ -573,6 +573,9 @@ body {
   display: block;
   width: 6rem;
   height: 20px;
+  /* Taller than a line of this text by half a pixel. Pulled in, so the line
+     is the same height with the trace on it as without. */
+  margin-block: -1px;
   margin-left: var(--s-1);
   border-bottom: 1px solid var(--rule);
 }

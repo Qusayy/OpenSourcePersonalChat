@@ -1,4 +1,82 @@
-/* Rules for this part of the interface that are written as CSS rather than as
-   utility classes. Put them in a layer (`@layer components { … }`) so a
-   utility on the same element still wins; utilities and variants declared
-   with @utility or @custom-variant go at the top level. */
+/* The drawings inside a tool's figure.
+
+   The figures themselves (features/cards/kinds.tsx) are utility classes. What
+   is here is the inside of their SVGs: shapes that are children of a drawing,
+   coloured by what they are (a sun, a cloud, a clock hand) rather than by
+   where they sit. In Tailwind's components layer. */
+
+@layer components {
+  /* An icon in a caption is a block, so it does not sit on the text baseline
+     and nudge the label it shares a line with. */
+  .card-tool .icon {
+    display: block;
+    flex: 0 0 auto;
+  }
+
+  /* ----------------------------------------------------------- weather -- */
+
+  /* The drawings repeat what the words beside them already say, so they are
+     free to be bright: amber for sun and lightning, the secondary ink for
+     cloud and rain. Both hold on either sheet. */
+  .w-art {
+    --sun: oklch(76% 0.15 80);
+  }
+  .w-sun,
+  .w-bolt {
+    fill: var(--sun);
+  }
+  .w-rays line {
+    stroke: var(--sun);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .w-cloud {
+    fill: color-mix(in oklch, var(--ink-2) 38%, var(--sheet));
+  }
+  .w-drop line {
+    stroke: var(--ink-2);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .w-drop circle {
+    fill: var(--ink-2);
+  }
+
+  /* The next 24 hours of temperature. */
+  .w-area {
+    fill: var(--sheet-2);
+  }
+  .w-line {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+
+  /* ------------------------------------------------------------- clock -- */
+
+  .face .rim {
+    fill: none;
+    stroke: var(--rule);
+    stroke-width: 1.5;
+  }
+  .face .ticks line {
+    stroke: var(--ink-2);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+  .face .hand {
+    stroke: var(--ink);
+    stroke-linecap: round;
+  }
+  .face .hour {
+    stroke-width: 3;
+  }
+  .face .minute {
+    stroke-width: 1.75;
+  }
+  .face .pin {
+    fill: var(--ink);
+  }
+}

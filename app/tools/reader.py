@@ -37,6 +37,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from ..config import settings
+from ..excerpt import estimate, excerpt
 from .base import Arg, Tool, ToolResult, register
 
 MAX_BYTES = 2 * 1024 * 1024
@@ -283,6 +284,18 @@ async def _read_url(url: str) -> ToolResult:
     )
 
 
+def _observe(result: ToolResult, purpose: str, budget: int) -> str:
+    """A page as the model reads it: its title, then the sentences of its
+    text that bear most on the question, from anywhere on the page. A result
+    without the page's text is read by its summary."""
+    data = result.data
+    if not data.get("text"):
+        return result.summary
+    domain = data.get("domain") or ""
+    head = f"Page “{data.get('title') or domain}” ({domain}): "
+    return head + excerpt(data["text"], budget - estimate(head), purpose)
+
+
 register(Tool(
     name="read_url",
     label="Read page",
@@ -293,4 +306,6 @@ register(Tool(
     card="url",
     network=True,
     example="/read https://example.com",
+    budget=250,
+    observe=_observe,
 ))

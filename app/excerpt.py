@@ -193,6 +193,16 @@ def _render(chosen: list[_Sentence], total: int) -> str:
     return "".join(parts)
 
 
+def clip(text: str, budget: int) -> str:
+    """``text`` from its beginning, as much of it as fits ``budget`` tokens:
+    whole if it fits, else cut at a word and marked with "…" where it was
+    cut."""
+    text = text.strip()
+    if estimate(text) <= budget:
+        return text
+    return _cut(_Sentence(0, text, frozenset(), 0), budget)
+
+
 def _cut(s: _Sentence, budget: int) -> str:
     """One sentence too long for the budget, cut to fit it: at a word where
     there is one to cut at, and marked with "…" where it was cut."""
@@ -201,7 +211,8 @@ def _cut(s: _Sentence, budget: int) -> str:
     if room <= 0:
         return ""
     piece = s.text.encode("utf-8")[:room].decode("utf-8", "ignore")
-    if " " in piece:
-        piece = piece[: piece.rindex(" ")]
+    space = max(piece.rfind(" "), piece.rfind("\n"))
+    if space > 0:
+        piece = piece[:space]
     piece = piece.rstrip()
     return f"{before}{piece} …" if piece else ""

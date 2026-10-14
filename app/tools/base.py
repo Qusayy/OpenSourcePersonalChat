@@ -6,6 +6,10 @@ Two things a tool returns, and the difference matters:
 * ``summary`` — one plain line handed back to the model. Deliberately terse,
   because a 1.5B model given a page of JSON will start reciting it instead of
   answering.
+
+What the model reads of a result is its ``observation``: never more than the
+tool's ``budget`` in tokens, and for a tool that brings back pages of text,
+the part of it that bears on the question.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import settings
+from ..excerpt import clip
 
 
 @dataclass(frozen=True)
@@ -77,9 +82,23 @@ class Tool:
     card: str
     network: bool = False
     example: str = ""
+    # The most tokens of a result the model is given to read, counted as a
+    # byte in three. A one-line result is well inside it.
+    budget: int = 80
+    # How a result is read for a purpose within a budget, for a tool whose
+    # results are longer than a line. Without it, the summary is read.
+    observe: Callable[[ToolResult, str, int], str] | None = None
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
+
+    def observation(self, result: ToolResult, purpose: str = "", budget: int | None = None) -> str:
+        """What the model reads of a successful ``result``: chosen for
+        ``purpose``, the question it was looked up for, and never longer than
+        ``budget`` or the tool's own budget, whichever is less."""
+        room = self.budget if budget is None else max(0, min(budget, self.budget))
+        said = self.observe(result, purpose, room) if self.observe is not None else result.summary
+        return clip(said or "", room)
 
     def as_dict(self) -> dict:
         return {

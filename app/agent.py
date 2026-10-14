@@ -27,9 +27,11 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
+from .excerpt import estimate
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
 from .router import (
+    URL_RE,
     Action,
     ToolCall,
     decision_grammar,
@@ -152,6 +154,9 @@ ALREADY_LOOKED_UP = (
 # With that room left at the start, the beginning of the prompt does not have
 # to change part-way through the run.
 RUN_ROOM = 600
+# The least a lookup in the loop is given to read, however little room is
+# left: a line.
+LEAST_SHARE = 40
 
 
 def what_happened(result: ToolResult) -> str:
@@ -258,8 +263,10 @@ class _Run:
     # Set once the tools for this message have been chosen without the model:
     # by a skill, a command or a pattern.
     routed: bool = False
-    # What the last tool call came to; None if it was stopped.
+    # What the last tool call came to; None if it was stopped. And what the
+    # model reads of it, when it worked.
     last: ToolResult | None = None
+    seen: str = ""
     # Time spent waiting for the slot that no pass has yet been charged for.
     slot_wait: float = 0.0
     # A question the model chose to ask in place of an answer, and the pass
@@ -577,6 +584,7 @@ class _Run:
         transcript, dropped = self._transcript(tools)
         if dropped:
             yield "trimmed", {"dropped": dropped}
+        start = estimate(transcript.rendered())
         made: set[str] = set()
         decisions = steps = 0
         began = time.perf_counter()
@@ -630,14 +638,18 @@ class _Run:
                     break
                 made.add(key)
                 self.calls.append(action.call)
-                async for event in self._lookup(steps, action.call):
+                # An even share of the room the run has left, so that the
+                # last lookup it may make has as much to read as the first.
+                left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+                share = max(LEAST_SHARE, left // (self.max_steps - steps))
+                async for event in self._lookup(steps, action.call, budget=share):
                     yield event
                 steps += 1
                 if self.last is None:
                     break  # stopped while the tool was out
                 transcript.observation(
                     action.call.name,
-                    self.last.summary if self.last.ok else what_happened(self.last),
+                    self.seen if self.last.ok else what_happened(self.last),
                     ok=self.last.ok,
                 )
             if self.stop.is_set():
@@ -729,7 +741,9 @@ class _Run:
         }
         return call.name + " " + json.dumps(plain, sort_keys=True, ensure_ascii=False)
 
-    async def _lookup(self, index: int, call: ToolCall) -> AsyncIterator[Event]:
+    async def _lookup(
+        self, index: int, call: ToolCall, *, budget: int | None = None
+    ) -> AsyncIterator[Event]:
         """One tool call of a run that is holding the slot.
 
         A tool that works here takes milliseconds, and the slot is kept. One
@@ -745,7 +759,7 @@ class _Run:
         )
         if lend:
             self.engine.give_slot(self.request_id)
-        async for event in self._act(index, call):
+        async for event in self._act(index, call, budget=budget):
             yield event
         if lend and not self.stop.is_set():
             async for event in self._take():
@@ -753,7 +767,12 @@ class _Run:
 
     # ---------------------------------------------------------- one tool --
 
-    async def _act(self, index: int, call: ToolCall) -> AsyncIterator[Event]:
+    async def _act(
+        self, index: int, call: ToolCall, *, budget: int | None = None
+    ) -> AsyncIterator[Event]:
+        """Make one call and say what came of it. What the model reads of a
+        result that worked is kept in ``seen``: within ``budget`` tokens if
+        given, and the tool's own budget in any case."""
         tool = REGISTRY.get(call.name)
         step_id = f"tool-{index}"
         label = tool.label if tool else call.name
@@ -795,7 +814,10 @@ class _Run:
             "detail": None if result.ok else (result.error or "failed"),
         }
         if result.ok:
-            self.summaries.append(f"{call.name}: {result.summary}")
+            self.seen = (
+                tool.observation(result, self.purpose, budget) if tool else result.summary
+            )
+            self.summaries.append(f"{call.name}: {self.seen}")
             yield "card", {
                 "step_id": step_id, "card": result.card,
                 "tool": call.name, "data": result.data,
@@ -829,6 +851,12 @@ class _Run:
                     task.cancel()
 
     # ---------------------------------------------------------- the prompt --
+
+    @property
+    def purpose(self) -> str:
+        """What a result is read for: the message, without any address in it.
+        An address says where to look, not what to look for."""
+        return " ".join(URL_RE.sub(" ", self.message).split())
 
     def _prompt(self) -> list[dict]:
         messages = [{"role": "system", "content": self.persona.system}]

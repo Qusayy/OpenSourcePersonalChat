@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 
 from ..config import settings
+from ..excerpt import estimate, excerpt
 from .base import Arg, Tool, ToolResult, register
 
 
@@ -82,6 +83,17 @@ async def _wikipedia(query: str) -> ToolResult:
     )
 
 
+def _observe_article(result: ToolResult, purpose: str, budget: int) -> str:
+    """An article as the model reads it: its title, then the sentences of
+    its summary that bear most on the question. A result without the
+    article's text is read by its own summary."""
+    data = result.data
+    if not data.get("extract"):
+        return result.summary
+    head = f"Wikipedia — {data.get('title') or ''}: "
+    return head + excerpt(data["extract"], budget - estimate(head), purpose)
+
+
 register(Tool(
     name="wikipedia",
     label="Wikipedia",
@@ -92,6 +104,8 @@ register(Tool(
     card="wikipedia",
     network=True,
     example="/wiki Ada Lovelace",
+    budget=175,
+    observe=_observe_article,
 ))
 
 

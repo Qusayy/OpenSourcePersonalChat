@@ -11,13 +11,17 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import unittest
 
 try:
     from app import agent
+    from app.excerpt import estimate
     from app.personas import get_persona
+    from app.tools import REGISTRY
     from app.skills import get_skill
     from app.tools.base import ToolResult
+    from evals import fixtures
     from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import collect, listen, only, shape, until
@@ -1307,6 +1311,47 @@ class LimitTests(LoopCase):
                 # And nothing was looked up twice.
                 made = [json.dumps(c, sort_keys=True) for c in asked["weather"]]
                 self.assertEqual(len(made), len(set(made)))
+
+
+def article(title: str) -> ToolResult:
+    text = " ".join(f"{title} fact {i} is a long sentence about {title} and its history." for i in range(200))
+    return ToolResult(True, f"Wikipedia — {title}: {text[:300]}", card="wikipedia",
+                      data={"title": title, "extract": text})
+
+
+def wiki(query: str) -> str:
+    return json.dumps({"tool": "wikipedia", "args": {"query": query}})
+
+
+class ReadingTests(LoopCase):
+    """What the model is given to read of what the tools brought back."""
+
+    async def test_long_articles_in_the_loop_share_the_room_left_for_the_run(self) -> None:
+        # Four articles at the tool's own budget would not fit the room: each
+        # is given its share of what is left.
+        lights = ["Fastnet", "Hook Head", "Loop Head", "Baily"]
+        self.assertGreater(len(lights) * REGISTRY["wikipedia"].budget, agent.RUN_ROOM)
+        support.with_settings(self, agent_max_steps=4, agent_max_decisions=5)
+        engine = self.scripted(*(wiki(name) for name in lights), NONE, "Hook Head came first.")
+        support.played_tools(self, {"wikipedia": [article(name) for name in lights]})
+        _, trace = await self.traced("Which of four Irish lighthouses came first?", engine)
+        self.assertEqual([c.name for c, _ in trace.calls], ["wikipedia"] * 4)
+        prompt = "\n".join(m["content"] for m in trace.prompt)
+        seen = re.findall(r'<data tool="wikipedia">(.*?)</data>', prompt, re.S)
+        self.assertEqual(len(seen), 4)
+        for text in seen:
+            self.assertLessEqual(estimate(text), REGISTRY["wikipedia"].budget)
+        self.assertLessEqual(sum(estimate(text) for text in seen), agent.RUN_ROOM)
+        self.assertGreater(estimate(seen[-1]), agent.LEAST_SHARE, "the last had a share too")
+
+    async def test_a_result_is_read_for_the_message_and_not_its_address(self) -> None:
+        engine = self.scripted("Fifty-four metres.")
+        support.played_tools(self, {"read_url": ToolResult(**fixtures.load("read_url_lighthouses.json")["result"])})
+        trace = agent.Trace()
+        await collect(self.run_message(
+            "https://example.org/lighthouses how tall is the Fastnet one?", engine, trace=trace,
+        ))
+        self.assertIn("The Fastnet Rock lighthouse stands 54 metres tall", trace.prompt[-1]["content"])
 
 
 class LoopRepairTests(LoopCase):

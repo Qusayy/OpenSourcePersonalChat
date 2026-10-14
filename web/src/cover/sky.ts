@@ -162,6 +162,14 @@ interface Programs {
   groundAt: Locations<(typeof GROUND_UNIFORMS)[number]>;
 }
 
+/** Whether WebGL is being drawn on the processor rather than a graphics card,
+ *  by the names the software renderers go by. */
+function software(gl: WebGL2RenderingContext): boolean {
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? "");
+  return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+}
+
 let mounted: Sky | null = null;
 
 /**
@@ -177,9 +185,20 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
     depth: false,
     stencil: false,
     powerPreference: "high-performance",
+    // No context at all rather than one drawn in software. A browser with no
+    // graphics card to use draws WebGL on the processor, where one frame of
+    // the aurora takes seconds and the page stops answering a finger; the
+    // plain sky (flat.ts) is the one for it.
+    failIfMajorPerformanceCaveat: true,
   });
   if (!context || context.isContextLost()) return null;
   const gl: WebGL2RenderingContext = context;
+  if (software(gl)) {
+    // The flag above is not always honoured: a browser may still hand out a
+    // context drawn on the processor. Given back, and the plain sky instead.
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return null;
+  }
 
   const view: View = { width: 0, height: 0, unit: 1 };
   const overlay: Overlay = {
@@ -233,6 +252,7 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
   let samples = 0;
   let total = 0;
   let warming = 30; // frames not counted: the first ones compile and upload
+  let crawling = 0; // frames while warming that took as long as a frame can be said to
   let calm = 0;
   let goal = 0;
 
@@ -436,6 +456,13 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
   function govern(dt: number): void {
     if (warming > 0) {
       warming--;
+      // The frame loop caps a step at 64 ms, so a frame at the cap took that
+      // long or longer. A few of those in a row say enough: the least detail
+      // at once, not after a window of them, which on a slow card is minutes.
+      if (dt >= 60 && ++crawling >= 5 && level < LEVELS.length - 1) {
+        crawling = 0;
+        setLevel(LEVELS.length - 1);
+      }
       return;
     }
     recent[samples++] = dt;

@@ -306,10 +306,14 @@ AURORA_GATE_VERIFIER=gate1.300000.<salt>.<hash>
 Put it in `/srv/aurora/.env`, remove any `AURORA_GATE=off`, and restart:
 
 ```bash
-chmod 600 /srv/aurora/.env
+sudo chown aurora:aurora /srv/aurora/.env     # the service reads it as aurora
+sudo chmod 600 /srv/aurora/.env
 sudo systemctl restart aurora
-.venv/bin/python -m app.gate status
+sudo -u aurora .venv/bin/python -m app.gate status
 ```
+
+`chmod 600` alone on a file root owns leaves the service unable to read its
+own settings, and it does not start.
 
 The pattern never leaves the browser it was drawn in, and the setup page is
 not part of any build. **The line is as good as the pattern**: there are few

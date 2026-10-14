@@ -679,7 +679,13 @@ python scripts/bench_cli.py --out bench.json
 
 Three prompt sizes (~32 / ~256 / ~1024 tokens) × 128 generated tokens, 3/3/2
 repetitions, one discarded warm-up. It reports prefill tok/s, generation tok/s,
-TTFT p50/p95 and peak RSS, and stores every run so `/bench` can chart drift.
+TTFT p50/p95 and peak RSS (the app and its model), and stores every run so
+`/bench` can chart drift.
+
+Every run reads its prompt cold: each one opens with a word no other run's
+prompt opens with, so the model has nothing cached to reuse. Repeating the same
+prompt made the second and third runs cache hits, and the suite reported
+500–9,000 tok/s of prefill on a server whose real figure is 60–140.
 
 ### Reference points
 

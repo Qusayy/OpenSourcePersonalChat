@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__, agent, bench, db, telemetry
 from .config import settings
+from .context import turns_from
 from .gate import GateMiddleware
 from .llm import engine
 from .personas import DEFAULT_PERSONA, get_persona, persona_list
@@ -191,8 +192,12 @@ async def api_chat(payload: ChatRequest):
         cid = db.create_conversation(persona.id, user_text)
         created = True
 
-    history = db.conversation_messages(cid)
-    db.add_message(cid, "user", user_text)
+    # What was said, which decides which addresses the visitor gave, and what
+    # was sent, which is what the model reads of the conversation.
+    messages, records = db.conversation_record(cid)
+    history = [{"role": m["role"], "content": m["content"]} for m in messages]
+    context = turns_from(messages, records)
+    question_id = db.add_message(cid, "user", user_text)
     db.touch_conversation(cid, persona.id)
 
     # The name this run can be stopped by, from here to its last event.
@@ -216,10 +221,10 @@ async def api_chat(payload: ChatRequest):
             )
 
             trace = agent.Trace(run_id=run_id)
-            keeper = _Keeper(cid, persona.id, trace)
+            keeper = _Keeper(cid, persona.id, trace, question_id)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
-                engine=engine, request_id=run_id,
+                engine=engine, request_id=run_id, context=context,
             )
             try:
                 # Closed with this response, not whenever it is collected: a
@@ -245,10 +250,11 @@ class _Keeper:
     page answers by asking for the conversation list.
     """
 
-    def __init__(self, cid: str, persona_id: str, trace: agent.Trace) -> None:
+    def __init__(self, cid: str, persona_id: str, trace: agent.Trace, question_id: str) -> None:
         self.cid = cid
         self.persona_id = persona_id
         self.trace = trace
+        self.question_id = question_id
         self.call_ids: list[str] = []
         self.steps_kept = 0
         self.answered = False
@@ -291,6 +297,13 @@ class _Keeper:
         db.attach_tool_calls(mid, self.call_ids)
         db.attach_steps(mid, self.trace.run_id)
         db.touch_conversation(self.cid)
+        # What the answer was sent, for the next message to be read with.
+        sent = self.trace.turn("").parts
+        if sent and self.trace.system_key:
+            db.add_context_turn(
+                self.cid, self.trace.run_id, question_id=self.question_id, answer_id=mid,
+                system_key=self.trace.system_key, parts=[p.as_dict() for p in sent],
+            )
         if usage.get("asked"):
             # A question put back to the visitor was written by a routing
             # pass. It is a message, and it is not a sample of how fast this

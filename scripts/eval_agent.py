@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import agent  # noqa: E402
 from app.config import settings  # noqa: E402
+from app.context import Turn  # noqa: E402
 from app.personas import get_persona  # noqa: E402
 from app.router import decision_grammar, decision_limit  # noqa: E402
 from app.tools.base import available  # noqa: E402
@@ -133,17 +134,23 @@ async def probe_cache(engine, seed: int | None) -> list[dict]:
         with fixtures.recorded({}):
             for persona in PROBE_PERSONAS:
                 history: list[dict] = []
+                sent: list[Turn] = []
                 for turn, text in enumerate(PROBE_TURNS, start=1):
                     current.update(persona=persona, turn=turn)
                     trace = agent.Trace()
                     async for _ in agent.run(
                         text, persona=get_persona(persona), history=list(history), trace=trace,
-                        engine=engine, tools_enabled=True, seed=seed,
+                        engine=engine, tools_enabled=True, seed=seed, context=list(sent),
                     ):
                         pass
+                    # Each turn is read with the ones before it, as the site
+                    # reads a conversation: as it was sent.
                     history.append({"role": "user", "content": text})
                     if trace.answer and trace.answer.strip():
                         history.append({"role": "assistant", "content": trace.answer})
+                        sent.append(trace.turn(text))
+                    else:
+                        sent.append(Turn(text, ""))
     finally:
         del engine.stream_chat
     return rows

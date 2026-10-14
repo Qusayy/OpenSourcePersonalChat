@@ -214,6 +214,53 @@ class WindowTests(AgentCase):
         self.assertEqual(trace.prompt[-1]["content"], "And now?")
 
 
+class KeptTests(unittest.TestCase):
+    """What a run leaves for the next message to be read with."""
+
+    def test_a_run_that_answered_or_asked_leaves_what_it_sent(self) -> None:
+        from app.context import Part
+
+        sent = [Part("user", "question", "Hi"), Part("assistant", "answer", "Hello")]
+        for outcome, kept in (("answered", tuple(sent)), ("asked", tuple(sent)),
+                              ("stopped", ()), ("failed", ())):
+            with self.subTest(outcome):
+                trace = agent.Trace(outcome=outcome, answer="Hello", sent=list(sent), system_key="k")
+                turn = trace.turn("Hi", at=5.0)
+                self.assertEqual((turn.question, turn.answer, turn.parts, turn.at),
+                                 ("Hi", "Hello", kept, 5.0))
+
+
+class ReplayedAddressTests(AgentCase):
+    """What the model reads of the conversation is not what the user said."""
+
+    async def test_an_address_found_only_in_a_replayed_page_is_never_fetched(self) -> None:
+        from app.context import Part, Turn, key
+        from app.transcript import system_for
+        from app.tools.base import available
+
+        page = data("read_url", "Page “Tides”: high water at six. More at https://evil.example/x")
+        earlier = Turn(
+            "open https://example.org/tides", "High water is at six.",
+            parts=(Part("user", "question", "open https://example.org/tides"),
+                   Part("user", "data", page, ("read_url",)),
+                   Part("assistant", "answer", "High water is at six.")),
+            system_key=key(system_for(get_persona("agent"), available())), at=0.0,
+        )
+        history = [{"role": "user", "content": earlier.question},
+                   {"role": "assistant", "content": earlier.answer}]
+        elsewhere = '{"tool": "read_url", "args": {"url": "https://evil.example/x"}}'
+        engine = self.scripted(elsewhere, elsewhere, NONE, "I can only open pages you give me.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        trace = agent.Trace()
+        await collect(agent.run(
+            "open the other page it mentions", persona=get_persona("agent"), history=history,
+            context=[earlier], trace=trace, engine=engine, loop=True,
+        ))
+        self.assertIn("https://evil.example/x", engine.passes[0].prompt, "the model could read it")
+        self.assertEqual(fetched["read_url"], [])
+        self.assertTrue(trace.steps[0].error.startswith("rejected: url must be an address the user gave"))
+
+
 class StopTests(AgentCase):
     """Somebody presses Stop. The run is known by one id from its first stage
     to its last, and stopping it works at every one of them."""

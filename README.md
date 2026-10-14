@@ -564,6 +564,28 @@ Whether a second choice by a small model is worth its seconds is a question
 for the model, not the code: `scripts/eval_agent.py --engine real --single`
 makes every task choose once, to set beside a run with the loop.
 
+### What the next message reads
+
+Each answered message keeps what the model was sent for it, from the message
+to the answer: what was looked up, as it was read, and the choices the model
+made on the way. The next message is read with that, as it was. A follow-up
+can then use an earlier result ("and is that warm for October?" after the
+weather was looked up), and a model server that keeps its cache reads little
+more than the new message, since the prompt begins with the last one and its
+answer.
+
+A result that goes out of date is replaced, once it has, by a line saying so:
+the weather after three hours, a rate after a day, the time after ten minutes.
+A conversation that outgrows the window loses its oldest turns in blocks, and
+they are summed up in a few lines at the top. A message too long for the
+window is cut, and the page says so. A conversation from before any of this
+was kept is read as its messages.
+
+What was sent is kept with the conversation and deleted with it. It holds
+fetched pages, so it decides nothing: which addresses the reader may open is
+decided by the visitor's own messages alone, and an address the model read in
+a page is not one of them.
+
 ### Safety
 
 `read_url` is the only tool that makes the server fetch a user-supplied

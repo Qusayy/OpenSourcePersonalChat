@@ -29,6 +29,7 @@ from typing import Any, Iterable
 
 from app import agent
 from app.config import settings
+from app.context import Turn as Sent
 from app.llm import Engine
 from app.personas import get_persona
 from app.skills import get_skill
@@ -111,6 +112,7 @@ async def run_task(
     began = time.perf_counter()
     persona = get_persona(get_skill(task.skill).persona if get_skill(task.skill) else task.persona)
     history: list[dict] = []
+    sent: list[Sent] = []
     turns: list[Turn] = []
     with fixtures.recorded(task.tools):
         for text in task.turns:
@@ -120,15 +122,18 @@ async def run_task(
                 async for event in agent.run(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
-                    loop=True if task.loop else loop,
+                    loop=True if task.loop else loop, context=list(sent),
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
             # The next message is read with this exchange before it, as the
-            # site replays a conversation.
+            # site replays a conversation: what was said, and what was sent.
             history.append({"role": "user", "content": text})
             if trace.answer and trace.answer.strip():
                 history.append({"role": "assistant", "content": trace.answer})
+                sent.append(trace.turn(text))
+            else:
+                sent.append(Sent(text, ""))
 
     failures = score(task, turns)
     if task.pending:

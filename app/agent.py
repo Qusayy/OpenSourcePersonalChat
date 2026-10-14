@@ -27,7 +27,9 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
-from .context import RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, turns_from_history
+from .context import (
+    RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
+)
 from .excerpt import estimate
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
@@ -104,12 +106,26 @@ class Trace:
     # The prompt that pass was given, as it was sent: after the tool results
     # were folded in and after any trimming. None if no answer was begun.
     prompt: list[dict] | None = None
+    # What this run sent, from the message to the answer, and the system text
+    # it was sent under, by its key: what the next message is read with. Set
+    # once the run has answered, or asked.
+    sent: list[Part] | None = None
+    system_key: str | None = None
     # How it ended: answered | asked | stopped | failed. None while it is
     # running. "asked" is a question put to the user in place of an answer.
     outcome: str | None = None
     # The run's own stopwatch, first stage to last. It is a little more than
     # the steps add up to: the difference is the time between them.
     wall_ms: float | None = None
+
+    def turn(self, question: str, at: float | None = None) -> Turn:
+        """This run as the next message is read with it: what it sent, where
+        it answered or asked, and otherwise only the message and the answer."""
+        kept = self.sent if self.outcome in ("answered", "asked") else None
+        return Turn(
+            question, self.answer or "", parts=tuple(kept or ()), system_key=self.system_key,
+            at=time.time() if at is None else at,
+        )
 
     def totals(self) -> dict:
         """The run in a line: what the page is told when it ends.
@@ -189,6 +205,7 @@ def run(
     request_id: str | None = None,
     seed: int | None = None,
     loop: bool | None = None,
+    context: list[Turn] | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -205,6 +222,11 @@ def run(
     ``loop`` lets a tool the model chose earn it another choice, within the
     limits in the settings. Without it the model chooses once, and the run
     answers after that one lookup. Left unset, the setting decides.
+
+    ``context`` is the conversation as it was sent, turn by turn, which is
+    what the model reads of it. ``history`` stays what was said, and only
+    that: it is what decides which addresses the user gave. Without
+    ``context`` the conversation is read from ``history``.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -224,6 +246,7 @@ def run(
         request_id=trace.run_id,
         seed=seed,
         loop=settings.agent_loop if loop is None else loop,
+        turns=context,
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -328,9 +351,11 @@ class _Run:
         if self.stop.is_set():
             yield self._stopped()
             return
-        window = self._window(self._system(), self._prompt(), run=False)
+        system, now = self._system(), self._prompt()
+        window = self._window(system, now, run=False)
         if self._trimmed(window):
             yield "trimmed", self.trim
+        self._sending(system, now)
         async with aclosing(self._answer(window.messages)) as events:
             async for event in events:
                 yield event
@@ -370,6 +395,12 @@ class _Run:
             system, self.turns or [], now, room=self._room(run=run),
             count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
         )
+
+    def _sending(self, system: str, parts: list[Part]) -> None:
+        """Keep what this run is sending of its own, under ``system``. The
+        answer is added once it is written."""
+        self.trace.sent = list(parts)
+        self.trace.system_key = key(system)
 
     def _trimmed(self, window: Window) -> bool:
         """Whether anything had to give for the prompt to fit, and if so what,
@@ -604,6 +635,8 @@ class _Run:
                     closing["label"] = "Asking you first"
                     self.question, self.asked_by = action.question, passes[-1]
                     yield "step", closing
+                    # What the model wrote, the question in it, is the reply.
+                    self._sending(transcript.parts()[0].content, transcript.run_parts())
                     for event in self._ask():
                         yield event
                     return
@@ -636,6 +669,7 @@ class _Run:
                 yield self._stopped()
                 return
             transcript.answer_cue(note)
+            self._sending(transcript.parts()[0].content, transcript.run_parts())
             async with aclosing(self._answer(transcript.messages(), held=True)) as events:
                 async for event in events:
                     yield event
@@ -928,6 +962,8 @@ class _Run:
                 ))
                 self.trace.outcome = "stopped" if stopped else "answered"
                 self.trace.answer = data.pop("text", "")
+                if self.trace.sent is not None:
+                    self.trace.sent.append(Part("assistant", "answer", self.trace.answer))
                 data["tool_calls"] = len(self.calls)
                 self.trace.usage = data
                 yield "step", {

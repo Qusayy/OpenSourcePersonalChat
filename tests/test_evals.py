@@ -394,6 +394,23 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         for row in report["tasks"]:
             self.assertNotIn("ms", row)
 
+    def test_what_the_model_read_is_added_up_only_where_every_pass_reported_it(self) -> None:
+        from evals.runner import Outcome, summarise
+
+        def turn(*read: int | None) -> Turn:
+            trace = agent.Trace()
+            trace.steps = [agent.Step("route", model=True, new_tokens=n) for n in read]
+            return Turn(user="x", events=[], trace=trace)
+
+        task = Task(id="t", category="c", turns=("x",))
+        every = Outcome(task, PASSED, [], [turn(5, 7), turn(3)])
+        some = Outcome(task, PASSED, [], [turn(5, None)])
+        self.assertEqual(every.row(False)["read_tokens"], 15)
+        self.assertIsNone(some.row(False)["read_tokens"])
+        self.assertIsNone(Outcome(task, PASSED, [], [turn()]).row(False)["read_tokens"])
+        self.assertEqual(summarise([every, some], timed=True)["read_tokens"]["max"], 15)
+        self.assertIsNone(summarise([some], timed=True)["read_tokens"])
+
     async def test_only_the_categories_asked_for_are_run(self) -> None:
         report = await run_suite(load_tasks(), engine_kind="scripted", categories=["skill"])
         self.assertEqual({row["category"] for row in report["tasks"]}, {"skill"})
@@ -491,6 +508,55 @@ class CommandTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             self.run_command("--probe-routing")
         self.assertEqual(caught.exception.code, 2)
+
+    def test_probing_the_cache_needs_the_real_model(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self.run_command("--probe-cache")
+        self.assertEqual(caught.exception.code, 2)
+
+
+class CacheProbeTests(unittest.IsolatedAsyncioTestCase):
+    """The cache probe, played against a script that reports what it read."""
+
+    async def test_every_pass_of_every_turn_is_a_row_with_what_it_read(self) -> None:
+        from evals.scripted import ScriptedEngine
+
+        class Reporting(ScriptedEngine):
+            def _iter_chunks(self, messages, sampling, *, reading=None, **more):
+                yield from super()._iter_chunks(messages, sampling, **more)
+                if reading is not None:
+                    reading.read, reading.cached = 9, self.prompt_tokens(messages) - 9
+
+        support.with_settings(self, tools_enabled=True, agent_loop=False)
+        answers = ["One.", "Two.", "Both."]
+        engine = Reporting([*answers, *(step for a in answers for step in (NONE, a))])
+        self.addAsyncCleanup(engine.settled)
+        rows = await eval_agent.probe_cache(engine, seed=0)
+
+        self.assertEqual(
+            [(r["persona"], r["turn"], r["pass"]) for r in rows],
+            [("explainer", 1, "answer"), ("explainer", 2, "answer"), ("explainer", 3, "answer"),
+             ("agent", 1, "choice"), ("agent", 1, "answer"), ("agent", 2, "choice"),
+             ("agent", 2, "answer"), ("agent", 3, "choice"), ("agent", 3, "answer")],
+        )
+        for row in rows:
+            self.assertEqual(row["read"], 9)
+            self.assertEqual(row["server"], row["counted"])
+        # Each turn is read with the turns before it.
+        self.assertEqual(engine.passes[2].messages[-2]["content"], "Two.")
+        self.assertNotIn("stream_chat", vars(engine), "the engine is left as it was found")
+
+    async def test_a_server_that_reports_nothing_is_said_to_have_reported_nothing(self) -> None:
+        from evals.scripted import ScriptedEngine
+
+        support.with_settings(self, tools_enabled=True, agent_loop=False)
+        engine = ScriptedEngine(["One.", "Two.", "Both.", NONE, "A", NONE, "B", NONE, "C"])
+        self.addAsyncCleanup(engine.settled)
+        rows = await eval_agent.probe_cache(engine, seed=0)
+        self.assertTrue(all(r["read"] is None and r["server"] is None for r in rows))
+        said = io.StringIO()
+        eval_agent.show_probe(rows, file=said)
+        self.assertIn("the server reported nothing of what it read", said.getvalue())
 
 
 class OfflineTests(unittest.IsolatedAsyncioTestCase):

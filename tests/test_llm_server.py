@@ -13,7 +13,7 @@ import unittest
 try:
     import httpx
 
-    from app.llm_server import LlamaServer, ServerError
+    from app.llm_server import LlamaServer, Reading, ServerError
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -130,6 +130,63 @@ class StreamTests(unittest.TestCase):
         server = Server(httpx.Response(200, stream=Body([b"data: {not json\n\n"])))
         with self.assertRaises(ServerError):
             list(server.client().stream({"messages": []}))
+
+
+class ReadingTests(unittest.TestCase):
+    """What the server says it did with the prompt, kept from its last piece."""
+
+    def read(self, *chunks: dict) -> Reading:
+        reading = Reading()
+        server = Server(httpx.Response(200, stream=Body(sse(*chunks))))
+        list(server.client().stream({"messages": []}, reading))
+        return reading
+
+    def test_what_was_read_and_what_was_cached_come_from_the_timings(self) -> None:
+        reading = self.read(
+            delta("Hi"),
+            {"choices": [{"delta": {}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 312, "completion_tokens": 1},
+             "timings": {"prompt_n": 12, "cache_n": 300, "prompt_ms": 150.0}},
+        )
+        self.assertEqual(reading, Reading(prompt=312, read=12, cached=300))
+
+    def test_usage_on_a_piece_of_its_own_is_read_too(self) -> None:
+        reading = self.read(
+            delta("Hi"),
+            {"choices": [{"delta": {}, "finish_reason": "stop"}], "timings": {"prompt_n": 40}},
+            {"choices": [], "usage": {"prompt_tokens": 340,
+                                      "prompt_tokens_details": {"cached_tokens": 300}}},
+        )
+        self.assertEqual(reading, Reading(prompt=340, read=40, cached=300))
+
+    def test_the_one_figure_the_other_two_give_is_filled_in(self) -> None:
+        cached = self.read(delta("x"), {"choices": [], "usage": {"prompt_tokens": 90},
+                                        "timings": {"prompt_n": 10}})
+        self.assertEqual(cached, Reading(prompt=90, read=10, cached=80))
+        whole = self.read(delta("x"), {"choices": [], "timings": {"prompt_n": 10, "cache_n": 80}})
+        self.assertEqual(whole, Reading(prompt=90, read=10, cached=80))
+
+    def test_a_server_that_reports_nothing_leaves_every_figure_empty(self) -> None:
+        self.assertEqual(self.read(delta("Hi"), delta(" there")), Reading())
+
+    def test_a_figure_the_server_does_not_have_is_not_taken(self) -> None:
+        reading = self.read(delta("x"), {"choices": [], "timings": {"prompt_n": -1, "cache_n": -1}})
+        self.assertEqual(reading, Reading())
+
+    def test_an_answer_stopped_before_its_end_reports_nothing(self) -> None:
+        reading = Reading()
+        body = Body(sse(delta("one"), delta("two"),
+                        {"choices": [], "timings": {"prompt_n": 5, "cache_n": 95}}))
+        stream = Server(httpx.Response(200, stream=body)).client().stream({"messages": []}, reading)
+        self.assertEqual(next(stream), "one")
+        stream.close()
+        self.assertEqual(reading, Reading())
+
+    def test_without_a_reading_to_fill_the_stream_is_the_same(self) -> None:
+        server = Server(httpx.Response(200, stream=Body(sse(
+            delta("Hi"), {"choices": [], "timings": {"prompt_n": 3}},
+        ))))
+        self.assertEqual(list(server.client().stream({"messages": []})), ["Hi"])
 
 
 class TokenizeTests(unittest.TestCase):

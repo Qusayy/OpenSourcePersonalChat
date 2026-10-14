@@ -68,8 +68,8 @@ class Step:
     input: dict | None = None
     output: str | None = None
     prompt_tokens: int | None = None
-    # Prompt tokens the model had to read, the rest being in its cache. No
-    # engine reports this yet, and it is never guessed at.
+    # Prompt tokens the model had to read, the rest being in its cache. Only a
+    # model server reports this, and it is never guessed at.
     new_tokens: int | None = None
     output_tokens: int | None = None
     queue_ms: float | None = None
@@ -342,6 +342,8 @@ class _Run:
             "ttft_ms": said.ttft_ms,
             "queue_wait_ms": said.queue_wait_ms,
             "prompt_tokens": said.prompt_tokens,
+            "read_tokens": said.read_tokens,
+            "cached_tokens": said.cached_tokens,
             "completion_tokens": said.completion_tokens or 0,
             # The pass wrote JSON under a grammar. Its speed is not the speed
             # of an answer, and is not passed off as one.
@@ -369,6 +371,8 @@ class _Run:
             "ttft_ms": None,
             "queue_wait_ms": None,
             "prompt_tokens": None,
+            "read_tokens": None,
+            "cached_tokens": None,
             "completion_tokens": 0,
             "prefill_tps": None,
             "gen_tps": None,
@@ -548,7 +552,8 @@ class _Run:
         self.trace.steps.append(Step(
             kind, model=True, name=action.call.name if action.call else None, via="model",
             input=given, output=said.raw,
-            prompt_tokens=said.prompt_tokens, output_tokens=said.completion_tokens,
+            prompt_tokens=said.prompt_tokens, new_tokens=said.read_tokens,
+            output_tokens=said.completion_tokens,
             queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
             ok=error is None, error=error,
         ))
@@ -899,6 +904,7 @@ class _Run:
                 self.trace.steps.append(Step(
                     "answer", model=True, input=trimmed,
                     prompt_tokens=data.get("prompt_tokens"),
+                    new_tokens=data.get("read_tokens"),
                     output_tokens=data.get("completion_tokens"),
                     queue_ms=queued if queued is None and not waited else (queued or 0.0) + waited,
                     first_token_ms=data.get("ttft_ms"),

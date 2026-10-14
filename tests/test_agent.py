@@ -30,6 +30,19 @@ PARIS = ToolResult(True, "Paris, France: overcast, 17.9°C.", card="weather", da
 ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done", "run"]
 
 
+class Reporting(ScriptedEngine):
+    """A script that says, as a model server does, how much of each prompt it
+    read: ``READ`` tokens of it, and the rest from its cache."""
+
+    READ = 7
+
+    def _iter_chunks(self, messages, sampling, *, reading=None, **more):
+        yield from super()._iter_chunks(messages, sampling, **more)
+        if reading is not None:
+            reading.read = self.READ
+            reading.cached = self.prompt_tokens(messages) - self.READ
+
+
 class AgentCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         support.no_network(self)
@@ -401,6 +414,16 @@ class TraceTests(AgentCase):
         self.assertGreaterEqual(step.first_token_ms, 30)
         # Nothing here can say how much of the prompt the model had cached.
         self.assertIsNone(step.new_tokens)
+
+    async def test_what_the_model_read_of_each_prompt_is_kept_with_its_step(self) -> None:
+        support.played_tools(self, {"weather": PARIS})
+        engine = Reporting([WEATHER, "Yes."])
+        self.addAsyncCleanup(engine.settled)
+        stream, trace = await self.traced("Do I need a coat in Paris", engine)
+        self.assertEqual([s.new_tokens for s in trace.steps if s.model], [Reporting.READ] * 2)
+        done = only(stream, "done")[0]
+        self.assertEqual(done["read_tokens"], Reporting.READ)
+        self.assertEqual(done["cached_tokens"], done["prompt_tokens"] - Reporting.READ)
 
     async def test_the_wait_for_the_slot_is_part_of_what_a_pass_cost(self) -> None:
         engine = self.scripted("Somebody else's answer.", "Ours.", gated=True)
@@ -839,8 +862,9 @@ class AskTests(AgentCase):
         asked = trace.steps[0]
         self.assertEqual(
             set(done),
-            {"cancelled", "asked", "ttft_ms", "queue_wait_ms", "prompt_tokens",
-             "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb", "tool_calls"},
+            {"cancelled", "asked", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
+             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb",
+             "tool_calls"},
         )
         self.assertIs(done["asked"], True)
         self.assertIs(done["cancelled"], False)

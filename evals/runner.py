@@ -15,6 +15,9 @@ Two engines:
 
 A scripted report says in so many words that its token counts are estimates
 and carries no timings: a script's speed is the speed of a loop in Python.
+
+How much of each prompt the model actually read, the rest coming from its
+cache, is in a row only where the model server reported it for every pass.
 """
 
 from __future__ import annotations
@@ -71,10 +74,14 @@ class Outcome:
             return row
         steps = [s for turn in self.turns for s in turn.trace.steps]
         models = [s for s in steps if s.model]
+        reported = [s.new_tokens for s in models]
         row.update(
             steps=sum(1 for s in steps if s.kind == "tool"),
             passes=len(models),
             prompt_tokens=sum(s.prompt_tokens or 0 for s in models),
+            # Of those, what the model read. A total with a pass missing from
+            # it would look like a cache that worked, so there is none.
+            read_tokens=sum(reported) if models and None not in reported else None,
             output_tokens=sum(s.output_tokens or 0 for s in models),
         )
         if timed:
@@ -262,6 +269,10 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         "output_tokens": _spread([float(r["output_tokens"]) for r in rows]),
     }
     if timed:
+        # Over the tasks whose every pass the server reported on.
+        summary["read_tokens"] = _spread(
+            [float(r["read_tokens"]) for r in rows if r.get("read_tokens") is not None]
+        )
         summary["seconds"] = {
             part: _spread([r["ms"][part] / 1000 for r in rows])
             for part in ("waiting", "reading", "writing", "tools", "total")

@@ -18,7 +18,7 @@ from unittest import mock
 try:
     from app.config import settings
     from app.llm import Engine
-    from app.llm_server import ServerError
+    from app.llm_server import Reading, ServerError
     from evals.scripted import ScriptedEngine
     from tests.support import collect, until
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -65,8 +65,8 @@ class OnePassTests(EngineCase):
         done = stream[-1][1]
         self.assertEqual(
             set(done),
-            {"text", "cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens",
-             "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb"},
+            {"text", "cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
+             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb"},
         )
         self.assertEqual(done["text"], EIGHT)
         self.assertIs(done["cancelled"], False)
@@ -861,10 +861,15 @@ class FakeServer:
     """Stands where a llama-server would: answers when asked whether it is up,
     counts a word as a token, and writes ``texts``. It keeps every request."""
 
-    def __init__(self, *texts: str, fail: Exception | None = None, up_after: int = 0) -> None:
+    def __init__(
+        self, *texts: str, fail: Exception | None = None, up_after: int = 0,
+        read: Reading | None = None,
+    ) -> None:
         self.texts = texts or ("Hi", " there")
         self.fail = fail
         self.up_after = up_after
+        # What it says it read of each prompt, once it has written the answer.
+        self.read = read
         self.asked: list[dict] = []
         # The engine's status at each time it asked whether the server was up.
         self.seen: list[str] = []
@@ -878,11 +883,15 @@ class FakeServer:
     def tokenize(self, text: str) -> int:
         return len(text.split())
 
-    def stream(self, body: dict):
+    def stream(self, body: dict, reading: Reading | None = None):
         self.asked.append(body)
         if self.fail is not None:
             raise self.fail
         yield from self.texts
+        if reading is not None and self.read is not None:
+            reading.prompt, reading.read, reading.cached = (
+                self.read.prompt, self.read.read, self.read.cached
+            )
 
 
 def served(server: FakeServer, **update) -> Engine:
@@ -996,6 +1005,26 @@ class ServerPassTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["text"], "one two")
         self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
         self.assertFalse(engine._lock.locked())
+
+    async def test_what_the_server_read_of_the_prompt_is_in_done(self) -> None:
+        engine = served(FakeServer("one", " two", read=Reading(prompt=108, read=8, cached=100)))
+        engine.load_blocking()
+        done = (await collect(engine.stream_chat(MESSAGES, SAMPLING)))[-1][1]
+        self.assertEqual((done["read_tokens"], done["cached_tokens"]), (8, 100))
+        # Our own count stays ours: the server's is the other two together.
+        self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
+
+    async def test_a_choice_keeps_what_the_server_read_for_it(self) -> None:
+        engine = served(FakeServer('{"tool": "none"}', read=Reading(prompt=60, read=20, cached=40)))
+        engine.load_blocking()
+        said = await engine.complete_json(MESSAGES, 'root ::= "x"')
+        self.assertEqual((said.read_tokens, said.cached_tokens), (20, 40))
+
+    async def test_a_server_that_does_not_say_leaves_the_figures_empty(self) -> None:
+        engine = served(FakeServer("one"))
+        engine.load_blocking()
+        done = (await collect(engine.stream_chat(MESSAGES, SAMPLING)))[-1][1]
+        self.assertEqual((done["read_tokens"], done["cached_tokens"]), (None, None))
 
     async def test_a_server_that_fails_is_an_error_event_and_frees_the_slot(self) -> None:
         engine = served(FakeServer(fail=ServerError("the model server is not answering")))

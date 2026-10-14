@@ -239,6 +239,10 @@ export interface DoneEvent {
   ttft_ms: number | null;
   queue_wait_ms: number | null;
   prompt_tokens: number | null;
+  /** Of the prompt, what the model read and what it had in its cache, as a
+   *  model server reports them. Null where nothing reported them. */
+  read_tokens?: number | null;
+  cached_tokens?: number | null;
   completion_tokens: number;
   prefill_tps: number | null;
   gen_tps: number | null;

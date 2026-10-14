@@ -137,8 +137,9 @@ class PlainAnswerTests(ChatCase):
         done = only(stream, "done")[0]
         self.assertEqual(
             set(done),
-            {"cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens", "completion_tokens",
-             "prefill_tps", "gen_tps", "total_ms", "rss_mb", "tool_calls"},
+            {"cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
+             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb",
+             "tool_calls"},
         )
         self.assertIs(done["cancelled"], False)
         self.assertEqual(done["completion_tokens"], 4)

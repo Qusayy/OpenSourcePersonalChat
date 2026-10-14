@@ -13,6 +13,14 @@ Design notes that matter on a 2 vCPU box:
 * The thread releases the lock itself, in its own finally. If the async side
   released it, a client disconnecting mid-generation could hand the lock to the
   next request while the old thread was still inside llama.cpp.
+
+The model can also live in another process: with ``AURORA_LLM_URL`` set, every
+pass goes to a llama-server over HTTP (``app/llm_server.py``) and nothing here
+loads weights. All of the above still holds, because the slot, the queue and
+the worker thread are this module's and only the four places that touch the
+model change: loading, counting tokens, writing, and the grammar. A thread that
+stops reading closes its connection, and the server stops writing at its next
+token.
 """
 
 from __future__ import annotations
@@ -45,8 +53,9 @@ def render_chatml(messages: list[dict]) -> str:
     """Render a conversation the way Qwen2.5-Instruct expects.
 
     Used for token accounting and trimming only — the actual prompt is built by
-    llama-cpp-python from the GGUF's own chat template. The two agree closely
-    enough that the counts shown in the UI are trustworthy.
+    llama-cpp-python, or by llama-server, from the GGUF's own chat template.
+    The two agree closely enough that the counts shown in the UI are
+    trustworthy.
     """
     parts = []
     for m in messages:
@@ -81,6 +90,12 @@ class EngineState:
 
 
 SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repeat_penalty", "max_tokens")
+
+# What llama-cpp-python uses for a sampling setting a pass does not name. A
+# llama-server has defaults of its own (repeat_penalty 1.1, temperature 0.8),
+# and the routing pass names only three settings; sent these, a pass is the
+# same pass on either engine.
+LIBRARY_DEFAULTS = {"temperature": 0.2, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.0}
 
 # What the mock engine answers when asked to choose under a grammar.
 MOCK_DECISION = '{"tool": "none"}'
@@ -137,11 +152,18 @@ class Stop:
 class Engine:
     # Seconds between the notices a waiting request is sent about its place.
     QUEUE_TICK = 0.75
+    # A model server is asked whether it is up this often while the app waits
+    # for it, and after this long without an answer the page says so.
+    SERVER_POLL = 1.0
+    SERVER_PATIENCE = 60.0
 
     def __init__(self, cfg: Settings | None = None) -> None:
         self.cfg = cfg or default_settings
         self.state = EngineState()
         self._llm: Any = None
+        # The model server, once it has answered. None while the model is in
+        # this process, and while the server is still being waited for.
+        self._server: Any = None
         self._lock = asyncio.Lock()
         self._waiting: deque[str] = deque()
         self._cancels: dict[str, Stop] = {}
@@ -155,12 +177,25 @@ class Engine:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def load_blocking(self) -> None:
-        """Load the model. Called off the event loop at startup."""
+    def load_blocking(self, keep_waiting: bool = False) -> None:
+        """Load the model. Called off the event loop at startup.
+
+        With a model server configured, nothing is loaded here: this waits
+        for the server instead. ``keep_waiting`` is for the web app, which
+        must come back by itself whenever the server does; a script gives up
+        after ``SERVER_PATIENCE`` and reports the error.
+        """
         if self.cfg.mock:
             self.state.status = "ready"
             self.state.loaded_at = time.time()
             self.state.load_ms = 0.0
+            return
+
+        # getattr: a test loads with a config that has only the fields the
+        # in-process path reads first.
+        url = getattr(self.cfg, "llm_url", "")
+        if url:
+            self._wait_for_server(url, keep_waiting)
             return
 
         path = self.cfg.resolved_model_path
@@ -210,9 +245,48 @@ class Engine:
                 "The server log has the detail."
             )
 
+    def _connect(self, url: str):
+        from .llm_server import LlamaServer
+
+        return LlamaServer(url)
+
+    def _wait_for_server(self, url: str, keep_waiting: bool) -> None:
+        """Wait until the model server answers.
+
+        It is its own service and may still be starting, or reading and
+        repacking its weights, when the app is already up. Past
+        ``SERVER_PATIENCE`` the page says it is not answering; the web app
+        goes on waiting, so the site is back the moment the server is.
+        """
+        self.state.status = "loading"
+        t0 = time.perf_counter()
+        server = self._connect(url)
+        while not server.ready():
+            late = time.perf_counter() - t0 >= self.SERVER_PATIENCE
+            if late and self.state.status != "error":
+                # The address goes to the log; the page says what is wrong.
+                log.error("the model server at %s has not answered", url)
+                self.state.status = "error"
+                self.state.error = (
+                    "The model server is not answering. The server log has the detail."
+                )
+            if late and not keep_waiting:
+                return
+            time.sleep(self.SERVER_POLL)
+        self._server = server
+        self.state.status = "ready"
+        self.state.error = None
+        self.state.loaded_at = time.time()
+        self.state.load_ms = round((time.perf_counter() - t0) * 1000, 1)
+
     @property
     def ready(self) -> bool:
         return self.state.status == "ready"
+
+    @property
+    def runtime(self) -> str:
+        """What holds the model: a server beside the app, or this process."""
+        return "llama-server" if getattr(self.cfg, "llm_url", "") else "llama-cpp-python"
 
     @property
     def threads(self) -> int:
@@ -227,6 +301,8 @@ class Engine:
     # -- token accounting ---------------------------------------------------
 
     def count_tokens(self, text: str) -> int:
+        if self._server is not None:
+            return self._server.tokenize(text)
         if self._llm is None:
             return max(1, len(text) // 4)  # mock-mode estimate
         return len(self._llm.tokenize(text.encode("utf-8"), add_bos=False, special=True))
@@ -270,6 +346,7 @@ class Engine:
             # from what was measured, never from a default that may not be true.
             "hardware": self.cfg.hardware_label or describe(),
             "mock": self.cfg.mock,
+            "runtime": self.runtime,
             "busy": self._busy,
             "queued": len(self._waiting),
             "completed": self._completed,
@@ -325,7 +402,8 @@ class Engine:
         seed: int | None = None,
         stop: list[str] | None = None,
     ) -> Iterator[str]:
-        """Yield text deltas from llama.cpp (or the mock generator)."""
+        """Yield text deltas from the model, wherever it is, or from the mock
+        generator."""
         if self.cfg.mock:
             if grammar is not None:
                 # A pass held to a grammar is a decision, and without a model
@@ -338,9 +416,23 @@ class Engine:
                 yield ("" if i == 0 else " ") + word
             return
 
+        named: dict[str, Any] = {k: sampling[k] for k in SAMPLING_KEYS if k in sampling}
+        if self._server is not None:
+            # The server is sent llama-cpp-python's defaults for what the pass
+            # leaves unnamed, and the grammar as text: it compiles its own.
+            body: dict[str, Any] = {"messages": messages, **LIBRARY_DEFAULTS, **named}
+            if grammar is not None:
+                body["grammar"] = grammar
+            if seed is not None:
+                body["seed"] = seed
+            if stop:
+                body["stop"] = stop
+            yield from self._server.stream(body)
+            return
+
         # Only what the caller named is passed on. A pass that sets two of
         # these gets the library's own defaults for the rest, not ours.
-        kwargs: dict[str, Any] = {k: sampling[k] for k in SAMPLING_KEYS if k in sampling}
+        kwargs: dict[str, Any] = dict(named)
         if grammar is not None:
             kwargs["grammar"] = self._grammar(grammar)
         if seed is not None:

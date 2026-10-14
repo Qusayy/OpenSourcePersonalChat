@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from .context import Part
 from .router import URL_RE, ToolCall
 
 SPLIT_RE = re.compile(r"\s+(?:vs\.?|versus|and|or)\s+", re.I)
@@ -192,9 +193,36 @@ def build_prompt(
     happened, so the answer can say so. That is a different thing from a skill
     that found nothing to look up, which is told there is no output.
     """
+    return "\n\n".join(p.content for p in prompt_parts(skill, user_text, results, failures))
+
+
+def prompt_parts(
+    skill: Skill,
+    user_text: str,
+    results: list[str],
+    failures: list[str] | None = None,
+    tools: tuple[str, ...] = (),
+) -> list[Part]:
+    """``build_prompt``'s text as parts of a prompt, each with its kind.
+
+    The skill's prompt is cut where it has a blank line, and each piece is a
+    part: the one that holds the results is what was found (by ``tools``),
+    one that is only the user's text is the question, and the rest are
+    instructions. Joined as a prompt joins parts, they are ``build_prompt``'s
+    text to the letter.
+    """
     parts = list(results)
     if failures:
         heading = "These lookups" if len(failures) > 1 else "This lookup"
         parts.append(f"{heading} did not work:\n{did_not_work(failures)}\n\n{SAY_SO}")
     joined = "\n\n".join(parts) if parts else "(no tool output available)"
-    return skill.prompt.format(input=user_text.strip(), results=joined)
+    out = []
+    for piece in skill.prompt.split("\n\n"):
+        text = piece.format(input=user_text.strip(), results=joined)
+        if "{results}" in piece:
+            out.append(Part("user", "data", text, tools))
+        elif piece.strip() == "{input}":
+            out.append(Part("user", "question", text))
+        else:
+            out.append(Part("user", "instruction", text))
+    return out

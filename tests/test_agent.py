@@ -16,6 +16,7 @@ import unittest
 
 try:
     from app import agent
+    from app.context import SUMMARY_HEADING, merged
     from app.excerpt import estimate
     from app.personas import get_persona
     from app.tools import REGISTRY
@@ -134,6 +135,77 @@ class RunTests(AgentCase):
         self.assertEqual(stream[-1][0], "run")
         self.assertEqual(stream[-1][1]["outcome"], "failed")
         self.assertEqual(engine.passes, [])
+
+
+class WindowTests(AgentCase):
+    """The conversation and the message fitted to the window."""
+
+    def tight(self, n_ctx: int, *script) -> ScriptedEngine:
+        from app.config import settings
+
+        cfg = settings.model_copy(update={"mock": True, "mock_delay": 0.0, "n_ctx": n_ctx})
+        engine = ScriptedEngine(script, cfg=cfg)
+        self.addAsyncCleanup(engine.settled)
+        return engine
+
+    async def test_a_message_too_long_for_the_window_is_cut_and_the_page_is_told(self) -> None:
+        engine = self.tight(1200, "Read it.")
+        message = "Please read this. " + "word " * 3000
+        trace = agent.Trace()
+        stream = await collect(self.run_message(message, engine, persona="concise", trace=trace))
+        self.assertEqual(only(stream, "trimmed"), [
+            {"dropped": 0, "turns": 0, "summarised": 0, "cut": True},
+        ])
+        sent = trace.prompt[-1]["content"]
+        self.assertTrue(sent.startswith("Please read this. word word"))
+        self.assertTrue(sent.endswith("…"))
+        room = 1200 - get_persona("concise").max_tokens - engine.cfg.reply_headroom
+        self.assertLessEqual(engine.prompt_tokens(trace.prompt), room)
+        self.assertEqual(trace.steps[-1].input["cut"], True)
+
+    async def test_a_message_that_fits_is_read_whole_and_nothing_is_said(self) -> None:
+        engine = self.scripted("Fine.")
+        trace = agent.Trace()
+        stream = await collect(self.run_message("Hello there", engine, persona="concise", trace=trace))
+        self.assertEqual(only(stream, "trimmed"), [])
+        self.assertEqual(trace.prompt[-1]["content"], "Hello there")
+
+    async def test_a_persona_without_tools_reads_the_conversation_as_it_always_has(self) -> None:
+        history = [{"role": "user", "content": "One?"}, {"role": "assistant", "content": "One."},
+                   {"role": "user", "content": "Two?"}, {"role": "assistant", "content": "Two."}]
+        engine = self.scripted("Three.")
+        trace = agent.Trace()
+        await collect(self.run_message("Three?", engine, persona="explainer", history=history,
+                                       trace=trace))
+        self.assertEqual(trace.prompt, [
+            {"role": "system", "content": get_persona("explainer").system}, *history,
+            {"role": "user", "content": "Three?"},
+        ])
+
+    async def test_without_tools_each_prompt_extends_the_last_and_its_answer(self) -> None:
+        engine = self.scripted("One.", "Two.", "Three.")
+        history: list[dict] = []
+        for text in ("One?", "Two?", "Three?"):
+            await collect(self.run_message(text, engine, persona="explainer", history=list(history)))
+            history += [{"role": "user", "content": text},
+                        {"role": "assistant", "content": engine.passes[-1].output}]
+        for before, after in zip(engine.passes, engine.passes[1:]):
+            self.assertTrue(after.prompt.startswith(before.prompt + before.output))
+
+    async def test_a_long_conversation_is_summed_up_at_the_top(self) -> None:
+        engine = self.tight(1000, "Short.")
+        history = []
+        for i in range(12):
+            history += [{"role": "user", "content": f"Question {i}? " * 12},
+                        {"role": "assistant", "content": f"Answer {i}. " * 12}]
+        trace = agent.Trace()
+        stream = await collect(self.run_message("And now?", engine, persona="concise",
+                                                history=history, trace=trace))
+        trimmed = only(stream, "trimmed")[0]
+        self.assertEqual(trimmed["turns"] + trimmed["summarised"], 12)
+        self.assertEqual(trimmed["dropped"], 2 * trimmed["summarised"])
+        self.assertTrue(trace.prompt[1]["content"].startswith(SUMMARY_HEADING))
+        self.assertEqual(trace.prompt[-1]["content"], "And now?")
 
 
 class StopTests(AgentCase):
@@ -540,9 +612,11 @@ class TraceTests(AgentCase):
             history += [{"role": "user", "content": f"Question {i}? " * 12},
                         {"role": "assistant", "content": f"Answer {i}. " * 12}]
         stream, trace = await self.traced("And now?", engine, persona="concise", history=history)
-        dropped = only(stream, "trimmed")[0]["dropped"]
-        self.assertGreater(dropped, 0)
-        self.assertEqual(trace.steps[-1].input, {"dropped": dropped})
+        trimmed = only(stream, "trimmed")[0]
+        self.assertGreater(trimmed["dropped"], 0)
+        self.assertGreater(trimmed["summarised"], 0)
+        self.assertIs(trimmed["cut"], False)
+        self.assertEqual(trace.steps[-1].input, trimmed)
 
     async def test_a_run_stopped_while_choosing_writes_down_one_stopped_pass(self) -> None:
         engine = self.scripted(WEATHER, gated=True)
@@ -820,7 +894,7 @@ class FailureTests(AgentCase):
         run.summaries = ["weather: Paris, France: overcast, 12.9°C."]
         run.failures = ["weather: No place called 'Atlantis' was found."]
         self.assertEqual(
-            run._prompt()[-1]["content"],  # noqa: SLF001
+            merged(run._prompt())[-1]["content"],  # noqa: SLF001
             "Paris and Atlantis?\n\n"
             "Live data, retrieved just now by a tool:\n"
             "- weather: Paris, France: overcast, 12.9°C.\n\n"

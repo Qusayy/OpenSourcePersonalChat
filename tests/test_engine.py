@@ -870,6 +870,8 @@ class FakeServer:
         self.up_after = up_after
         # What it says it read of each prompt, once it has written the answer.
         self.read = read
+        # Every text it was asked to count.
+        self.counted: list[str] = []
         self.asked: list[dict] = []
         # The engine's status at each time it asked whether the server was up.
         self.seen: list[str] = []
@@ -881,6 +883,7 @@ class FakeServer:
         return len(self.seen) > self.up_after
 
     def tokenize(self, text: str) -> int:
+        self.counted.append(text)
         return len(text.split())
 
     def stream(self, body: dict, reading: Reading | None = None):
@@ -950,6 +953,23 @@ class ServerLoadTests(unittest.TestCase):
         self.assertEqual(engine.count_tokens("one two three four"), 4, "an estimate before it answers")
         engine.load_blocking()
         self.assertEqual(engine.count_tokens("one two three"), 3)
+
+    def test_the_server_is_asked_to_count_a_text_once(self) -> None:
+        server = FakeServer()
+        engine = served(server)
+        engine.load_blocking()
+        for _ in range(3):
+            self.assertEqual(engine.prompt_tokens(MESSAGES), engine.prompt_tokens(MESSAGES))
+        self.assertEqual(len(server.counted), 1)
+
+    def test_it_remembers_only_so_many_counts(self) -> None:
+        server = FakeServer()
+        engine = served(server)
+        engine.COUNTS_KEPT = 2
+        engine.load_blocking()
+        for text in ("one", "two", "three", "one"):
+            engine.count_tokens(text)
+        self.assertEqual(server.counted, ["one", "two", "three", "one"])
 
     def test_without_an_address_the_model_is_in_this_process(self) -> None:
         engine = Engine(settings.model_copy(update={"mock": True}))

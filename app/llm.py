@@ -32,7 +32,7 @@ import platform
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -169,6 +169,9 @@ class Engine:
         # The model server, once it has answered. None while the model is in
         # this process, and while the server is still being waited for.
         self._server: Any = None
+        # What the server said each recent text came to: every count is a
+        # request to it, and a run counts the same prompt more than once.
+        self._counted: OrderedDict[str, int] = OrderedDict()
         self._lock = asyncio.Lock()
         self._waiting: deque[str] = deque()
         self._cancels: dict[str, Stop] = {}
@@ -305,9 +308,20 @@ class Engine:
 
     # -- token accounting ---------------------------------------------------
 
+    # How many counts the server is not asked for again.
+    COUNTS_KEPT = 256
+
     def count_tokens(self, text: str) -> int:
         if self._server is not None:
-            return self._server.tokenize(text)
+            known = self._counted.get(text)
+            if known is None:
+                known = self._server.tokenize(text)
+                self._counted[text] = known
+                if len(self._counted) > self.COUNTS_KEPT:
+                    self._counted.popitem(last=False)
+            else:
+                self._counted.move_to_end(text)
+            return known
         if self._llm is None:
             return max(1, len(text) // 4)  # mock-mode estimate
         return len(self._llm.tokenize(text.encode("utf-8"), add_bos=False, special=True))

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
-from .context import RUN_ROOM
+from .context import RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, turns_from_history
 from .excerpt import estimate
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
@@ -42,9 +42,9 @@ from .router import (
     parse_action,
     repair_messages,
 )
-from .skills import SAY_SO, Skill, build_prompt, did_not_work
+from .skills import SAY_SO, Skill, did_not_work, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import Rejection, ToolResult, available, check, was_given
+from .tools.base import Rejection, ToolResult, available, check, fresh_for, was_given
 from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
@@ -270,11 +270,26 @@ class _Run:
     question: str | None = None
     asked_by: Completion | None = None
     # The calls this message was routed to, and the line each successful one
-    # gave back for the model to read.
+    # gave back for the model to read, with the tool it came from.
     calls: list[ToolCall] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
+    found: list[str] = field(default_factory=list)
     # And what each one that failed is known to have done, for the same reader.
     failures: list[str] = field(default_factory=list)
+    lost: list[str] = field(default_factory=list)
+    # The conversation so far, as turns. Left unset, it is made from
+    # ``history``, which stays what the user and the model said and nothing
+    # else: what the address rule reads.
+    turns: list[Turn] | None = None
+    # The message as the model reads it: cut to fit the window, if it had to
+    # be, and whether it was. And what was cut from the conversation to make
+    # room, as the page is told it.
+    said: str = ""
+    cut: bool = False
+    trim: dict | None = None
+
+    def __post_init__(self) -> None:
+        self.said = self.said or self.message
     # Set by whoever asks for this run to stop. Looked at before each stage,
     # and waited on while a tool is out.
     stop: Stop = field(default_factory=Stop)
@@ -300,6 +315,9 @@ class _Run:
             yield "run", self.trace.totals()
 
     async def _stages(self) -> AsyncIterator[Event]:
+        if self.turns is None:
+            self.turns = turns_from_history(self.history)
+        self.said, self.cut = self._cap()
         # What costs nothing comes first: a skill, a command, a pattern.
         async for event in self._free():
             yield event
@@ -325,9 +343,53 @@ class _Run:
         if self.stop.is_set():
             yield self._stopped()
             return
-        async with aclosing(self._answer(self._prompt())) as events:
+        window = self._window(self.persona.system, self._prompt(), run=False)
+        if self._trimmed(window):
+            yield "trimmed", self.trim
+        async with aclosing(self._answer(window.messages)) as events:
             async for event in events:
                 yield event
+
+    # ------------------------------------------------------------ the window --
+
+    def _room(self, *, run: bool) -> int:
+        """Tokens the prompt may take: the window, less the reply and the
+        headroom above it, and less the room for a run's own additions where
+        ``run`` says there is one."""
+        cfg = self.engine.cfg
+        return cfg.n_ctx - self.persona.max_tokens - cfg.reply_headroom - (RUN_ROOM if run else 0)
+
+    def _cap(self) -> tuple[str, bool]:
+        """The message cut to what the window can give it beside the system
+        text, a summary of older turns and, for a persona with tools, the
+        room for a run, if it is longer. Counted only when it might be: no
+        message has more tokens than bytes."""
+        tools = available() if self.persona.tools and self.tools_enabled else []
+        system = system_for(self.persona, tools) if tools else self.persona.system
+        limit = self._room(run=bool(tools)) - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        if len(self.message.encode("utf-8")) <= limit:
+            return self.message, False
+        return cap(self.message, max(1, limit), self.engine.count_tokens)
+
+    def _window(self, system: str, now: list[Part], *, run: bool) -> Window:
+        """The prompt for this message under ``system``: the conversation so
+        far, fitted to the room, then ``now``."""
+        return fit(
+            system, self.turns or [], now, room=self._room(run=run),
+            count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
+        )
+
+    def _trimmed(self, window: Window) -> bool:
+        """Whether anything had to give for the prompt to fit, and if so what,
+        kept in ``trim`` for the page and the trace."""
+        if not window.summarised and not self.cut:
+            return False
+        dropped = sum(bool(t.question) + bool(t.answer) for t in (self.turns or [])[:window.summarised])
+        self.trim = {
+            "dropped": dropped, "turns": window.turns, "summarised": window.summarised,
+            "cut": self.cut,
+        }
+        return True
 
     def _ask(self) -> list[Event]:
         """How a run ends when the model asked a question instead of choosing.
@@ -473,7 +535,7 @@ class _Run:
         second time, and it is not made: it is shown to the visitor as a call
         that was refused, with the reason.
         """
-        messages = decision_messages(self.message, tools, self._asked())
+        messages = decision_messages(self.said, tools, self._asked())
         action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
         passes = [said]
         if action.kind != "tool" or self.stop.is_set():
@@ -577,9 +639,9 @@ class _Run:
         the model ends the looking-up, the answer pass is told so in a line,
         so that the reply can say what was not found.
         """
-        transcript, dropped = self._transcript(tools)
-        if dropped:
-            yield "trimmed", {"dropped": dropped}
+        transcript = self._transcript(tools)
+        if self.trim:
+            yield "trimmed", self.trim
         start = estimate(transcript.rendered())
         made: set[str] = set()
         decisions = steps = 0
@@ -660,17 +722,14 @@ class _Run:
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
 
-    def _transcript(self, tools: list) -> tuple[Transcript, int]:
+    def _transcript(self, tools: list) -> Transcript:
         """The run's one prompt, with as much of the conversation as leaves
-        room for the run. Returns it and how many old turns did not fit."""
-        system = system_for(self.persona, tools)
-        base = [
-            {"role": "system", "content": system},
-            *({"role": m["role"], "content": m["content"]} for m in self.history),
-            {"role": "user", "content": self.message},
-        ]
-        fitted, _, dropped = self.engine.fit_context(base, self.persona.max_tokens + RUN_ROOM)
-        return Transcript(system, fitted[1:-1], self.message), dropped
+        room for the run. What had to give for it is kept in ``trim``."""
+        window = self._window(
+            system_for(self.persona, tools), [Part("user", "question", self.said)], run=True
+        )
+        self._trimmed(window)
+        return Transcript.fitted(window.parts)
 
     async def _take(self) -> AsyncIterator[Event]:
         """Take the slot for the whole run, passing on the notices of its
@@ -814,6 +873,7 @@ class _Run:
                 tool.observation(result, self.purpose, budget) if tool else result.summary
             )
             self.summaries.append(f"{call.name}: {self.seen}")
+            self.found.append(call.name)
             yield "card", {
                 "step_id": step_id, "card": result.card,
                 "tool": call.name, "data": result.data,
@@ -823,6 +883,7 @@ class _Run:
             # well: left to think nothing was tried, it answers from memory
             # beside a card that says the lookup failed.
             self.failures.append(f"{call.name}: {what_happened(result)}")
+            self.lost.append(call.name)
             yield "card", {
                 "step_id": step_id, "card": "error", "tool": call.name,
                 "data": {"message": result.summary or result.error},
@@ -854,13 +915,16 @@ class _Run:
         An address says where to look, not what to look for."""
         return " ".join(URL_RE.sub(" ", self.message).split())
 
-    def _prompt(self) -> list[dict]:
-        messages = [{"role": "system", "content": self.persona.system}]
-        messages += [{"role": m["role"], "content": m["content"]} for m in self.history]
-
+    def _prompt(self) -> list[Part]:
+        """What this message is read as, after the conversation so far: the
+        message, what was looked up for it and how to use that, as parts."""
+        question = Part("user", "question", self.said)
         if self.skill is not None:
-            content = build_prompt(self.skill, self.message, self.summaries, self.failures)
-        elif self.summaries:
+            return prompt_parts(
+                self.skill, self.said, self.summaries, self.failures,
+                tuple(dict.fromkeys(self.found + self.lost)),
+            )
+        if self.summaries:
             # The tool output goes inside the user turn, not into a second
             # system message. A 1.5B model barely attends to a trailing system
             # message and falls back on its "I don't have real-time data"
@@ -868,40 +932,45 @@ class _Run:
             # card beside it shows today's temperature. Stated as part of the
             # question, it complies.
             facts = "\n".join(f"- {s}" for s in self.summaries)
-            content = (
-                f"{self.message}\n\n"
-                f"Live data, retrieved just now by a tool:\n{facts}\n\n"
-            )
+            parts = [question, Part(
+                "user", "data", f"Live data, retrieved just now by a tool:\n{facts}",
+                tuple(dict.fromkeys(self.found)),
+            )]
             if self.failures:
-                content += "A lookup was also tried and did not work:\n" + did_not_work(self.failures) + "\n\n"
-            content += (
+                parts.append(Part(
+                    "user", "failed",
+                    "A lookup was also tried and did not work:\n" + did_not_work(self.failures),
+                    tuple(dict.fromkeys(self.lost)),
+                ))
+            instruction = (
                 "Answer the question using only the data above. It is "
                 "current and correct. Do not say you lack real-time "
                 "access, and do not recalculate any figure."
             )
             if self.failures:
-                content += " " + SAY_SO
-        elif self.failures:
-            content = (
-                f"{self.message}\n\n"
-                "A lookup was tried for this and did not work:\n"
-                + did_not_work(self.failures) + "\n\n" + SAY_SO
-            )
-        else:
-            content = self.message
-        messages.append({"role": "user", "content": content})
-        return messages
+                instruction += " " + SAY_SO
+            return [*parts, Part("user", "instruction", instruction)]
+        if self.failures:
+            return [question, Part(
+                "user", "failed",
+                "A lookup was tried for this and did not work:\n" + did_not_work(self.failures),
+                tuple(dict.fromkeys(self.lost)),
+            ), Part("user", "instruction", SAY_SO)]
+        return [question]
 
     # ---------------------------------------------------------- the answer --
 
     async def _answer(self, messages: list[dict], *, held: bool = False) -> AsyncIterator[Event]:
         sampling = self.persona.sampling()
+        # Fitted to the window already. The engine's own fitting is kept as
+        # the last guard: a run that added more than the room it was given.
         fitted, _, dropped = self.engine.fit_context(messages, sampling["max_tokens"])
-        # Kept with the step: a prompt that lost its oldest turns is not the
-        # prompt the conversation suggests.
-        trimmed = {"dropped": dropped} if dropped else None
         if dropped:
+            self.trim = {**(self.trim or {"cut": self.cut}), "dropped": dropped}
             yield "trimmed", {"dropped": dropped}
+        # Kept with the step: a prompt that lost its oldest turns, or the end
+        # of its message, is not the prompt the conversation suggests.
+        trimmed = self.trim
 
         yield "step", {
             "id": "answer", "kind": "model", "status": "running",

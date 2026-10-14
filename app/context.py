@@ -112,6 +112,8 @@ class Turn:
 class Window:
     """A prompt fitted to the room there is."""
 
+    # The prompt, as parts and as the messages they make.
+    parts: list[Part]
     messages: list[dict]
     # Earlier turns replayed, and earlier turns given only as a line of the
     # summary.
@@ -337,26 +339,27 @@ def fit(
     head = [Part("system", "instruction", system)]
     replays = [replayed(t, sys_key, now=now, fresh_for=fresh_for) for t in turns]
 
-    def prompt(cut: int) -> list[dict]:
+    def prompt(cut: int) -> list[Part]:
         top = summary(turns[:cut]) if cut else None
-        parts = [*head, *([top] if top else []), *(p for r in replays[cut:] for p in r), *now_parts]
-        return merged(parts)
+        return [*head, *([top] if top else []), *(p for r in replays[cut:] for p in r), *now_parts]
+
+    def window(parts: list[Part], cut: int, used: int) -> Window:
+        return Window(parts, merged(parts), turns=len(turns) - cut, summarised=cut, tokens=used)
 
     whole = prompt(0)
-    used = count(render_chatml(whole))
+    used = count(render_chatml(merged(whole)))
     if used <= room or not turns:
-        return Window(whole, turns=len(turns), tokens=used)
+        return window(whole, 0, used)
 
     sizes = [estimate(render_chatml(merged(r))) for r in replays]
     # How the estimate compares with the count, for this conversation.
-    scale = used / max(1, estimate(render_chatml(whole)))
+    scale = used / max(1, estimate(render_chatml(merged(whole))))
     last = len(turns)
     for cut in blocks(sizes)[:-1]:
-        candidate = prompt(cut)
-        if estimate(render_chatml(candidate)) * scale > room:
+        text = render_chatml(merged(prompt(cut)))
+        if estimate(text) * scale > room:
             continue
-        used = count(render_chatml(candidate))
+        used = count(text)
         if used <= room:
-            return Window(candidate, turns=last - cut, summarised=cut, tokens=used)
-    candidate = prompt(last)
-    return Window(candidate, summarised=last, tokens=count(render_chatml(candidate)))
+            return window(prompt(cut), cut, used)
+    return window(prompt(last), last, count(render_chatml(merged(prompt(last)))))

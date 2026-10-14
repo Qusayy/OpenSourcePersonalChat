@@ -325,7 +325,7 @@ export async function send(text: string): Promise<void> {
           commit(() => patchBot(bot.key, (b) => ({ ...b, cards: [...b.cards, entry] })));
           if (nearBottom()) scrollBottom();
         } else if (event === "trimmed") {
-          notice("", trimmedWording(data.dropped));
+          notice("", trimmedWording(data.dropped, data.cut));
         } else if (event === "start") {
           requestId = data.request_id;
           livePhase("reading"); // holds until the first token lands

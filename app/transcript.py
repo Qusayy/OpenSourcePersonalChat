@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 
+from .context import Part, merged
 from .llm import render_chatml
 from .personas import Persona
 from .skills import SAY_SO
@@ -83,45 +84,58 @@ def data(tool: str, text: str, *, ok: bool = True) -> str:
 class Transcript:
     """A conversation, this message, and everything the run does about it.
 
-    Turns always alternate between the user and the model, whatever is added
-    in whatever order: something added where the last turn is already that
-    speaker's is joined onto it.
+    It is kept as parts, each with its kind, so that what the run sent can
+    be kept and replayed. Turns always alternate between the user and the
+    model, whatever is added in whatever order: a part whose speaker is the
+    last one's is joined onto it.
     """
 
     def __init__(self, system: str, history: list[dict], question: str) -> None:
-        self._messages: list[dict] = [{"role": "system", "content": system}]
+        parts = [Part("system", "instruction", system)]
         for turn in history:
-            self._add(turn["role"], turn["content"])
-        self._add("user", question)
+            kind = "question" if turn["role"] == "user" else "answer"
+            parts.append(Part(turn["role"], kind, turn["content"]))
+        parts.append(Part("user", "question", question))
+        self._begin(parts)
+
+    @classmethod
+    def fitted(cls, parts: list[Part]) -> "Transcript":
+        """A transcript that begins with a prompt already fitted to the
+        window: the system text, the conversation so far, and last of all
+        this message."""
+        transcript = cls.__new__(cls)
+        transcript._begin(list(parts))
+        return transcript
+
+    def _begin(self, parts: list[Part]) -> None:
+        self._parts = parts
+        # Where this message, and so this run's own part, begins.
+        self._start = len(parts) - 1
         self._found = 0
         self._failed = 0
 
     # -- adding to the end -------------------------------------------------
 
-    def _add(self, role: str, content: str) -> None:
-        last = self._messages[-1]
-        if last["role"] == role and role != "system":
-            last["content"] += "\n\n" + content
-        else:
-            self._messages.append({"role": role, "content": content})
+    def _add(self, part: Part) -> None:
+        self._parts.append(part)
 
     def action(self, raw: str) -> None:
         """What the model replied when asked to choose, as it wrote it."""
-        self._add("assistant", raw)
+        self._add(Part("assistant", "action", raw))
 
     def observation(self, tool: str, text: str, ok: bool = True) -> None:
         """What a tool returned, or what is known of how it failed."""
         self._found += ok
         self._failed += not ok
-        self._add("user", data(tool, text, ok=ok))
+        self._add(Part("user", "observation" if ok else "failed", data(tool, text, ok=ok), (tool,)))
 
     def rejection(self, reasons: tuple[str, ...]) -> None:
         """A call the model chose that was not made, and why. Said by the
         harness, so it is not wrapped as data."""
-        self._add("user", (
+        self._add(Part("user", "rejection", (
             "That call was not made: " + "; ".join(reasons) + ". "
             "Reply with one JSON object only."
-        ))
+        )))
 
     def answer_cue(self, note: str | None = None) -> None:
         """Ask for the answer. ``note`` is one plain line about how the
@@ -132,15 +146,24 @@ class Transcript:
             cue = CUE_NOTHING_FOUND
         else:
             cue = CUE_PLAIN
-        self._add("user", cue + (" " + note if note else ""))
+        self._add(Part("user", "cue", cue + (" " + note if note else "")))
 
     # -- reading it --------------------------------------------------------
 
     def messages(self) -> list[dict]:
         """The whole of it, to hand to a pass. A copy: what a pass was given
         does not change when the transcript grows."""
-        return [dict(m) for m in self._messages]
+        return merged(self._parts)
+
+    def parts(self) -> list[Part]:
+        """The whole of it, as parts."""
+        return list(self._parts)
+
+    def run_parts(self) -> list[Part]:
+        """This message and what the run added after it: what is kept of the
+        run, to be replayed with the messages that follow."""
+        return self._parts[self._start:]
 
     def rendered(self) -> str:
         """As one string, the way the engine counts a prompt."""
-        return render_chatml(self._messages)
+        return render_chatml(self.messages())

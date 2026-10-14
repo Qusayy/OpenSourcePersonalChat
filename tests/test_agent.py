@@ -20,7 +20,7 @@ try:
     from app.tools.base import ToolResult
     from evals.scripted import ScriptedEngine
     from tests import support
-    from tests.support import collect, only, shape, until
+    from tests.support import collect, listen, only, shape, until
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -310,13 +310,20 @@ class LeavingTests(AgentCase):
             await reading
         self.assertTrue(engine._lock.locked())
 
-        other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
-        await until(lambda: engine.info()["queued"] == 1)
+        heard: list = []
+        other = asyncio.create_task(listen(self.run_message("Hello", engine, persona="explainer"), heard))
+        # A run is told its place only after it has waited a tick. The slot is
+        # freed once it has been told, not as soon as it is queued: a fast
+        # machine frees it within the tick, and the notice is never sent.
+        await until(lambda: any(name == "queue" for name, _ in heard))
         self.assertEqual(len(engine.passes), 1)
 
         engine.release()
         stream = await other
-        self.assertEqual(shape(stream), ["step:answer:running", "queue", *ANSWER[1:]])
+        # Told at least once; how many times more is a matter of timing.
+        words = shape(stream)
+        told = [w for i, w in enumerate(words) if w != "queue" or words[i - 1] != "queue"]
+        self.assertEqual(told, ["step:answer:running", "queue", *ANSWER[1:]])
         self.assertEqual(engine.most_at_once, 1)
         self.assertTrue(engine.free)
 
@@ -1359,8 +1366,13 @@ class LoopSlotTests(LoopCase):
         other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
         await engine.entered(1)
         trace = agent.Trace()
-        ours = asyncio.create_task(collect(self.looping("Do I need a coat in Paris", engine, trace=trace)))
-        await until(lambda: engine.info()["queued"] == 1)
+        heard: list = []
+        ours = asyncio.create_task(
+            listen(self.looping("Do I need a coat in Paris", engine, trace=trace), heard)
+        )
+        # Freed once the run has been told its place, which takes a tick of
+        # waiting; freed sooner, it would never be told.
+        await until(lambda: any(name == "queue" for name, _ in heard))
         engine.release()
         await other
         stream = await ours

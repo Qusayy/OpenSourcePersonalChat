@@ -832,5 +832,26 @@ class ModelCallTests(unittest.TestCase):
         self.assertIs(self.llama.asked[0]["grammar"], compiled)
 
 
+class ThreadTests(unittest.TestCase):
+    """How many threads the model is given, and what the pages are told."""
+
+    def engine(self, n_threads: int) -> Engine:
+        return Engine(settings.model_copy(update={"mock": True, "n_threads": n_threads}))
+
+    def test_zero_means_every_cpu_this_process_may_use(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+            engine = self.engine(0)
+            self.assertEqual(engine.threads, 4)
+            self.assertEqual(engine.info()["n_threads"], 4)
+
+    def test_a_number_pins_it_whatever_the_machine_has(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+            self.assertEqual(self.engine(2).threads, 2)
+
+    def test_a_machine_that_cannot_be_measured_gets_one(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=None):
+            self.assertEqual(self.engine(0).threads, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

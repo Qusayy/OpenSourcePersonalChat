@@ -184,8 +184,8 @@ class Engine:
             kwargs: dict[str, Any] = dict(
                 model_path=str(path),
                 n_ctx=self.cfg.n_ctx,
-                n_threads=self.cfg.n_threads,
-                n_threads_batch=self.cfg.n_threads,
+                n_threads=self.threads,
+                n_threads_batch=self.threads,
                 n_batch=self.cfg.n_batch,
                 use_mmap=self.cfg.use_mmap,
                 use_mlock=self.cfg.use_mlock,
@@ -213,6 +213,16 @@ class Engine:
     @property
     def ready(self) -> bool:
         return self.state.status == "ready"
+
+    @property
+    def threads(self) -> int:
+        """Threads for the model: the number configured, or with 0 every CPU
+        this process may use. Generation on a CPU slows down when it is given
+        fewer cores than it has, and a count copied from an older, smaller
+        machine is the usual way that happens."""
+        if self.cfg.n_threads > 0:
+            return self.cfg.n_threads
+        return usable_cpu_count() or 1
 
     # -- token accounting ---------------------------------------------------
 
@@ -254,7 +264,7 @@ class Engine:
             "quant": self.cfg.model_quant,
             "params": self.cfg.model_params,
             "n_ctx": self.cfg.n_ctx,
-            "n_threads": self.cfg.n_threads,
+            "n_threads": self.threads,
             "n_batch": self.cfg.n_batch,
             # A label the operator set wins; otherwise the machine is described
             # from what was measured, never from a default that may not be true.

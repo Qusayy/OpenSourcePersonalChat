@@ -397,7 +397,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 |---|---|---|
 | `AURORA_MODEL_PATH` | `./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` | |
 | `AURORA_N_CTX` | `4096` | ~115 MB of KV cache at f16 |
-| `AURORA_N_THREADS` | `2` | match the vCPU count; more threads on 2 cores *loses* throughput |
+| `AURORA_N_THREADS` | `0` | `0` is every CPU the service may use (affinity and cgroup quota, measured at startup). A number pins it. Measured on a 4-vCPU server: 8.9 tok/s at 2 threads, 17.1 at 4 |
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |

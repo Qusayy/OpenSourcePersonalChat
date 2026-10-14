@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
+from .context import RUN_ROOM
 from .excerpt import estimate
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
@@ -149,11 +150,6 @@ ALREADY_LOOKED_UP = (
     "That lookup had already been made and was not repeated; answer from what is above."
 )
 
-# Tokens kept free, when a looping run's conversation is fitted to the window,
-# for what the run itself will add: its choices and what its tools return.
-# With that room left at the start, the beginning of the prompt does not have
-# to change part-way through the run.
-RUN_ROOM = 600
 # The least a lookup in the loop is given to read, however little room is
 # left: a line.
 LEAST_SHARE = 40

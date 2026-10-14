@@ -218,6 +218,7 @@ register(Tool(
     card="weather",
     network=True,
     example="/weather Paris",
+    fresh_for=3 * 3600,
 ))
 
 
@@ -304,4 +305,5 @@ register(Tool(
     card="currency",
     network=True,
     example="/currency 100 EUR USD",
+    fresh_for=24 * 3600,
 ))

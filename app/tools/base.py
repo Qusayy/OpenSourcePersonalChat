@@ -88,6 +88,10 @@ class Tool:
     # How a result is read for a purpose within a budget, for a tool whose
     # results are longer than a line. Without it, the summary is read.
     observe: Callable[[ToolResult, str, int], str] | None = None
+    # How long a result stays true, in seconds. Replayed later than that in a
+    # conversation, it is replaced by a line saying it is out of date. None
+    # for a result that does not go out of date.
+    fresh_for: float | None = None
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -144,6 +148,13 @@ _net_semaphore = asyncio.Semaphore(2)
 def register(tool: Tool) -> Tool:
     REGISTRY[tool.name] = tool
     return tool
+
+
+def fresh_for(name: str) -> float | None:
+    """How long a result of the tool called ``name`` stays true; None for
+    one that does not go out of date, or a tool there is no longer."""
+    tool = REGISTRY.get(name)
+    return tool.fresh_for if tool is not None else None
 
 
 def available() -> list[Tool]:

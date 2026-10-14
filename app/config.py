@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     agent_max_decisions: int = 3    # passes that choose, for one message
     agent_max_seconds: float = 90.0  # for everything before the answer
 
+    # gate
+    # Who is let past the cover; see app/gate.py. The site is served to
+    # everyone only when this is exactly "off". It is a plain string and not
+    # a boolean so that a typing mistake leaves the site closed instead of
+    # stopping the server.
+    gate: str = "on"
+    # The line the setup page prints for the owner's pattern. It belongs in
+    # the server's own .env and nowhere else: whoever has it can work the
+    # pattern out. Empty or malformed, nothing opens the site.
+    gate_verifier: str = ""
+    # A session ends when the browser closes. These end it anyway, for the
+    # phone whose browser never does.
+    gate_session_hours: float = 12.0
+    gate_idle_minutes: float = 60.0
+
     # app
     host: str = "127.0.0.1"
     port: int = 8000

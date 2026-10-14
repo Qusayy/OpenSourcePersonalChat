@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__, agent, bench, db, telemetry
 from .config import settings
+from .gate import GateMiddleware
 from .llm import engine
 from .personas import DEFAULT_PERSONA, get_persona, persona_list
 from .skills import get_skill, skill_list
@@ -44,6 +45,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Aurora", lifespan=lifespan, docs_url=None, redoc_url=None)
+# Before every route and every error page: see app/gate.py.
+app.add_middleware(GateMiddleware)
 frontend = Frontend()
 
 

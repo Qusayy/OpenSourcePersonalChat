@@ -2,7 +2,8 @@
 
 Everything the page says about the host comes from here: how many CPUs this
 process may actually use, how busy they are, how much memory the machine has and
-how much of it is in use, and what this process itself holds.
+how much of it is in use, and what the app itself holds: this process, and the
+llama-server holding its model when the model runs in one.
 
 On Linux it reads /proc and the service's own cgroup with the standard library
 only, so a server install needs no extra package. Elsewhere (a Windows or macOS
@@ -117,6 +118,30 @@ def parse_status_field(text: str, field: str) -> str | None:
         if line.startswith(prefix):
             return line[len(prefix):].strip()
     return None
+
+
+def parse_cmdline(text: str) -> list[str]:
+    """/proc/<pid>/cmdline: a process's arguments, separated by NULs."""
+    return [part for part in text.split("\0") if part]
+
+
+def server_port(args: list[str]) -> int | None:
+    """The port a llama-server command line listens on; None if the command
+    is not a llama-server."""
+    if not args or Path(args[0]).name != "llama-server":
+        return None
+    for i, arg in enumerate(args):
+        if arg == "--port" and i + 1 < len(args):
+            value = args[i + 1]
+        elif arg.startswith("--port="):
+            value = arg.split("=", 1)[1]
+        else:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return 8080  # llama-server's own default
 
 
 def parse_cgroup(text: str) -> tuple[str | None, dict[str, str]]:
@@ -262,8 +287,8 @@ def read_affinity(root: Path, live: bool) -> set[int] | None:
     return cpus or None
 
 
-def read_rss_bytes(root: Path) -> int | None:
-    text = _read(root / "proc" / "self" / "status")
+def read_rss_bytes(root: Path, pid: str = "self") -> int | None:
+    text = _read(root / "proc" / pid / "status")
     if text is None:
         return None
     value = parse_status_field(text, "VmRSS")
@@ -300,6 +325,11 @@ class Sampler:
         self._raw_at = 0.0
         self._snapshot: dict | None = None
         self._snapshot_at = 0.0
+        # The port of the llama-server that holds this app's model, when the
+        # model is in one; see follow_server(). Its pid is found once and
+        # looked for again when that process is gone.
+        self.server_port: int | None = None
+        self._server_pid: int | None = None
 
     # -- raw readings -------------------------------------------------------
 
@@ -353,6 +383,38 @@ class Sampler:
             return int(psutil.Process().memory_info().rss)
         except Exception:
             return None
+
+    def _is_server(self, pid: int) -> bool:
+        text = _read(self.root / "proc" / str(pid) / "cmdline")
+        return text is not None and server_port(parse_cmdline(text)) == self.server_port
+
+    def _server_rss(self) -> int | None:
+        """Resident memory of the llama-server being followed, if it is running."""
+        if self.server_port is None or not self.procfs:
+            return None
+        pid = self._server_pid
+        if pid is None or not self._is_server(pid):
+            pid = None
+            try:
+                entries = list((self.root / "proc").iterdir())
+            except OSError:
+                entries = []
+            for entry in entries:
+                if entry.name.isdigit() and self._is_server(int(entry.name)):
+                    pid = int(entry.name)
+                    break
+            self._server_pid = pid
+        return None if pid is None else read_rss_bytes(self.root, str(pid))
+
+    def held(self) -> int | None:
+        """What the app holds resident: this process, and the llama-server
+        holding its model when there is one. With the model in this process
+        that is the process alone, so the figure means the same either way."""
+        own = self._rss()
+        server = self._server_rss()
+        if own is None or server is None:
+            return own
+        return own + server
 
     def _load(self) -> list[float] | None:
         if self.procfs and not self.live:
@@ -451,7 +513,7 @@ class Sampler:
                 "cores_pct": cores,
                 "mem_total_mb": _mb(mem_total),
                 "mem_used_mb": _mb(mem_used),
-                "rss_mb": _mb(self._rss()),
+                "rss_mb": _mb(self.held()),
                 "limit_mb": _mb(limits["memory_max"]),
                 "limit_high_mb": _mb(limits["memory_high"]),
                 "cgroup_mb": _mb(limits["memory_current"]),
@@ -469,8 +531,16 @@ def snapshot() -> dict:
 
 
 def process_rss_mb() -> float | None:
-    """Resident set size of this process in MB, or None where it cannot be read."""
-    return _mb(sampler._rss())  # noqa: SLF001 - one reading, no state touched
+    """Resident memory of the app and its model in MB (see ``Sampler.held``),
+    or None where it cannot be read."""
+    return _mb(sampler.held())
+
+
+def follow_server(port: int | None) -> None:
+    """Count the llama-server listening on ``port`` as part of this app's
+    memory from now on. None stops it."""
+    sampler.server_port = port
+    sampler._server_pid = None  # noqa: SLF001 - found again on the next reading
 
 
 def usable_cpu_count() -> int | None:

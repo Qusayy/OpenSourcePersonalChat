@@ -12,7 +12,10 @@ measures the code around the model. It needs no weights and takes a second.
 With ``--engine real`` the model is loaded exactly as the site loads it, and
 every pass is given the seed. This is the run whose numbers mean something
 about the agent. Stop the web service first: a second process would load a
-second copy of the model and share the cores with the first.
+second copy of the model and share the cores with the first. With the model in
+a llama-server (AURORA_LLM_URL), stop the app and leave the server running: the
+run uses that server, and two apps sharing its one slot would each keep a queue
+the other cannot see.
 
 Nothing is written to the database either way. Tool results come from
 ``evals/fixtures``, so no task touches the network.

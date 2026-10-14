@@ -17,7 +17,8 @@ weather, currency and a URL reader — because those are precisely the things a
 app/                     the server (Python, FastAPI)
   main.py        the API: SSE chat, tools, skills, benchmark, history, the page routes
   web.py         serves the built interface and writes its first values into the page
-  llm.py         one Llama instance, one lock, honest metrics, grammar routing
+  llm.py         the engine: one slot, one lock, honest metrics; the model in this process or in a llama-server
+  llm_server.py  the client for a llama-server holding the model
   telemetry.py   the machine, measured: usable CPUs, per-core load, memory, cgroup limits
   router.py      slash commands -> heuristics -> grammar-constrained routing
   skills.py      one-click workflows built on the tools
@@ -40,7 +41,7 @@ web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS
 tests/                        the server's unit tests (standard library unittest)
 scripts/bench_cli.py          headless benchmark → JSON
 scripts/publish_release.sh    what CI runs to publish a build to the release branch
-deploy/                       systemd unit + nginx site
+deploy/                       systemd units (the app, the model server), the model server's build script, nginx site
 .github/workflows/ci.yml      test, build, publish
 ```
 
@@ -81,6 +82,10 @@ On a 2 vCPU box the llama.cpp build takes 5–15 minutes and wants ~1 GB of free
 RAM. If it gets OOM-killed, add swap first (`fallocate -l 2G /swapfile`), or
 install a prebuilt wheel from the llama-cpp-python releases page.
 
+That is the model in the app's own process, which is how it runs unless told
+otherwise. On a server it can run faster in a llama-server beside the app
+instead; see [The model server](#the-model-server).
+
 ### 3. Get the interface
 
 The interface is built into static files that the server sends. Either take
@@ -110,7 +115,9 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
 **One worker, always.** A second worker loads a second copy of the weights and
-puts the box straight into swap.
+puts the box straight into swap. With the model in a llama-server it is still
+one: the slot and the queue live in the app, and a second worker would send the
+server work the first one does not know about.
 
 **If all you see is a night sky,** the gate is closed: the site is served only
 to a browser that has drawn the pattern, and with no `.env` there is no
@@ -238,13 +245,58 @@ ProxyPassReverse /               http://127.0.0.1:8000/
 SetEnvIf Request_URI "^/api/(chat|bench/run)" no-gzip
 ```
 
+### The model server
+
+On a server the model can run in a llama-server beside the app instead of in
+the app's own process. Measured on the 4-vCPU server (AVX2, no AVX-512) this
+site runs on, with the same `Qwen2.5-1.5B-Instruct-Q4_K_M` file and a
+~1,100-token prompt:
+
+| Where the model runs | Writing | Reading the prompt | Next turn reads |
+|---|---|---|---|
+| llama-cpp-python, in the app | 15.6 tok/s | 15.1 s | ~0.1 s |
+| ik_llama.cpp `llama-server -rtr` | 23–24 tok/s | 13.8 s | 0.8 s |
+
+The server is [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp), a
+llama.cpp fork tuned for CPUs; `-rtr` repacks the weights for this CPU as they
+load, and most of the gain is that. It also keeps a conversation's prompt
+cached for models with recurrent layers, which llama-cpp-python has to re-read
+on every turn. The app keeps everything that decides who runs when (the one
+slot, the queue, Stop) and sends each pass over loopback.
+
+```bash
+cd /srv/aurora
+deploy/build-llama-server.sh       # 30–45 min on four cores; the site stays up
+sudo cp deploy/aurora-llm.service deploy/aurora.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now aurora-llm
+echo 'AURORA_LLM_URL=http://127.0.0.1:8081' | sudo tee -a .env
+sudo systemctl restart aurora
+```
+
+The build script fetches ik_llama.cpp at the commit that was measured (the fork
+publishes no releases) and installs one binary, built for this CPU, at
+`/opt/aurora-llm/bin/llama-server`. The server reads the model path, threads
+and context from the same `.env` as the app, so the two cannot disagree. Until
+it has loaded, the page says the model is warming; past a minute without an
+answer it says the server is not answering, and comes back by itself when it
+does. The About page then says the model is held by `llama-server`, and every
+memory figure counts both processes.
+
+Back to the model in the app:
+
+```bash
+sudo sed -i '/^AURORA_LLM_URL=/d' .env
+sudo systemctl disable --now aurora-llm && sudo systemctl restart aurora
+```
+
 Other deployment notes:
 
 * `LimitMEMLOCK=infinity` in the unit is required if you set
   `AURORA_USE_MLOCK=true`. Without it llama.cpp can't pin the weights and quietly
-  falls back to pageable memory.
-* `MemoryMax=3G` is an OOM guard — the service restarts instead of taking the
-  whole VPS down with it.
+  falls back to pageable memory. The model server always pins them (`--mlock`),
+  and its unit carries the same line.
+* `MemoryMax=3G` is an OOM guard, in both units — a service restarts instead of
+  taking the whole VPS down with it.
 * Keep ~2 GB of swap as a safety net. In normal operation the process should
   never touch it.
 * The live CPU and memory figures need nothing extra on Linux: they are read
@@ -396,8 +448,9 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | Variable | Default | Notes |
 |---|---|---|
 | `AURORA_MODEL_PATH` | `./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` | |
+| `AURORA_LLM_URL` | *(unset)* | unset, the model is loaded into the app. An address (`http://127.0.0.1:8081`) sends every pass to the llama-server there; see [The model server](#the-model-server) |
 | `AURORA_N_CTX` | `4096` | ~115 MB of KV cache at f16 |
-| `AURORA_N_THREADS` | `2` | match the vCPU count; more threads on 2 cores *loses* throughput |
+| `AURORA_N_THREADS` | `0` | `0` is every CPU the service may use (affinity and cgroup quota, measured at startup). A number pins it. Measured on a 4-vCPU server: 8.9 tok/s at 2 threads, 17.1 at 4 |
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
@@ -574,7 +627,9 @@ cancellation, and other clients' queue counters.
 **The KV cache is reused.** One `Llama` instance for the process lifetime, full
 conversation sent each turn — llama.cpp prefills only the new tokens, so turn 5
 starts far faster than turn 1. Creating a `Llama` per request would throw that
-away and re-read a gigabyte of weights every time.
+away and re-read a gigabyte of weights every time. With the model in a
+llama-server the same holds there: one server, one slot, and every pass offers
+its prompt to the server's cache.
 
 **The chat template does the work the sampler can't.** An instruct model fed raw
 text behaves like a base model: it rambles, repeats, and never stops cleanly. The
@@ -622,7 +677,8 @@ written as CSS instead of utility classes, and why.
 while the page is open: the CPUs this process may use (scheduler affinity, then
 the cgroup's CPU quota, so `CPUQuota=150%` reads as 1.5 cores), load per core
 from two readings of `/proc/stat`, memory in use and in total from
-`/proc/meminfo`, the process's own resident size, and the tightest
+`/proc/meminfo`, what the app and its model hold resident (this process, plus
+the llama-server found by its command line when the model runs in one), and the tightest
 `memory.max` among the service's cgroup and its ancestors (cgroup v2, with a v1
 fallback). Nothing about the machine is a configured string. The status line
 polls `GET /api/telemetry` once a second while a request is running and every
@@ -679,7 +735,13 @@ python scripts/bench_cli.py --out bench.json
 
 Three prompt sizes (~32 / ~256 / ~1024 tokens) × 128 generated tokens, 3/3/2
 repetitions, one discarded warm-up. It reports prefill tok/s, generation tok/s,
-TTFT p50/p95 and peak RSS, and stores every run so `/bench` can chart drift.
+TTFT p50/p95 and peak RSS (the app and its model), and stores every run so
+`/bench` can chart drift.
+
+Every run reads its prompt cold: each one opens with a word no other run's
+prompt opens with, so the model has nothing cached to reuse. Repeating the same
+prompt made the second and third runs cache hits, and the suite reported
+500–9,000 tok/s of prefill on a server whose real figure is 60–140.
 
 ### Reference points
 
@@ -728,7 +790,7 @@ load, and if it did, every token would come off disk.
 | `GET /api/skills` | workflow definitions |
 | `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
-| `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, app RSS, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
+| `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, the app and its model resident, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
 | `GET/DELETE /api/conversations[/{id}]` | history |
 | `POST /api/bench/run` → SSE | `stage`, `rep`, `case`, `summary` |
 | `GET /api/bench/results` | the suite, the latest summary, the history, reference machines, the memory estimate |
@@ -843,7 +905,9 @@ It is the only source of a number about what the agent can do: task success,
 routing accuracy, argument match, steps and passes, tokens, and seconds per
 task split into waiting, reading and writing. Stop the web service first: a
 second process loads a second copy of the model and shares the cores, exactly
-as the benchmark would.
+as the benchmark would. With the model in a llama-server, stop `aurora` and
+leave `aurora-llm` running: the run then uses that server, and two apps sharing
+its one slot would each keep a queue the other cannot see.
 
 A task that is about the loop asks for it itself, so it runs with the loop on
 whatever the settings say. `--loop` turns it on for all the others too. Run the

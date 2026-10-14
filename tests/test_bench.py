@@ -6,6 +6,7 @@ Needs the app's own requirements; without them the module is skipped.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 try:
     from app import bench
@@ -49,11 +50,45 @@ class LargerModelTests(unittest.TestCase):
         self.assertEqual(out["room_mb"], 3900)
         self.assertFalse(out["by_limit"])
 
+    def test_this_services_limit_does_not_bound_a_model_in_another_service(self) -> None:
+        out = bench.larger_model(BUDGET, system(total=15770, limit=3072), limited=False)
+        self.assertEqual(out["room_mb"], 15770)
+        self.assertFalse(out["by_limit"])
+        self.assertIs(out["fits"], True)
+
     def test_nothing_measured_means_no_claim(self) -> None:
         out = bench.larger_model(BUDGET, system())
         self.assertIsNone(out["fits"])
         self.assertIsNone(out["share"])
         self.assertIsNone(out["room_mb"])
+
+
+class ColdReadTests(unittest.IsolatedAsyncioTestCase):
+    """Each run reads its prompt from the first token: a repeat of a prompt
+    the model has just read is a cache hit, not a measurement."""
+
+    async def test_no_two_runs_begin_their_prompts_alike(self) -> None:
+        prompts: list[str] = []
+
+        async def one_run(prompt: str, gen_tokens: int) -> dict:
+            prompts.append(prompt)
+            return {
+                "prompt_tokens": 40, "completion_tokens": 128, "ttft_ms": 500.0,
+                "prefill_tps": 80.0, "gen_tps": 17.0, "rss_mb": None,
+            }
+
+        with mock.patch.object(bench, "_one_run", one_run), mock.patch.object(bench.db, "add_run"):
+            events = [event async for event, _ in bench.run_suite()]
+        self.assertEqual(events[-1], "summary")
+        self.assertEqual(len(prompts), 1 + sum(case["reps"] for case in bench.CASES))
+        firsts = [prompt.split()[0] for prompt in prompts]
+        self.assertEqual(len(set(firsts)), len(firsts), firsts)
+
+    def test_the_mark_opens_the_prompt_and_counts_towards_its_size(self) -> None:
+        prompt = bench.build_prompt(256, "Bravo")
+        self.assertTrue(prompt.startswith("Bravo: The model runs"))
+        self.assertTrue(prompt.endswith(bench.TASK))
+        self.assertGreaterEqual(bench.engine.count_tokens(prompt), 256)
 
 
 class ReferenceTests(unittest.TestCase):

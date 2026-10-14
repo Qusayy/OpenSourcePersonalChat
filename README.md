@@ -502,12 +502,13 @@ Rust?"), one short pass, held to a grammar of exactly those inputs, fills them
 in, and the answer is written on from it. A link is never filled in that way:
 the model may not supply an address.
 
-Two of them the Agent may also choose itself, as it chooses a tool: *Compare*
-and *Fact-check* are on its menu beside the tools, held to the same grammar.
-A skill it chooses makes its lookups, which count against the run's limits like
-any other, and the answer is asked for in the skill's own words. A skill is
-offered to the model only where it says how its answer is to be asked for;
-the rest stay buttons.
+The Agent may also choose *Compare* itself, as it chooses a tool: it is on its
+menu beside the tools, held to the same grammar. A skill it chooses makes its
+lookups, which count against the run's limits like any other, and the answer is
+asked for in the skill's own words. A skill is offered to the model only where
+it says how its answer is to be asked for; the rest stay buttons. *Fact-check*
+was offered too, until a small model reached for it on nearly any message:
+anything can be read as a claim.
 
 ### How a 1.5B model is made to route reliably
 

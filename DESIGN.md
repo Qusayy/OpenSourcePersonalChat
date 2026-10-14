@@ -30,6 +30,9 @@ colors:
   c2-dark: "#d55181"
   c3-dark: "#9085e9"
   c4-dark: "#d95926"
+  night: "#03060c"
+  night-mid: "#050a14"
+  night-low: "#0b1620"
 typography:
   display:
     fontFamily: "Recursive, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', sans-serif"
@@ -369,6 +372,14 @@ The page's one luminous thing: a strip of light in the live colour that rises fr
 - **How it is drawn:** a WebGL2 fragment shader on a transparent canvas, at half resolution with the pixel ratio capped at 1.5, eased by elapsed time so it runs the same at 60 and 120 frames a second. The light is broad curtains, not bands: its noise takes each lattice value from integer arithmetic, so neighbouring pixels never differ by more than two or three levels in 255. The shader compiles when the page is idle, never on the first send. Without WebGL2, or until the shader is ready, a CSS strip of the same colour and ceiling whose opacity is the same energy. Under reduced motion, a still, faint tint for as long as the request runs.
 
 **The One Light Rule.** There is one gradient and one glow in the system, and this is it. It is made of the live colour and governed by the Live Rule: nothing in progress, no light. Nothing may borrow it: no glow on a button, no gradient on a surface, no second effect.
+
+### The cover
+The page a visitor without a session is sent in place of the site (`web/cover.html`, `web/src/cover`; the server side is `app/gate.py`). It is not a page of the application and it is outside this system: it has no sheet, no ink and no status line, and it is the one place a picture is drawn. The rules above are the application's and are not loosened by it. The two never share a screen: the sky gives way to the sheet's own colour before the application is loaded.
+
+- **What it is:** a night sky filling the window with the northern lights over it, and one line of text low on the left giving the date and the moon's phase. Sixteen of its stars can be joined with a line, by dragging through them or clicking each in turn; the lines hold for a moment after the pointer lifts, then fade. Nothing on the page says there is anything behind it, and a drawing that is not the pattern gets no answer of any kind: no shake, no message, no change.
+- **What it keeps:** Recursive, sentence case, figures in the fixed-width cut, and the reduced-motion and no-WebGL promises below. No labels, no controls, no instructions. Its colours are the night's (`night`, `night-mid`, `night-low`) and the light of the sky itself; none of the application's colours appear until it opens.
+- **How it is drawn:** WebGL2. The night and the aurora go into a buffer smaller than the screen and each frame is blended into the last; stars are points at the screen's own resolution, with the pixel ratio capped at 2. The aurora is thin curtains standing on a bent line across the ground, lit by height: green low, red higher, a pink hem. How small the buffer is and how finely the curtains are cut are stepped down until the display's own rate is held, and back up when there is room; smooth comes before sharp. Under reduced motion the sky holds one moment and is redrawn only when a line is being drawn on it. Without WebGL2 the page is a plain night in the same three colours.
+- **In front of the sky** is a fjord: far mountains in the haze, nearer headlands at both edges, and still water between them that gives the sky back, drawn out a little by ripples. The water's edge sits under a fifth of the way up the view, lower on a phone held upright, so the stars that can be joined are always clear of the land.
 
 ### Motion
 Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances. Two durations sit outside the tokens on purpose: the 240ms entrance run from script for route steps and tool figures, and the 280ms ink-in, which has a gentler curve of its own because the arrival curve spent the whole fade in its first tenth of a second.

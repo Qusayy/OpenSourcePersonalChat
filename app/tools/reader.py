@@ -288,7 +288,7 @@ register(Tool(
     label="Read page",
     glyph="⧉",
     description="Fetch a web page and extract its readable text so it can be summarised.",
-    args=(Arg("url", "string", True, "the link to read"),),
+    args=(Arg("url", "string", True, "the link to read", max_len=200, quoted=True),),
     run=_read_url,
     card="url",
     network=True,

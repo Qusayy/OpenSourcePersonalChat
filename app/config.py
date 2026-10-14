@@ -52,6 +52,33 @@ class Settings(BaseSettings):
     )
     route_max_tokens: int = 96
 
+    # the loop
+    # Off, a message that reaches the model makes one choice of tool and then
+    # answers. On, a tool the model chose earns it another choice: it may look
+    # something up, read what came back, and look up something else. Every
+    # choice is a pass through the model and costs seconds, so the loop is
+    # bounded three ways, and a tool the visitor named themselves (a command,
+    # a pattern, a skill) never starts it.
+    agent_loop: bool = False
+    agent_max_steps: int = 3        # tool calls for one message
+    agent_max_decisions: int = 3    # passes that choose, for one message
+    agent_max_seconds: float = 90.0  # for everything before the answer
+
+    # gate
+    # Who is let past the cover; see app/gate.py. The site is served to
+    # everyone only when this is exactly "off". It is a plain string and not
+    # a boolean so that a typing mistake leaves the site closed instead of
+    # stopping the server.
+    gate: str = "on"
+    # The line the setup page prints for the owner's pattern. It belongs in
+    # the server's own .env and nowhere else: whoever has it can work the
+    # pattern out. Empty or malformed, nothing opens the site.
+    gate_verifier: str = ""
+    # A session ends when the browser closes. These end it anyway, for the
+    # phone whose browser never does.
+    gate_session_hours: float = 12.0
+    gate_idle_minutes: float = 60.0
+
     # app
     host: str = "127.0.0.1"
     port: int = 8000
@@ -59,6 +86,11 @@ class Settings(BaseSettings):
     # How pages name the machine in prose ("running on a …"). Empty means
     # describe it from what is measured at runtime; see telemetry.describe().
     hardware_label: str = ""
+    # Days to keep the record of what each message did step by step: which
+    # tool, what it was given, what came back, what each pass cost. It is a
+    # copy of what visitors typed, so it does not live for ever. Zero keeps
+    # none of it.
+    steps_keep_days: float = 30.0
     mock: bool = False
     # Seconds between fake tokens in mock mode. The default imitates this
     # hardware; drop it to near zero to drive the UI quickly in tests.

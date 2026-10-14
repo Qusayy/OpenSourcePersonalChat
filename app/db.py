@@ -72,7 +72,46 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at     REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_kind ON runs(kind, created_at);
+
+-- What one message did on its way to an answer, a row per thing done, in
+-- order, with what each cost. `run_id` is the same for every row of one
+-- message. A run that was stopped or failed has rows and no message.
+CREATE TABLE IF NOT EXISTS steps (
+    id               TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL,
+    conversation_id  TEXT NOT NULL,
+    message_id       TEXT,
+    idx              INTEGER NOT NULL,
+    kind             TEXT NOT NULL,     -- route | decide | repair | tool | answer
+    name             TEXT,              -- the tool or skill
+    via              TEXT,              -- slash | heuristic | skill | model
+    input_json       TEXT,
+    output_text      TEXT,
+    prompt_tokens    INTEGER,
+    -- Prompt tokens the model actually had to read, the rest being already
+    -- in its cache. Nothing measures this yet, and it is never estimated.
+    new_tokens       INTEGER,
+    output_tokens    INTEGER,
+    queue_ms         REAL,
+    first_token_ms   REAL,
+    total_ms         REAL,
+    ok               INTEGER NOT NULL DEFAULT 1,
+    error            TEXT,
+    -- Written by a server with no model: its timings measure a sleep.
+    mock             INTEGER NOT NULL DEFAULT 0,
+    created_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id, idx);
+CREATE INDEX IF NOT EXISTS idx_steps_conv ON steps(conversation_id, created_at);
 """
+
+# How long a step is kept when the settings do not say. A trace is a copy of
+# what visitors typed and were told, on a site with no accounts.
+STEPS_KEEP_DAYS = 30.0
+# Old steps are cleared out when the server starts, and no more often than
+# this while it runs.
+PRUNE_EVERY = 3600.0
+_pruned_at = 0.0
 
 
 def init() -> None:
@@ -86,6 +125,7 @@ def init() -> None:
     _conn.execute("PRAGMA foreign_keys=ON")
     _conn.executescript(SCHEMA)
     _conn.commit()
+    prune_steps()
 
 
 def close() -> None:
@@ -185,6 +225,7 @@ def get_conversation(cid: str) -> dict | None:
 
 
 def delete_conversation(cid: str) -> None:
+    _write("DELETE FROM steps WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM tool_calls WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM messages WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM conversations WHERE id = ?", (cid,))
@@ -262,6 +303,107 @@ def conversation_messages(cid: str) -> list[dict]:
         " ORDER BY created_at ASC",
         (cid,),
     )
+
+
+# -------------------------------------------------------------------- steps --
+
+
+def _keep_days() -> float:
+    # Read this way because a caller may hand this module settings that know
+    # nothing about steps: the tests do.
+    return float(getattr(settings, "steps_keep_days", STEPS_KEEP_DAYS))
+
+
+def add_step(
+    run_id: str,
+    conversation_id: str,
+    idx: int,
+    kind: str,
+    *,
+    name: str | None = None,
+    via: str | None = None,
+    input: dict | None = None,
+    output: str | None = None,
+    prompt_tokens: int | None = None,
+    new_tokens: int | None = None,
+    output_tokens: int | None = None,
+    queue_ms: float | None = None,
+    first_token_ms: float | None = None,
+    total_ms: float | None = None,
+    ok: bool = True,
+    error: str | None = None,
+    created_at: float | None = None,
+) -> str | None:
+    """Store one step of a run. Returns its id, or None when steps are not
+    being kept at all (a retention of zero days)."""
+    if _keep_days() <= 0:
+        return None
+    if time.time() - _pruned_at > PRUNE_EVERY:
+        prune_steps()
+    sid = uuid.uuid4().hex
+    _write(
+        "INSERT INTO steps (id, run_id, conversation_id, idx, kind, name, via, input_json,"
+        " output_text, prompt_tokens, new_tokens, output_tokens, queue_ms, first_token_ms,"
+        " total_ms, ok, error, mock, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            sid, run_id, conversation_id, idx, kind, name, via,
+            None if input is None else json.dumps(input, ensure_ascii=False),
+            output, prompt_tokens, new_tokens, output_tokens, queue_ms, first_token_ms,
+            total_ms, 1 if ok else 0, error, 1 if getattr(settings, "mock", False) else 0,
+            time.time() if created_at is None else created_at,
+        ),
+    )
+    return sid
+
+
+def attach_steps(message_id: str, run_id: str) -> None:
+    """Tie every step of a run to the answer the run produced."""
+    _write("UPDATE steps SET message_id = ? WHERE run_id = ?", (message_id, run_id))
+
+
+def run_steps(run_id: str) -> list[dict]:
+    """The steps of one run, in the order they happened."""
+    rows = _rows("SELECT * FROM steps WHERE run_id = ? ORDER BY idx ASC", (run_id,))
+    for r in rows:
+        raw = r.pop("input_json")
+        r["input"] = None if raw is None else json.loads(raw)
+        r["ok"] = bool(r["ok"])
+        r["mock"] = bool(r["mock"])
+    return rows
+
+
+def last_message_asked(cid: str) -> bool:
+    """Whether the last thing said in a conversation was a question the model
+    chose to put to the user in place of an answer.
+
+    It is read from the steps kept for that message: the pass that decided
+    said "ask". Where steps are not kept, the answer is always no, and a reply
+    to such a question is routed like any other message.
+    """
+    rows = _rows(
+        "SELECT s.output_text FROM steps s"
+        " WHERE s.message_id = (SELECT id FROM messages WHERE conversation_id = ?"
+        "                        ORDER BY created_at DESC LIMIT 1)"
+        "   AND s.kind IN ('route', 'repair')"
+        " ORDER BY s.idx DESC LIMIT 1",
+        (cid,),
+    )
+    if not rows or not rows[0]["output_text"]:
+        return False
+    try:
+        said = json.loads(rows[0]["output_text"])
+    except json.JSONDecodeError:
+        return False
+    return isinstance(said, dict) and said.get("tool") == "ask"
+
+
+def prune_steps(keep_days: float | None = None) -> None:
+    """Forget steps older than the retention period."""
+    global _pruned_at
+    _pruned_at = time.time()
+    days = _keep_days() if keep_days is None else keep_days
+    _write("DELETE FROM steps WHERE created_at < ?", (time.time() - days * 86400,))
 
 
 # --------------------------------------------------------------------- runs --

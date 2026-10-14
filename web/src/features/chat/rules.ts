@@ -99,6 +99,9 @@ export interface StepRow {
 export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] {
   if (data.kind === "model") return rows as StepRow[];
   const status = data.status || "running";
+  // A step the run was stopped in the middle of decided nothing and found
+  // nothing: there is nothing about it left to say.
+  if (status === "stopped") return rows.filter((row) => row.id !== data.id);
   const over = status !== "running";
   if (over && (data.kind === "tool" || (data.kind === "route" && data.detail === "slash"))) {
     return rows.filter((row) => row.id !== data.id);

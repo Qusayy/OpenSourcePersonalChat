@@ -1,0 +1,15 @@
+{
+  "tool": "weather",
+  "args": {
+    "location": "Atlantis"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": false,
+    "summary": "No place called 'Atlantis' was found. Try adding a country, like “Amman, Jordan”.",
+    "card": null,
+    "data": {},
+    "error": "no such place"
+  }
+}

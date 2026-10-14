@@ -1,0 +1,25 @@
+{
+  "tool": "currency",
+  "args": {
+    "amount": 100,
+    "from_currency": "EUR",
+    "to_currency": "USD"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "100.00 EUR = 108.52 USD (rate 1.0852, ECB 2026-10-13).",
+    "card": "currency",
+    "data": {
+      "amount": 100.0,
+      "from": "EUR",
+      "to": "USD",
+      "result": 108.52,
+      "rate": 1.0852,
+      "date": "2026-10-13",
+      "source": "European Central Bank"
+    },
+    "error": null
+  }
+}

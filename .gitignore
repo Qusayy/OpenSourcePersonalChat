@@ -26,6 +26,8 @@ models/*
 # output
 bench.json
 *.log
+# what `scripts/eval_agent.py --out` writes: a run against one machine's model
+evals/reports/
 
 # design tooling state: hook cache, review screenshots
 .impeccable/

@@ -1,0 +1,82 @@
+/* The setup page's panel: instructions over the cover's sky. The sky and its
+   rules come from the cover's stylesheet; this is only the panel.
+
+   It sits along the bottom edge, clear of the stars that can be joined, and
+   lets a pointer through everywhere but its buttons, so it is never in the
+   way of a drawing. */
+
+#setup {
+  position: fixed;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: min(40rem, calc(100% - 32px));
+  translate: -50% 0;
+  padding: 14px 18px 16px;
+  border: 1px solid rgb(232 240 236 / 0.22);
+  border-radius: 4px;
+  background: rgb(3 6 12 / 0.82);
+  color: rgb(232 240 236 / 0.92);
+  font:
+    400 15px / 1.5 "Recursive",
+    system-ui,
+    sans-serif;
+  pointer-events: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#setup h1 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#setup p {
+  margin: 0;
+}
+
+#setup p + p {
+  margin-top: 10px;
+}
+
+#line {
+  padding: 8px 10px;
+  border: 1px solid rgb(232 240 236 / 0.22);
+  border-radius: 4px;
+  font-size: 13px;
+  font-variation-settings: "MONO" 1;
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+}
+
+#then {
+  color: rgb(232 240 236 / 0.72);
+  font-size: 14px;
+}
+
+#actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+#actions button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid rgb(232 240 236 / 0.5);
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#actions button:hover {
+  border-color: rgb(232 240 236 / 0.9);
+}
+
+#actions button:focus-visible {
+  outline: 2px solid rgb(232 240 236 / 0.9);
+  outline-offset: 2px;
+}

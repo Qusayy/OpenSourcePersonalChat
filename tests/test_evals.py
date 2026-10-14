@@ -300,6 +300,16 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(score(task, [ran(chose)])[0], "skill: ran 'compare', expected None")
         self.assertNotIn("skill", " ".join(score(task, [ran(tool)])))
 
+    def test_a_call_refused_before_it_was_made_is_not_a_call(self) -> None:
+        trace = agent.Trace(outcome="answered", answer="Six.")
+        trace.steps = [
+            agent.Step("tool", name="read_url", via="model"),
+            agent.Step("tool", name="read_url", via="model", ok=False, error="not allowed"),
+            agent.Step("tool", name="weather", via="model", ok=False, error="no such place"),
+        ]
+        task = Task(id="t", category="c", turns=("x",), expect={"calls": ["read_url", "weather"]})
+        self.assertEqual(score(task, [Turn(user="x", events=[], trace=trace)]), [])
+
     def test_the_last_message_of_a_task_is_the_one_that_is_scored(self) -> None:
         self.assertEqual(
             score(task(calls=[]), [turn(ROUTE, CALL, ANSWER), turn(ANSWER)]), []

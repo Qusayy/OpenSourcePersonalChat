@@ -146,7 +146,9 @@ export function StatusLine({ page }: { page: PageName }) {
           title={
             ramKnown
               ? `The whole machine's memory, measured now${
-                  system.rss_mb !== null ? ` · this app holds ${gb(system.rss_mb)} GB` : ""
+                  system.rss_mb !== null
+                    ? ` · the app and its model hold ${gb(system.rss_mb)} GB`
+                    : ""
                 }`
               : undefined
           }
@@ -183,7 +185,7 @@ export function StatusLine({ page }: { page: PageName }) {
         <SysRow fact="rss" className="st-seg">
           {(value) => (
             <>
-              this app holds <b className="num">{value}</b>
+              the app and its model hold <b className="num">{value}</b>
             </>
           )}
         </SysRow>

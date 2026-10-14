@@ -1,0 +1,49 @@
+[Unit]
+Description=Aurora — the model server (ik_llama.cpp llama-server)
+# Used only when the app's .env sets AURORA_LLM_URL=http://127.0.0.1:8081.
+# Without that line the app loads the model itself and this can stay off.
+After=network.target
+
+[Service]
+Type=simple
+User=aurora
+Group=aurora
+WorkingDirectory=/srv/aurora
+
+# The app's own .env, so the model, the threads and the context are read from
+# the lines the app reads and the two can never disagree. These defaults are
+# the app's, for a .env that leaves a line out; the file overrides them.
+Environment=AURORA_MODEL_PATH=./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
+Environment=AURORA_N_THREADS=0
+Environment=AURORA_N_CTX=4096
+EnvironmentFile=/srv/aurora/.env
+
+# Built by deploy/build-llama-server.sh.
+#   -t 0     every CPU, as AURORA_N_THREADS=0 means in the app
+#   -np 1    one slot: the app runs one pass at a time and keeps the queue
+#   -rtr     repack the weights for this CPU as they load; on the measured
+#            server most of the gain over the app's own llama.cpp is this
+#   --mlock  keep them in RAM (needs the LimitMEMLOCK below)
+# Loopback only, on a port nginx never proxies.
+ExecStart=/opt/aurora-llm/bin/llama-server \
+    -m ${AURORA_MODEL_PATH} -t ${AURORA_N_THREADS} -c ${AURORA_N_CTX} \
+    -np 1 --host 127.0.0.1 --port 8081 -rtr --mlock
+
+LimitMEMLOCK=infinity
+
+# OOM guard: kill and restart rather than dragging the whole VPS down. The
+# app waits for the server to come back and says so on the page meanwhile.
+MemoryMax=3G
+MemoryHigh=2600M
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

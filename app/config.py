@@ -27,8 +27,15 @@ class Settings(BaseSettings):
     model_params: str = "1.5B"
 
     # llama.cpp runtime
+    # Empty: the model is loaded into this process with llama-cpp-python. An
+    # address (http://127.0.0.1:8081): every pass goes to the llama-server
+    # there instead, which deploy/aurora-llm.service runs from this same file.
+    llm_url: str = ""
     n_ctx: int = 4096
-    n_threads: int = 2
+    # 0 is every CPU this process may use, measured at startup (affinity and
+    # cgroup quota). A number pins it. A server resized from 2 cores to 4 kept
+    # an old "2" and ran on half the machine; the measured default cannot.
+    n_threads: int = 0
     n_batch: int = 256
     use_mmap: bool = True
     use_mlock: bool = False

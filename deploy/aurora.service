@@ -2,6 +2,11 @@
 Description=Aurora — local LLM web front-end
 After=network-online.target
 Wants=network-online.target
+# With AURORA_LLM_URL set the model is in aurora-llm.service, enabled on its
+# own. When both start, that one starts first; the app waits for its model
+# either way. It is not pulled in from here, so with the line unset and that
+# service disabled nothing loads the weights twice.
+After=aurora-llm.service
 
 [Service]
 Type=simple
@@ -12,7 +17,9 @@ Environment="PATH=/srv/aurora/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=-/srv/aurora/.env
 
 # One worker. The model is a single in-process object; a second worker would
-# load a second copy of the weights and put the box straight into swap.
+# load a second copy of the weights and put the box straight into swap. With
+# the model in aurora-llm.service it is still one: the one slot and the queue
+# live in this process, and a second would send the server work behind its back.
 ExecStart=/srv/aurora/.venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 --port 8000 --workers 1 --no-access-log --timeout-keep-alive 75
 

@@ -38,8 +38,11 @@ async def lifespan(app: FastAPI):
     # first page view has something to measure against.
     telemetry.sampler.baseline()
     # Load off the event loop so the page renders (and shows "warming") while
-    # ~1 GB of weights is being faulted in.
-    threading.Thread(target=engine.load_blocking, name="model-load", daemon=True).start()
+    # ~1 GB of weights is being faulted in, or while a model server starts.
+    # The site waits for that server as long as it takes.
+    threading.Thread(
+        target=engine.load_blocking, kwargs={"keep_waiting": True}, name="model-load", daemon=True
+    ).start()
     yield
     db.close()
 
@@ -62,7 +65,9 @@ def bench_static() -> dict:
         "cases": bench.CASES,
         "reference": bench.REFERENCE,
         "budget": budget,
-        "larger": bench.larger_model(budget, telemetry.snapshot()),
+        "larger": bench.larger_model(
+            budget, telemetry.snapshot(), limited=engine.runtime != "llama-server"
+        ),
         "latest": bench.latest_summary(),
     }
 

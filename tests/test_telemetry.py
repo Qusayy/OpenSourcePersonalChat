@@ -23,9 +23,11 @@ from app.telemetry import (
     parse_cpu_list,
     parse_cpu_max,
     parse_cpu_times,
+    parse_cmdline,
     parse_limit,
     parse_meminfo,
     read_cgroup_limits,
+    server_port,
 )
 
 GIB = 1024**3
@@ -338,6 +340,78 @@ class SamplerTests(unittest.TestCase):
         self.assertIsNone(snap["mem_total_mb"])
         self.assertIsNone(snap["rss_mb"])
         self.assertEqual(snap["cpus"], 4)  # falls back to what the kernel reports
+
+
+def cmdline(*args: str) -> str:
+    """Arguments as /proc/<pid>/cmdline holds them."""
+    return "".join(arg + "\0" for arg in args)
+
+
+SERVER = cmdline("/opt/aurora-llm/bin/llama-server", "-m", "./models/model.gguf", "-t", "4", "--port", "8081", "-rtr")
+
+
+def server_status(kb: int) -> str:
+    return f"Name:\tllama-server\nVmRSS:\t {kb} kB\n"
+
+
+class ServerCommandLineTests(unittest.TestCase):
+    def test_a_command_line_is_its_arguments(self) -> None:
+        self.assertEqual(parse_cmdline(cmdline("a", "b c", "", "d")), ["a", "b c", "d"])
+
+    def test_the_port_a_llama_server_listens_on(self) -> None:
+        self.assertEqual(server_port(parse_cmdline(SERVER)), 8081)
+        self.assertEqual(server_port(["llama-server", "--port=9000"]), 9000)
+        self.assertEqual(server_port(["llama-server", "-m", "x.gguf"]), 8080, "llama-server's default")
+
+    def test_anything_else_is_not_a_server(self) -> None:
+        self.assertIsNone(server_port(["uvicorn", "--port", "8081"]))
+        self.assertIsNone(server_port(["llama-server", "--port", "eighty"]))
+        self.assertIsNone(server_port([]))
+
+
+class ServerMemoryTests(unittest.TestCase):
+    """With the model in a llama-server, the app's memory is both processes."""
+
+    def setUp(self) -> None:
+        self.root = Root(
+            {
+                "proc/self/status": STATUS,  # VmRSS 1436672 kB
+                "proc/4242/cmdline": SERVER,
+                "proc/4242/status": server_status(800000),
+                # Another llama-server on another port is somebody else's.
+                "proc/77/cmdline": cmdline("llama-server", "--port", "9000"),
+                "proc/77/status": server_status(5000000),
+            }
+        )
+        self.addCleanup(self.root.close)
+        self.sampler = Sampler(root=self.root.path, procfs=True)
+
+    def test_without_a_server_it_is_this_process(self) -> None:
+        self.assertEqual(self.sampler.held(), 1436672 * 1024)
+
+    def test_with_one_it_is_this_process_and_that_server(self) -> None:
+        self.sampler.server_port = 8081
+        self.assertEqual(self.sampler.held(), (1436672 + 800000) * 1024)
+        self.assertEqual(self.sampler.snapshot()["rss_mb"], round((1436672 + 800000) / 1024, 1))
+
+    def test_a_restarted_server_is_found_again(self) -> None:
+        self.sampler.server_port = 8081
+        self.sampler.held()
+        (self.root.path / "proc/4242/cmdline").unlink()
+        self.root.write("proc/5151/cmdline", SERVER)
+        self.root.write("proc/5151/status", server_status(900000))
+        self.assertEqual(self.sampler.held(), (1436672 + 900000) * 1024)
+
+    def test_a_server_that_is_not_running_adds_nothing(self) -> None:
+        self.sampler.server_port = 8082
+        self.assertEqual(self.sampler.held(), 1436672 * 1024)
+
+    def test_following_starts_and_stops_with_the_engine(self) -> None:
+        with mock.patch.object(telemetry, "sampler", self.sampler):
+            telemetry.follow_server(8081)
+            self.assertEqual(telemetry.process_rss_mb(), round((1436672 + 800000) / 1024, 1))
+            telemetry.follow_server(None)
+            self.assertEqual(telemetry.process_rss_mb(), round(1436672 / 1024, 1))
 
 
 class DescribeTests(unittest.TestCase):

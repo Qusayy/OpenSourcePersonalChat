@@ -262,7 +262,7 @@ export function BenchPage() {
               <span className={LEAD_FIGURE} id="t-rss">
                 {tiles.rss}
               </span>
-              {" resident, whole process"}
+              {" resident, the app and its model"}
             </dd>
           </div>
         </Facts>

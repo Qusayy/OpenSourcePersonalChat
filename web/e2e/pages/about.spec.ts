@@ -27,12 +27,16 @@ test("fills its facts from the machine as measured", async ({ page }) => {
   await expect(row(page, "CPUs this app can use").locator("dd")).toHaveText("2 cores");
   await expect(row(page, "CPU load now").locator("dd")).toHaveText("5%");
   await expect(row(page, "Memory in use, whole machine").locator("dd")).toHaveText("2.1 / 3.8 GB");
-  await expect(row(page, "Memory held by this app").locator("dd")).toHaveText("1.3 GB");
+  await expect(row(page, "Memory held by the app and its model").locator("dd")).toHaveText(
+    "1.3 GB",
+  );
   await expect(row(page, "Memory limit on the service").locator("dd")).toHaveText("2.5 GB");
   await expect(row(page, "Load average, 1 / 5 / 15 min").locator("dd")).toHaveText(
     "1.90 1.20 0.80",
   );
-  await expect(page.getByText("Measured now: this process holds 1.35 GB resident.")).toBeVisible();
+  await expect(
+    page.getByText("Measured now: the app and its model hold 1.35 GB resident."),
+  ).toBeVisible();
 });
 
 test("keeps them current while the page is open", async ({ page }) => {
@@ -70,7 +74,7 @@ test("leaves out a row the machine has nothing to say for", async ({ page }) => 
   for (const term of [
     "CPUs this app can use",
     "CPU load now",
-    "Memory held by this app",
+    "Memory held by the app and its model",
     "Memory limit on the service",
     "Load average, 1 / 5 / 15 min",
   ]) {
@@ -107,6 +111,22 @@ test("describes its own front-end as it is", async ({ page }) => {
   await expect(stack).toContainText("React and TypeScript, built with Vite into static files");
   await expect(stack).toContainText("five runtime packages and nothing from a CDN");
   await expect(stack).not.toContainText("no build step");
+});
+
+test("says where the model is held", async ({ page }) => {
+  await page.goto("/about");
+  const stack = page.locator("#stack");
+  await expect(stack).toContainText("llama-cpp-python holds the model");
+
+  // The page asks for the engine's health as it opens; this one is served by
+  // a llama-server.
+  const health = await page.evaluate(async () => (await fetch("/api/health")).json());
+  await page.route("**/api/health", (route) =>
+    route.fulfill({ json: { ...health, engine: { ...health.engine, runtime: "llama-server" } } }),
+  );
+  await page.reload();
+  await expect(stack).toContainText("llama-server holds the model in a service of its own");
+  await expect(stack).not.toContainText("llama-cpp-python");
 });
 
 test("its contents list goes to each part", async ({ page }) => {

@@ -18,6 +18,7 @@ from unittest import mock
 try:
     from app.config import settings
     from app.llm import Engine
+    from app.llm_server import ServerError
     from evals.scripted import ScriptedEngine
     from tests.support import collect, until
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -830,6 +831,178 @@ class ModelCallTests(unittest.TestCase):
             list(self.engine._iter_chunks(MESSAGES, SAMPLING, grammar='root ::= "x"'))
         compile_.assert_called_once_with('root ::= "x"')
         self.assertIs(self.llama.asked[0]["grammar"], compiled)
+
+
+class ThreadTests(unittest.TestCase):
+    """How many threads the model is given, and what the pages are told."""
+
+    def engine(self, n_threads: int) -> Engine:
+        return Engine(settings.model_copy(update={"mock": True, "n_threads": n_threads}))
+
+    def test_zero_means_every_cpu_this_process_may_use(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+            engine = self.engine(0)
+            self.assertEqual(engine.threads, 4)
+            self.assertEqual(engine.info()["n_threads"], 4)
+
+    def test_a_number_pins_it_whatever_the_machine_has(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+            self.assertEqual(self.engine(2).threads, 2)
+
+    def test_a_machine_that_cannot_be_measured_gets_one(self) -> None:
+        with mock.patch("app.llm.usable_cpu_count", return_value=None):
+            self.assertEqual(self.engine(0).threads, 1)
+
+
+SERVER_URL = "http://127.0.0.1:8081"
+
+
+class FakeServer:
+    """Stands where a llama-server would: answers when asked whether it is up,
+    counts a word as a token, and writes ``texts``. It keeps every request."""
+
+    def __init__(self, *texts: str, fail: Exception | None = None, up_after: int = 0) -> None:
+        self.texts = texts or ("Hi", " there")
+        self.fail = fail
+        self.up_after = up_after
+        self.asked: list[dict] = []
+        # The engine's status at each time it asked whether the server was up.
+        self.seen: list[str] = []
+        self.engine: Engine | None = None
+
+    def ready(self) -> bool:
+        if self.engine is not None:
+            self.seen.append(self.engine.state.status)
+        return len(self.seen) > self.up_after
+
+    def tokenize(self, text: str) -> int:
+        return len(text.split())
+
+    def stream(self, body: dict):
+        self.asked.append(body)
+        if self.fail is not None:
+            raise self.fail
+        yield from self.texts
+
+
+def served(server: FakeServer, **update) -> Engine:
+    """A real engine whose model is ``server``, polled without waiting."""
+    engine = Engine(settings.model_copy(update={"mock": False, "llm_url": SERVER_URL, **update}))
+    engine.SERVER_POLL = 0.0
+    engine.QUEUE_TICK = 0.01
+    engine._connect = lambda url: server
+    server.engine = engine
+    return engine
+
+
+class ServerLoadTests(unittest.TestCase):
+    """Waiting for a model server instead of loading a model."""
+
+    def test_the_engine_is_ready_once_the_server_answers(self) -> None:
+        server = FakeServer(up_after=2)
+        engine = served(server)
+        engine.load_blocking()
+        self.assertTrue(engine.ready)
+        self.assertEqual(server.seen, ["loading", "loading", "loading"])
+        self.assertIsNone(engine._llm, "no weights are loaded into this process")
+        self.assertEqual(engine.info()["runtime"], "llama-server")
+
+    def test_a_server_that_never_answers_is_an_error_without_its_address(self) -> None:
+        engine = served(FakeServer(up_after=10**6))
+        engine.SERVER_PATIENCE = 0.0
+        with self.assertLogs("aurora.llm", "ERROR") as logged:
+            engine.load_blocking()
+        self.assertEqual(engine.state.status, "error")
+        self.assertEqual(
+            engine.state.error, "The model server is not answering. The server log has the detail."
+        )
+        self.assertIn(SERVER_URL, "\n".join(logged.output), "the log says where it looked")
+
+    def test_the_site_keeps_waiting_and_comes_back_when_the_server_does(self) -> None:
+        server = FakeServer(up_after=3)
+        engine = served(server)
+        engine.SERVER_PATIENCE = 0.0
+        with self.assertLogs("aurora.llm", "ERROR"):
+            engine.load_blocking(keep_waiting=True)
+        self.assertEqual(server.seen, ["loading", "error", "error", "error"])
+        self.assertTrue(engine.ready)
+        self.assertIsNone(engine.state.error)
+
+    def test_the_servers_memory_is_counted_once_it_answers(self) -> None:
+        server = FakeServer()
+        server.port = 8081
+        engine = served(server)
+        with mock.patch("app.llm.follow_server") as follow:
+            engine.load_blocking()
+        follow.assert_called_once_with(8081)
+
+    def test_tokens_are_counted_by_the_server_once_it_answers(self) -> None:
+        engine = served(FakeServer())
+        self.assertEqual(engine.count_tokens("one two three four"), 4, "an estimate before it answers")
+        engine.load_blocking()
+        self.assertEqual(engine.count_tokens("one two three"), 3)
+
+    def test_without_an_address_the_model_is_in_this_process(self) -> None:
+        engine = Engine(settings.model_copy(update={"mock": True}))
+        self.assertEqual(engine.info()["runtime"], "llama-cpp-python")
+
+
+class ServerCallTests(unittest.TestCase):
+    """What the server is asked for. The same calls as ModelCallTests, made
+    to a server instead of llama.cpp."""
+
+    def setUp(self) -> None:
+        self.server = FakeServer()
+        self.engine = served(self.server)
+        self.engine.load_blocking()
+
+    def test_settings_a_pass_does_not_name_are_the_ones_llama_cpp_python_would_use(self) -> None:
+        said = list(self.engine._iter_chunks(MESSAGES, {"temperature": 0.0, "top_k": 1, "max_tokens": 96}))
+        self.assertEqual(said, ["Hi", " there"])
+        self.assertEqual(
+            self.server.asked,
+            [{
+                "messages": MESSAGES,
+                "temperature": 0.0, "top_p": 0.95, "top_k": 1, "min_p": 0.05,
+                "repeat_penalty": 1.0, "max_tokens": 96,
+            }],
+        )
+
+    def test_an_answer_keeps_all_five_of_its_settings(self) -> None:
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING))
+        self.assertEqual(self.server.asked[0], {"messages": MESSAGES, "min_p": 0.05, **SAMPLING})
+
+    def test_the_grammar_goes_as_text_and_seed_and_stop_only_when_given(self) -> None:
+        with mock.patch.object(self.engine, "_grammar") as compile_:
+            list(self.engine._iter_chunks(MESSAGES, SAMPLING, grammar='root ::= "x"', seed=0, stop=["</s>"]))
+        compile_.assert_not_called()
+        self.assertEqual(self.server.asked[0]["grammar"], 'root ::= "x"')
+        self.assertEqual(self.server.asked[0]["seed"], 0)
+        self.assertEqual(self.server.asked[0]["stop"], ["</s>"])
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=[]))
+        for key in ("grammar", "seed", "stop"):
+            self.assertNotIn(key, self.server.asked[1])
+
+
+class ServerPassTests(unittest.IsolatedAsyncioTestCase):
+    """A whole pass through the slot, with the model in a server."""
+
+    async def test_a_pass_streams_and_ends_like_any_other_and_frees_the_slot(self) -> None:
+        engine = served(FakeServer("one", " two"))
+        engine.load_blocking()
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING))
+        self.assertEqual(names(stream), ["start", "token", "done"])
+        done = stream[-1][1]
+        self.assertEqual(done["text"], "one two")
+        self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
+        self.assertFalse(engine._lock.locked())
+
+    async def test_a_server_that_fails_is_an_error_event_and_frees_the_slot(self) -> None:
+        engine = served(FakeServer(fail=ServerError("the model server is not answering")))
+        engine.load_blocking()
+        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING))
+        self.assertIn(("error", {"message": "ServerError: the model server is not answering"}), stream)
+        self.assertFalse(engine._lock.locked())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,12 @@
 It measures the machine the site is actually running on, through the same code
 path chat uses — same lock, same sampling, same context. A synthetic harness
 that bypassed the queue would report numbers no visitor would ever see.
+
+Every run reads its prompt cold. The model keeps the last prompt it read and
+reads only what differs, so a repeat of the same prompt costs almost nothing:
+when the repeats were identical, the suite reported 500–9,000 tokens a second
+of reading on a server that reads 60–140. Each run's prompt now begins with a
+word no other run's begins with.
 """
 
 from __future__ import annotations
@@ -44,16 +50,23 @@ SAMPLING = {
     "max_tokens": 128,
 }
 
+# The first word of each run's prompt, one per run, so that no run starts the
+# way an earlier one did and the model has nothing it can reuse.
+MARKS = (
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+    "India", "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
+)
 
-def build_prompt(target_tokens: int) -> str:
+
+def build_prompt(target_tokens: int, mark: str = "") -> str:
     """Grow filler until the prompt reaches the target size for this tokenizer.
 
     Sentence-at-a-time rather than paragraph-at-a-time: a whole paragraph of
     granularity overshoots the 32-token case by 4x, which would make the short
-    row of the chart a lie.
+    row of the chart a lie. ``mark`` opens the prompt and counts towards it.
     """
     sentences = [s.strip() + " " for s in FILLER.split(". ") if s.strip()]
-    body = ""
+    body = f"{mark}: " if mark else ""
     i = 0
     while engine.count_tokens(body + TASK) < target_tokens:
         body += sentences[i % len(sentences)]
@@ -100,9 +113,11 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
     """Yield (event, payload): stage | rep | case | summary | error."""
     started = time.time()
 
+    marks = iter(MARKS)
+
     yield "stage", {"text": "Warming up (this run is discarded)", "pct": 0}
     try:
-        await _one_run(build_prompt(24), 24)
+        await _one_run(build_prompt(24, next(marks)), 24)
     except Exception as exc:  # noqa: BLE001
         yield "error", {"message": str(exc)}
         return
@@ -112,7 +127,6 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
     summaries: list[dict] = []
 
     for case in CASES:
-        prompt = build_prompt(case["target"])
         results: list[dict] = []
         for rep in range(case["reps"]):
             yield "stage", {
@@ -120,7 +134,7 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
                 "pct": round(100 * done_reps / total_reps),
             }
             try:
-                res = await _one_run(prompt, case["gen"])
+                res = await _one_run(build_prompt(case["target"], next(marks)), case["gen"])
             except Exception as exc:  # noqa: BLE001
                 yield "error", {"message": str(exc)}
                 return
@@ -272,17 +286,22 @@ def memory_budget(n_ctx: int) -> list[dict]:
     ]
 
 
-def larger_model(budget: list[dict], system: dict) -> dict:
+def larger_model(budget: list[dict], system: dict, limited: bool = True) -> dict:
     """Where a 7B model at the same quantisation would stand on this machine.
 
     It needs its own weights plus everything else in the budget, which is at
     least what this model needs. What it has to fit in is the machine's memory
     as measured, or the limit on the service where that is tighter. `fits` is
     None when neither can be read: the page then makes no claim either way.
+
+    ``limited`` false says the model is not in this service: it runs in a
+    llama-server with limits of its own, so this service's limit does not
+    bound it and only the machine's memory counts.
     """
     need = LARGER_WEIGHTS_MB + sum(b["mb"] for b in budget[1:])
     total = system.get("mem_total_mb")
-    limits = [v for v in (system.get("limit_mb"), system.get("limit_high_mb")) if v]
+    measured = (system.get("limit_mb"), system.get("limit_high_mb")) if limited else ()
+    limits = [v for v in measured if v]
     limit = min(limits) if limits else None
     rooms = [v for v in (total, limit) if v]
     room = min(rooms) if rooms else None

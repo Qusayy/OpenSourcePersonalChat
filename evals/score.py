@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.skills import SKILLS
+
 from .tasks import Task, Turn
 
 
@@ -40,6 +42,26 @@ def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
     tool = (ran.name if ran else None) if route.via == "skill" else route.name
     args = ran.input if ran else (route.input if route.via in ("slash", "heuristic") else None)
     return tool, args, route.via
+
+
+def skill_of(turn: Turn) -> str | None:
+    """The skill a turn ran, whoever chose it: the visitor, by its button, or
+    the model, by the last choice it made that held. None for none."""
+    steps = turn.trace.steps
+    armed = next((s for s in steps if s.kind == "route" and s.via == "skill"), None)
+    if armed is not None:
+        return armed.name
+    chose = [s.name for s in steps
+             if s.model and s.kind in ("route", "decide", "repair") and s.ok and s.name in SKILLS]
+    return chose[-1] if chose else None
+
+
+def skill_match(task: Task, turn: Turn) -> bool | None:
+    """Whether the run ran the skill the task says it should have; None when
+    the task does not say."""
+    if "skill" not in task.expect:
+        return None
+    return skill_of(turn) == task.expect["skill"]
 
 
 def route_match(task: Task, turn: Turn) -> tuple[bool | None, bool | None]:
@@ -80,6 +102,9 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             for key, value in want["args"].items():
                 if _plain(got.get(key)) != _plain(value):
                     failed.append(f"route: {key} was {got.get(key)!r}, expected {value!r}")
+
+    if skill_match(task, turn) is False:
+        failed.append(f"skill: ran {skill_of(turn)!r}, expected {expect['skill']!r}")
 
     called = [s.name for s in trace.steps if s.kind == "tool"]
     if "calls" in expect and called != expect["calls"]:

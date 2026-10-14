@@ -18,6 +18,7 @@ try:
     from app import agent
     from app.context import SUMMARY_HEADING, merged
     from app.router import fill_request
+    from app.transcript import CUE_PLAIN
     from app.tools.base import args_to_gbnf
     from app.transcript import data
     from app.excerpt import estimate
@@ -328,6 +329,7 @@ class ReplayedAddressTests(AgentCase):
 
     async def test_an_address_found_only_in_a_replayed_page_is_never_fetched(self) -> None:
         from app.context import Part, Turn, key
+        from app.skills import offered
         from app.transcript import system_for
         from app.tools.base import available
 
@@ -337,7 +339,7 @@ class ReplayedAddressTests(AgentCase):
             parts=(Part("user", "question", "open https://example.org/tides"),
                    Part("user", "data", page, ("read_url",)),
                    Part("assistant", "answer", "High water is at six.")),
-            system_key=key(system_for(get_persona("agent"), available())), at=0.0,
+            system_key=key(system_for(get_persona("agent"), offered(available()))), at=0.0,
         )
         history = [{"role": "user", "content": earlier.question},
                    {"role": "assistant", "content": earlier.answer}]
@@ -1333,13 +1335,14 @@ class LoopTests(LoopCase):
         engine = self.scripted(weather("Paris"), NONE, "Take a coat.")
         support.played_tools(self, {"weather": found("Paris")})
         _, trace = await self.traced("Do I need a coat in Paris", engine)
+        from app.skills import offered
         from app.tools.base import available
         from app.transcript import CUE_WITH_DATA, system_for
 
         self.assertEqual(
             trace.prompt,
             [
-                {"role": "system", "content": system_for(get_persona("agent"), available())},
+                {"role": "system", "content": system_for(get_persona("agent"), offered(available()))},
                 {"role": "user", "content": "Do I need a coat in Paris"},
                 {"role": "assistant", "content": weather("Paris")},
                 {"role": "user", "content": '<data tool="weather">Paris: overcast, 12.9°C.</data>'},
@@ -1902,6 +1905,70 @@ class LoopTraceTests(LoopCase):
         self.assertEqual(shape(stream)[0], "trimmed")  # before anything is chosen
         for before, after in zip(engine.passes, engine.passes[1:]):
             self.assertTrue(after.prompt.startswith(before.prompt + before.output))
+
+
+COMPARE = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
+
+
+class SkillChoiceTests(LoopCase):
+    """The model may choose a skill as it chooses a tool."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.asked = support.played_tools(self, {"wikipedia": [article_of("Python"), article_of("Rust")]})
+
+    async def test_a_chosen_skill_makes_its_lookups_and_answers_with_its_own_cue(self) -> None:
+        from app.skills import SKILLS
+
+        engine = self.scripted(COMPARE, "| | Python | Rust |")
+        stream, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        # One choice, the two lookups, and the answer: the skill ends the looking-up.
+        self.assertEqual([(s.kind, s.name) for s in trace.steps],
+                         [("route", "compare"), ("tool", "wikipedia"), ("tool", "wikipedia"),
+                          ("answer", None)])
+        self.assertEqual([c.via for c, _ in trace.calls], ["model", "model"])
+        self.assertEqual(len(engine.passes), 2)
+        self.assertTrue(trace.prompt[-1]["content"].endswith(SKILLS["compare"].cue))
+        route = support.step(stream, "route", "ok")
+        self.assertEqual((route["label"], route["tool"], route["detail"], route["glyph"]),
+                         ("Compare two things", "compare", "model", "⇹"))
+        self.assertTrue(engine.free)
+
+    async def test_with_the_loop_off_it_is_the_same(self) -> None:
+        engine = self.scripted(COMPARE, "| | Python | Rust |")
+        await collect(agent.run("Which came first, Python or Rust?", persona=get_persona("agent"),
+                                history=[], engine=engine, loop=False))
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        self.assertEqual(len(engine.passes), 2)
+
+    async def test_a_skill_not_given_what_it_needs_is_sent_back_once(self) -> None:
+        half = '{"tool": "compare", "args": {"a": "Python", "b": " "}}'
+        engine = self.scripted(half, COMPARE, "| | Python | Rust |")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual([(s.kind, s.ok) for s in trace.steps][:2], [("route", False), ("repair", True)])
+        self.assertEqual(trace.steps[0].error, "rejected: b is required and was not given")
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+
+    async def test_one_still_not_given_it_is_no_choice_and_nothing_is_looked_up(self) -> None:
+        half = '{"tool": "compare", "args": {"a": "Python", "b": " "}}'
+        engine = self.scripted(half, half, "I can say a little from memory.")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [])
+        self.assertEqual(trace.prompt[-1]["content"], CUE_PLAIN)
+        self.assertEqual(trace.outcome, "answered")
+
+    async def test_its_lookups_are_held_to_the_runs_limit_on_steps(self) -> None:
+        support.with_settings(self, agent_max_steps=1)
+        engine = self.scripted(COMPARE, "Python is older.")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}])
+
+    async def test_a_skill_with_no_cue_is_not_on_offer(self) -> None:
+        engine = self.scripted('{"tool": "weather_brief", "args": {"location": "Paris"}}', "Hm.")
+        _, trace = await self.traced("Brief me on Paris", engine)
+        self.assertEqual(trace.steps[0].error, "model picked an unknown tool: weather_brief")
+        self.assertNotIn("weather_brief", engine.passes[0].prompt)
 
 
 if __name__ == "__main__":

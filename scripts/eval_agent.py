@@ -188,7 +188,8 @@ def show(report: dict, file=None) -> None:
     )
     print(
         f"  task success {pct(s['task_success'])}   routing {pct(s['routing_accuracy'])}   "
-        f"arguments {pct(s['argument_match'])}   invalid decisions {pct(s['invalid_output_rate'])}",
+        f"skills {pct(s.get('skill_selection'))}   arguments {pct(s['argument_match'])}   "
+        f"invalid decisions {pct(s['invalid_output_rate'])}",
         file=file,
     )
     if s.get("seconds") and s["seconds"]["total"]:

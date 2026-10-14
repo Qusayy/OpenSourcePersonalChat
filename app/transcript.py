@@ -137,11 +137,13 @@ class Transcript:
             "Reply with one JSON object only."
         )))
 
-    def answer_cue(self, note: str | None = None) -> None:
+    def answer_cue(self, note: str | None = None, own: str | None = None) -> None:
         """Ask for the answer. ``note`` is one plain line about how the
-        looking-up ended, when it did not end by the model's own choice."""
+        looking-up ended, when it did not end by the model's own choice.
+        ``own`` is how a skill the model chose asks for its answer, in place
+        of the usual line, where something was found."""
         if self._found:
-            cue = CUE_WITH_DATA + (" " + SAY_SO if self._failed else "")
+            cue = (own or CUE_WITH_DATA) + (" " + SAY_SO if self._failed else "")
         elif self._failed:
             cue = CUE_NOTHING_FOUND
         else:

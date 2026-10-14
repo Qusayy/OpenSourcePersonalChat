@@ -35,7 +35,7 @@ from app.personas import get_persona
 from app.skills import get_skill
 
 from . import fixtures
-from .score import route_match, score
+from .score import route_match, score, skill_match
 from .scripted import ScriptedEngine
 from .tasks import Task, Turn
 
@@ -234,6 +234,7 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     ran = [o for o in outcomes if o.status != SKIPPED]
     counted = [o for o in ran if not o.task.pending]
     routed = [route_match(o.task, o.turns[-1]) for o in ran]
+    skills = [hit for o in ran if (hit := skill_match(o.task, o.turns[-1])) is not None]
     tools_right = [tool for tool, _ in routed if tool is not None]
     args_right = [args for _, args in routed if args is not None]
     decisions = [s for o in ran for t in o.turns for s in t.trace.steps
@@ -255,6 +256,8 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         # Over the tasks that are meant to pass.
         "task_success": _share(sum(o.status == PASSED for o in counted), len(counted)),
         "routing_accuracy": _share(sum(tools_right), len(tools_right)),
+        # Over the tasks that say which skill, if any, should have run.
+        "skill_selection": _share(sum(skills), len(skills)),
         "argument_match": _share(sum(args_right), len(args_right)),
         # Decisions that did not come back as a complete JSON object. Under a
         # grammar this can only be a reply that ran out of tokens.

@@ -10,8 +10,10 @@ import unittest
 
 try:
     from app.router import ToolCall
-    from app.skills import SKILLS, Lookup, build_prompt, look, prompt_parts, skill_list
-    from app.tools.base import REGISTRY
+    from app.skills import SKILLS, Lookup, Offer, build_prompt, look, offered, prompt_parts, skill_list
+    from app.tools.base import REGISTRY, available, decision_ceiling, tool_menu, tools_to_gbnf
+    from tests import support
+    from tests.gbnf import Grammar
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -132,6 +134,42 @@ class ReadingTests(unittest.TestCase):
         self.assertIsNone(step.call({"n": "5", "x": "EUR"}))
         self.assertEqual(step.call({"n": "5", "x": "EUR", "y": "USD"}).args,
                          {"amount": "5", "from_currency": "EUR", "to_currency": "USD"})
+
+
+class OfferTests(unittest.TestCase):
+    """The skills the model may choose, beside the tools."""
+
+    def setUp(self) -> None:
+        support.with_settings(self, allow_outbound=True)
+
+    def test_a_skill_with_a_cue_is_offered_after_the_tools(self) -> None:
+        tools = available()
+        choices = offered(tools)
+        self.assertEqual(choices[:len(tools)], tools)
+        self.assertEqual([c.name for c in choices[len(tools):]], ["fact_check", "compare"])
+        self.assertTrue(all(isinstance(c, Offer) for c in choices[len(tools):]))
+
+    def test_a_skill_whose_lookups_cannot_be_made_is_not_offered(self) -> None:
+        support.with_settings(self, allow_outbound=False)
+        self.assertEqual(offered(available()), available())
+
+    def test_it_is_on_the_menu_and_in_the_grammar_as_a_tool_is(self) -> None:
+        choices = offered(available())
+        menu = tool_menu(choices)
+        self.assertIn("- compare(a, b): Compare two things side by side, from Wikipedia.", menu)
+        self.assertIn("- fact_check(claim): Check whether a claim is true against Wikipedia.", menu)
+        grammar = Grammar(tools_to_gbnf(choices))
+        reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
+        self.assertTrue(grammar.accepts(reply))
+        self.assertFalse(grammar.accepts('{"tool": "compare", "args": {"a": "Python"}}'))
+        self.assertFalse(grammar.accepts('{"tool": "weather_brief", "args": {"location": "Paris"}}'))
+        longest = '{"tool": "fact_check", "args": {"claim": "' + "é" * 200 + '"}}'
+        self.assertTrue(grammar.accepts(longest))
+        self.assertGreaterEqual(decision_ceiling(choices), len(longest.encode("utf-8")))
+
+    def test_only_a_skill_with_a_cue_is_offered(self) -> None:
+        offered_names = {c.name for c in offered(available()) if isinstance(c, Offer)}
+        self.assertEqual(offered_names, {s.id for s in SKILLS.values() if s.cue})
 
 
 class PromptPartTests(unittest.TestCase):

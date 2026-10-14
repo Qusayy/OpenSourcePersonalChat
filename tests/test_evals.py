@@ -280,6 +280,26 @@ class ScoreTests(unittest.TestCase):
             ["answer: does not contain 'Porto'", "answer: contains 'i cannot'"],
         )
 
+    def test_the_skill_that_ran_is_the_visitors_or_the_last_the_model_chose_that_held(self) -> None:
+        from evals.score import skill_of
+
+        def ran(*steps) -> Turn:
+            trace = agent.Trace()
+            trace.steps = list(steps)
+            return Turn(user="x", events=[], trace=trace)
+
+        armed = agent.Step("route", name="compare", via="skill")
+        chose = agent.Step("route", model=True, name="compare", via="model")
+        refused = agent.Step("route", model=True, name="compare", via="model", ok=False)
+        tool = agent.Step("route", model=True, name="wikipedia", via="model")
+        self.assertEqual(skill_of(ran(armed)), "compare")
+        self.assertEqual(skill_of(ran(chose)), "compare")
+        self.assertIsNone(skill_of(ran(refused)))
+        self.assertIsNone(skill_of(ran(tool)))
+        task = Task(id="t", category="c", turns=("x",), expect={"skill": None})
+        self.assertEqual(score(task, [ran(chose)])[0], "skill: ran 'compare', expected None")
+        self.assertNotIn("skill", " ".join(score(task, [ran(tool)])))
+
     def test_the_last_message_of_a_task_is_the_one_that_is_scored(self) -> None:
         self.assertEqual(
             score(task(calls=[]), [turn(ROUTE, CALL, ANSWER), turn(ANSWER)]), []
@@ -366,7 +386,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(summary),
             {"tasks", "ran", "passed", "failed", "pending", "unexpected_passes", "skipped",
-             "task_success", "routing_accuracy", "argument_match", "invalid_output_rate",
+             "task_success", "routing_accuracy", "skill_selection", "argument_match",
+             "invalid_output_rate",
              "repair_rate", "second_step_rate", "limit_rate", "repeat_rate",
              "steps", "passes", "prompt_tokens", "output_tokens"},
         )

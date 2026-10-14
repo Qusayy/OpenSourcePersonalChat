@@ -21,7 +21,7 @@ from typing import Callable
 
 from .context import Part
 from .router import URL_RE, ToolCall
-from .tools.base import Arg
+from .tools.base import Arg, Choice
 
 
 @dataclass(frozen=True)
@@ -162,6 +162,11 @@ SKILLS: dict[str, Skill] = {
             inputs=(Arg("claim", "string", True, "the claim to check", max_len=200),),
             steps=(look("wikipedia", query="claim"),),
             whole="claim",
+            cue=(
+                "Say whether the claim is supported, contradicted or unclear by the data "
+                "above, in one short paragraph, quoting it where it decides the matter. "
+                "If it does not cover the claim, say so plainly."
+            ),
             description="Check whether a claim is true against Wikipedia.",
             placeholder="Type a claim to check…",
         ),
@@ -182,6 +187,10 @@ SKILLS: dict[str, Skill] = {
             steps=(look("wikipedia", query="a"), look("wikipedia", query="b")),
             find=_pair,
             whole="a",
+            cue=(
+                "Compare the two using only the data above. Reply with a markdown table "
+                "of 3-5 rows, then one sentence naming the clearest difference."
+            ),
             description="Compare two things side by side, from Wikipedia.",
             placeholder="e.g. Python vs Rust",
         ),
@@ -231,6 +240,37 @@ SKILLS: dict[str, Skill] = {
         ),
     )
 }
+
+
+@dataclass(frozen=True)
+class Offer:
+    """A skill as the model is offered it, beside the tools and in their
+    shape: a name to choose it by, the inputs it takes, what it is for."""
+
+    skill: Skill
+
+    @property
+    def name(self) -> str:
+        return self.skill.id
+
+    @property
+    def args(self) -> tuple[Arg, ...]:
+        return self.skill.inputs
+
+    @property
+    def description(self) -> str:
+        return self.skill.description
+
+
+def offered(tools: list) -> list[Choice]:
+    """What the model may choose from: the tools, then each skill that is
+    offered to it and whose lookups the tools on offer can make."""
+    names = {t.name for t in tools}
+    skills = [
+        Offer(s) for s in SKILLS.values()
+        if s.cue and s.steps and all(step.tool in names for step in s.steps)
+    ]
+    return [*tools, *skills]
 
 
 def get_skill(skill_id: str | None) -> Skill | None:

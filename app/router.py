@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from .config import settings
 from .tools import REGISTRY, tools_to_gbnf
@@ -246,11 +247,14 @@ class Action:
     ``note`` says what was wrong with it.
     """
 
-    kind: str  # tool | ask | final
+    kind: str  # tool | skill | ask | final
     call: ToolCall | None = None
     question: str | None = None
     raw: str = ""
     note: str | None = None
+    # For a skill the model chose: the skill, and the inputs it gave it.
+    skill: Any = None
+    values: dict | None = None
 
 
 def ask_reply(question: str) -> str:
@@ -287,11 +291,12 @@ def decision_limit(tools: list) -> int:
     return max(settings.route_max_tokens, decision_ceiling(tools, ask=ASK))
 
 
-def parse_action(said) -> Action:
+def parse_action(said, skills: dict | None = None) -> Action:
     """Read one grammar-constrained reply (a ``Completion``) as an action.
 
-    Anything that cannot be acted on is ``final`` with a note, never an
-    error: a choice that came to nothing is "no tool", and the run answers.
+    ``skills`` are the skills the model was offered, by the name it chooses
+    them by. Anything that cannot be acted on is ``final`` with a note, never
+    an error: a choice that came to nothing is "no tool", and the run answers.
     """
     parsed = said.parsed
     if parsed is None:
@@ -311,6 +316,9 @@ def parse_action(said) -> Action:
         if isinstance(question, str) and question.strip():
             return Action("ask", question=question.strip(), raw=said.raw)
         return Action("final", raw=said.raw, note="asked without a question")
+    if skills and name in skills:
+        values = args if isinstance(args, dict) else {}
+        return Action("skill", skill=skills[name], values=values, raw=said.raw)
     if name not in REGISTRY:
         return Action("final", raw=said.raw, note=f"model picked an unknown tool: {name}")
     call = ToolCall(name, args if isinstance(args, dict) else {}, via="model", ms=said.ms, raw=said.raw)

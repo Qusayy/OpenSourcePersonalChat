@@ -43,7 +43,7 @@ from .router import (
     free_route,
     parse_action,
 )
-from .skills import SAY_SO, Skill, did_not_work, prompt_parts
+from .skills import SAY_SO, Offer, Skill, did_not_work, offered, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
 from .tools.base import (
     Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
@@ -350,7 +350,7 @@ class _Run:
             # What is left is the model's to decide, where the persona has tools.
             tools = available() if (self.persona.tools and not self.routed) else []
             if tools:
-                async with aclosing(self._looping(tools)) as events:
+                async with aclosing(self._looping(offered(tools))) as events:
                     async for event in events:
                         yield event
                 return
@@ -383,7 +383,7 @@ class _Run:
         reads the same one whether the model chooses or something else did,
         so a conversation keeps one system text from message to message."""
         tools = available() if self.persona.tools and self.tools_enabled else []
-        return system_for(self.persona, tools) if tools else self.persona.system
+        return system_for(self.persona, offered(tools)) if tools else self.persona.system
 
     def _room(self, *, run: bool) -> int:
         """Tokens the prompt may take: the window, less the reply and the
@@ -673,14 +673,13 @@ class _Run:
             messages, decision_grammar(tools), decision_limit(tools),
             request_id=self.request_id, seed=self.seed, held=held,
         )
-        action = parse_action(said)
+        action = parse_action(said, {c.name: c.skill for c in tools if isinstance(c, Offer)})
         stopped = said.cancelled or self.stop.is_set()
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
-        self.trace.steps.append(self._passed(
-            kind, said, name=action.call.name if action.call else None, given=given, error=error,
-        ))
+        name = action.call.name if action.call else (action.skill.id if action.skill else None)
+        self.trace.steps.append(self._passed(kind, said, name=name, given=given, error=error))
         return action, said
 
     # ------------------------------------------------------------- the loop --
@@ -703,6 +702,7 @@ class _Run:
         lookup, and then the answer.
         """
         single = not self.loop
+        own: str | None = None
         transcript = self._transcript(tools)
         if self.trim:
             yield "trimmed", self.trim
@@ -745,6 +745,10 @@ class _Run:
                     tokens_in=_total(said.prompt_tokens for said in passes),
                     tokens_out=_total(said.completion_tokens for said in passes),
                 )
+                if action.kind == "skill":
+                    closing.update(
+                        label=action.skill.name, glyph=action.skill.glyph, tool=action.skill.id,
+                    )
                 if action.kind == "ask":
                     closing["label"] = "Asking you first"
                     self.question, self.asked_by = action.question, passes[-1]
@@ -755,6 +759,13 @@ class _Run:
                         yield event
                     return
                 yield "step", closing
+                if action.kind == "skill":
+                    skill: Skill = action.skill
+                    own = skill.cue
+                    async for event in self._skill_lookups(skill, action.values, transcript, made,
+                                                           steps, start, single):
+                        yield event
+                    break  # a skill's lookups are all it looks up
                 if action.kind != "tool":
                     break  # the model has what it needs
                 key = self._key(action.call)
@@ -782,7 +793,7 @@ class _Run:
             if self.stop.is_set():
                 yield self._stopped()
                 return
-            transcript.answer_cue(note)
+            transcript.answer_cue(note, own)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
             async with aclosing(self._answer(transcript.messages(), held=True)) as events:
                 async for event in events:
@@ -791,6 +802,34 @@ class _Run:
             # On every way out, however it ends. If a pass of this run is
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
+
+    async def _skill_lookups(
+        self, skill: Skill, values: dict, transcript: Transcript, made: set[str],
+        steps: int, start: int, single: bool,
+    ) -> AsyncIterator[Event]:
+        """The lookups of a skill the model chose, each read into the
+        transcript as a lookup of its own would be. They are steps of the
+        run, held to its limit on steps and never made twice."""
+        for call in skill.calls(values):
+            if self.stop.is_set() or (not single and steps >= self.max_steps):
+                break
+            call = ToolCall(call.name, call.args, via="model")
+            key = self._key(call)
+            if key in made:
+                continue
+            made.add(key)
+            self.calls.append(call)
+            left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+            lookups = len(skill.steps) if single else max(1, self.max_steps - steps)
+            share = max(LEAST_SHARE, left // lookups)
+            async for event in self._lookup(steps, call, budget=share):
+                yield event
+            steps += 1
+            if self.last is None:
+                break  # stopped while the tool was out
+            transcript.observation(
+                call.name, self.seen if self.last.ok else what_happened(self.last), ok=self.last.ok,
+            )
 
     def _transcript(self, tools: list) -> Transcript:
         """The run's one prompt, with as much of the conversation as leaves
@@ -829,17 +868,16 @@ class _Run:
         passes = [said]
         if said.raw:
             transcript.action(said.raw)
-        if action.kind != "tool" or self.stop.is_set():
+        if action.kind not in ("tool", "skill") or self.stop.is_set():
             return action, passes
-        rejection = self._refusal(action.call)
+        rejection = self._refused(action)
         if rejection is None:
             return action, passes
 
         self.trace.steps[-1].ok = False
         self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
         if room < 2:
-            action.call.meta["refusal"] = rejection
-            return action, passes
+            return self._carried(action, rejection), passes
         transcript.rejection(rejection.reasons)
         action, said = await self._choose(
             "repair", transcript.messages(), tools, {"rejected": list(rejection.reasons)}, held=True
@@ -847,13 +885,47 @@ class _Run:
         passes.append(said)
         if said.raw:
             transcript.action(said.raw)
-        if action.kind == "tool" and not self.stop.is_set():
-            still = self._refusal(action.call)
+        if action.kind in ("tool", "skill") and not self.stop.is_set():
+            still = self._refused(action)
             if still is not None:
                 self.trace.steps[-1].ok = False
                 self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
-                action.call.meta["refusal"] = still
+                action = self._carried(action, still)
         return action, passes
+
+    def _refused(self, action: Action) -> Rejection | None:
+        """Why the call or the skill the model chose cannot be made as it
+        stands, if it cannot. A skill's inputs are checked as a call's are,
+        and the inputs it may go on with are kept with it."""
+        if action.kind == "tool":
+            return self._refusal(action.call)
+        skill: Skill = action.skill
+        clean, rejection = check_args(skill.name, skill.inputs, action.values)
+        reasons = list(rejection.reasons) if rejection else []
+        reasons += [
+            f"{arg.name} is required and was not given"
+            for arg in skill.missing({k: str(v).strip() for k, v in clean.items()})
+            if arg.name in clean
+        ]
+        theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
+        reasons += [
+            f"{arg.name} must be an address the user gave; got {clean[arg.name]!r}"
+            for arg in skill.inputs
+            if arg.quoted and clean.get(arg.name) and not was_given(clean[arg.name], theirs)
+        ]
+        if not reasons:
+            action.values = {name: str(value) for name, value in clean.items()}
+            return None
+        said = rejection.summary if rejection else f"{skill.name} was not given what it needs."
+        return Rejection(tuple(reasons), said, "bad input")
+
+    def _carried(self, action: Action, rejection: Rejection) -> Action:
+        """A choice that stays refused. A call is carried on as refused, to
+        be shown failing and never made; a skill is no choice at all."""
+        if action.kind == "tool":
+            action.call.meta["refusal"] = rejection
+            return action
+        return Action("final", raw=action.raw, note="rejected: " + "; ".join(rejection.reasons))
 
     def _key(self, call: ToolCall) -> str:
         """A call as it is compared with the ones already made: the tool, and

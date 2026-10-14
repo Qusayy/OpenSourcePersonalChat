@@ -34,6 +34,7 @@ TASKS = Path(__file__).resolve().parent / "tasks.jsonl"
 # expectation is an expectation that silently never fails.
 EXPECTATIONS = {
     "route",                # {"tool": name or null, "via": tier, "args": {...}}; any part may be left out
+    "skill",                # the skill the run ran, whoever chose it; null for none
     "calls",                # the tools called, in order
     "max_steps",            # at most this many tool calls
     "max_model_passes",     # at most this many passes through the model

@@ -14,6 +14,7 @@ from unittest import mock
 try:
     from app import db
     from app.personas import get_persona
+    from app.skills import offered
     from app.transcript import CUE_PLAIN, CUE_WITH_DATA, data, system_for
     from app.tools import base as tool_base
     from app.tools.base import ToolResult, available
@@ -46,8 +47,8 @@ WEATHER = ToolResult(
 
 
 def agent_system() -> str:
-    """What every pass of the Agent reads first, with the tools on offer now."""
-    return system_for(get_persona("agent"), available())
+    """What every pass of the Agent reads first, with what is on offer now."""
+    return system_for(get_persona("agent"), offered(available()))
 
 
 def with_data(question: str, *facts: str) -> str:

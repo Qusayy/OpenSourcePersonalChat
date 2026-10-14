@@ -20,7 +20,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable, Protocol
 
 from ..config import settings
 from ..excerpt import clip
@@ -119,6 +119,16 @@ class Tool:
                 for a in self.args
             ],
         }
+
+
+class Choice(Protocol):
+    """Anything the model may choose: a tool, or a skill offered beside the
+    tools. The menu, the grammar and its ceiling are written from these three
+    alone, so a skill is chosen exactly as a tool is."""
+
+    name: str
+    args: tuple[Arg, ...]
+    description: str
 
 
 # Argument names are internal; a person being told what is missing should get
@@ -483,7 +493,7 @@ class _Builder:
         return lines
 
 
-def tools_to_gbnf(tools: list[Tool] | None = None, *, ask: bool = True) -> str:
+def tools_to_gbnf(tools: list[Choice] | None = None, *, ask: bool = True) -> str:
     """Build a grammar that can only produce a valid action.
 
     This is what makes routing viable on a 1.5B model. Asked politely for JSON
@@ -554,7 +564,7 @@ def args_ceiling(args: tuple[Arg, ...]) -> int:
     return len(b"{}") + _fields_size(args)
 
 
-def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> int:
+def decision_ceiling(tools: list[Choice] | None = None, *, ask: bool = True) -> int:
     """The longest reply the grammar allows, in bytes.
 
     A token is at least one byte, so a pass given this many tokens can always
@@ -573,7 +583,7 @@ def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> in
     return max([len(NONE_ACTION), *sizes])
 
 
-def tool_menu(tools: list[Tool] | None = None) -> str:
+def tool_menu(tools: list[Choice] | None = None) -> str:
     """The compact description block shown to the model during routing.
 
     An argument that may be left out is marked with a question mark.

@@ -171,6 +171,22 @@ class DecisionTests(unittest.TestCase):
 
 
 
+class SkillActionTests(unittest.TestCase):
+    """A skill the model was offered, chosen by its name."""
+
+    def test_a_skill_it_was_offered_is_a_skill_with_the_inputs_it_gave(self) -> None:
+        from app.skills import SKILLS
+
+        reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
+        action = parse_action(said(reply), {"compare": SKILLS["compare"]})
+        self.assertEqual((action.kind, action.skill, action.values),
+                         ("skill", SKILLS["compare"], {"a": "Python", "b": "Rust"}))
+
+    def test_a_skill_it_was_not_offered_is_no_choice(self) -> None:
+        action = parse_action(said('{"tool": "compare", "args": {"a": "x", "b": "y"}}'))
+        self.assertEqual((action.kind, action.note), ("final", "model picked an unknown tool: compare"))
+
+
 def said(raw: str = "", **more) -> Completion:
     """A reply as the engine hands it back."""
     try:

@@ -1,0 +1,52 @@
+{
+  "tool": "weather",
+  "args": {
+    "location": "Lisbon"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Lisbon, Portugal: Light rain, 18.4°C (feels 18.1°C), wind 14.2 km/h.",
+    "card": "weather",
+    "data": {
+      "place": "Lisbon",
+      "country": "Portugal",
+      "condition": "Light rain",
+      "icon": "rain",
+      "temperature": 18.4,
+      "feels_like": 18.1,
+      "humidity": 71,
+      "precipitation": 0.0,
+      "wind": 14.2,
+      "days": [
+        {
+          "date": "2026-10-13",
+          "max": 20.4,
+          "min": 13.399999999999999,
+          "condition": "Light rain",
+          "icon": "rain"
+        },
+        {
+          "date": "2026-10-14",
+          "max": 19.4,
+          "min": 12.399999999999999,
+          "condition": "Partly cloudy",
+          "icon": "cloud-sun"
+        }
+      ],
+      "hourly": [
+        14.399999999999999,
+        15.399999999999999,
+        17.4,
+        18.4,
+        19.4,
+        20.4,
+        18.4,
+        16.4
+      ],
+      "units": "°C"
+    },
+    "error": null
+  }
+}

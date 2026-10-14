@@ -20,6 +20,15 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Two pages. The application, and the cover that a browser with no
+    // session is sent in its place (app/gate.py). They share no code: what
+    // the cover's page loads is all a visitor ever fetches.
+    rolldownOptions: {
+      input: {
+        index: fileURLToPath(new URL("./index.html", import.meta.url)),
+        cover: fileURLToPath(new URL("./cover.html", import.meta.url)),
+      },
+    },
   },
   test: {
     environment: "happy-dom",

@@ -106,14 +106,30 @@ export function aborted(page: Page): Promise<boolean> {
   return page.evaluate(`${chat}.streams.at(-1).aborted`);
 }
 
+// The first event names the run, and the pass that writes the answer goes by
+// the same name.
 export const CONVERSATION = {
   id: "c0ffee",
   title: "A test",
   created: false,
   skill: null,
   persona: "explainer",
+  request_id: "req-1",
 };
 export const START = { request_id: "req-1", queue_wait_ms: 0, prompt_tokens: 56, n_ctx: 4096 };
+/** How a run ends when it was stopped before its answer was begun. */
+export const STOPPED = {
+  cancelled: true,
+  ttft_ms: null,
+  queue_wait_ms: null,
+  prompt_tokens: null,
+  completion_tokens: 0,
+  prefill_tps: null,
+  gen_tps: null,
+  total_ms: null,
+  rss_mb: null,
+  tool_calls: 0,
+};
 export const DONE = {
   cancelled: false,
   ttft_ms: 86.4,

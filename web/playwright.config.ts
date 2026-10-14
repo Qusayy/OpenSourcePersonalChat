@@ -41,6 +41,9 @@ export const SERVER_ENV = {
   AURORA_MOCK: "true",
   AURORA_DB_PATH: DB,
   AURORA_ALLOW_OUTBOUND: "false",
+  // These specs are about the application, so the gate in front of it is
+  // open. The gate has a suite of its own: e2e/gate.
+  AURORA_GATE: "off",
 };
 
 export default defineConfig({

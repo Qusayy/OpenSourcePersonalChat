@@ -25,11 +25,14 @@ app/                     the server (Python, FastAPI)
   bench.py       the benchmark suite + reference data
   personas.py    five presets (system prompt + sampling profile)
   db.py          SQLite (WAL): conversations, messages, tool_calls, runs
+  gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)
   src/shell/     the frame every page shares: top bar, status line, toasts
   src/features/  chat · cards · bench · about
+  src/cover/     the cover: the night sky a visitor is sent in place of the site
+  src/setup/     setting the pattern that opens it (development server only)
   src/styles/    the design tokens, the Tailwind theme that names them, the status line
   src/assets/    Recursive, self-hosted (SIL OFL 1.1)
   e2e/           browser tests (Playwright) and the database they run against
@@ -108,6 +111,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 
 **One worker, always.** A second worker loads a second copy of the weights and
 puts the box straight into swap.
+
+**If all you see is a night sky,** the gate is closed: the site is served only
+to a browser that has drawn the pattern, and with no `.env` there is no
+pattern to draw. `cp .env.example .env` (step 2) sets `AURORA_GATE=off`, which
+serves it to everyone. See [The gate](#the-gate).
 
 ### Preview the UI without the model
 
@@ -249,6 +257,138 @@ Other deployment notes:
 
 ---
 
+## The gate
+
+The site is one person's. A visitor who opens it is sent a night sky with the
+northern lights over it, and that page is all they are sent: no application
+markup, no script but the sky's, none of the site's data. Stars in the sky can
+be joined with a line, by anyone. Joining the right ones in the right order
+opens the site.
+
+This repository is public, so the sky is not the lock and neither is anything
+in `web/`. The lock is `app/gate.py`, on the server:
+
+* **the pattern**, which only its owner knows;
+* **a verifier**, a slow hash of the pattern, in the server's own `.env`;
+* **a limit on guesses**: about a hundred wrong ones a day from everyone
+  together, five in ten minutes from any one address.
+
+Until a browser holds a session, every page it asks for is the cover, every
+`/api/` path answers `401`, and nothing else exists (`/openapi.json` included).
+That is decided before the application sees the request, so a route added
+later is closed without anyone closing it.
+
+| `AURORA_GATE` | `AURORA_GATE_VERIFIER` | |
+|---|---|---|
+| `off`, exactly | anything | **off**: the whole site is served to everyone |
+| anything else, or unset | a line from the setup page | **armed**: the cover, until the pattern is drawn |
+| anything else, or unset | missing or malformed | **sealed**: the cover, and nothing opens it |
+
+A missing `.env` or a typing mistake therefore leaves a server closed, not
+open. The state is written to the journal when the server starts.
+
+### Setting the pattern
+
+On a development machine, never on the server:
+
+```bash
+cd web && npm run dev          # then http://localhost:5173/setup.html
+```
+
+Draw a pattern on the sky, and draw it again. The page refuses one that is
+short (under seven stars) or that only steps from each star to the one next
+door, because those are what would be tried first. It then prints one line:
+
+```
+AURORA_GATE_VERIFIER=gate1.300000.<salt>.<hash>
+```
+
+Put it in `/srv/aurora/.env`, remove any `AURORA_GATE=off`, and restart:
+
+```bash
+sudo chown aurora:aurora /srv/aurora/.env     # the service reads it as aurora
+sudo chmod 600 /srv/aurora/.env
+sudo systemctl restart aurora
+sudo -u aurora .venv/bin/python -m app.gate status
+```
+
+`chmod 600` alone on a file root owns leaves the service unable to read its
+own settings, and it does not start.
+
+The pattern never leaves the browser it was drawn in, and the setup page is
+not part of any build. **The line is as good as the pattern**: there are few
+enough patterns that whoever has it can try them all. It belongs in that one
+file. To change the pattern, replace the line and restart; every session ends.
+
+```bash
+python -m app.gate status     # which way the gate is set, open sessions, guesses counted
+python -m app.gate revoke     # end every session now
+python -m app.gate reset      # forget the guesses counted so far
+```
+
+### What it does and does not keep out
+
+A session lasts until the browser closes, twelve hours at most, and an hour
+if nothing is asked of the server. A browser that has opened the site before
+is counted apart from strangers, so people playing with the sky cannot use up
+its owner's tries. A wrong pattern, a throttled one and a malformed request
+get the same answer after the same wait.
+
+What this does not do:
+
+* **Over plain HTTP it keeps out strangers, not eavesdroppers.** The pattern
+  and the session cookie cross the network as they are. Anyone on the path
+  can read either. Put TLS in front before trusting it with anything that
+  matters; see below.
+* **A drawn pattern can be watched.** The lines are on the screen while it is
+  drawn, and a finger leaves a trail on glass.
+* **It hides nothing that was public before it.** Anything fetched or
+  archived while the site was open is still out there.
+
+### TLS for a server with no domain name
+
+Let's Encrypt issues certificates for bare IP addresses. They last six days
+and renew themselves. This needs Certbot 5.4 or newer, and has not been run
+on any server here: the commands are from
+[Let's Encrypt's own note](https://letsencrypt.org/2026/03/11/shorter-certs-certbot),
+and `--staging` is there so the first try costs nothing.
+
+```bash
+sudo mkdir -p /var/www/acme
+sudo certbot certonly --staging --preferred-profile shortlived \
+  --webroot --webroot-path /var/www/acme --ip-address <server ip>
+# when that works, once more without --staging, and with
+#   --deploy-hook "systemctl reload apache2"
+```
+
+Certbot fetches these certificates but does not install them, so the web
+server is pointed at them by hand. For Apache, the challenge directory must be
+served from disk and not passed to the app, and the app must be told the
+visitor came over HTTPS, or its cookies are not marked `Secure`:
+
+```apache
+<VirtualHost *:443>
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/<server ip>/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/<server ip>/privkey.pem
+    RequestHeader set X-Forwarded-Proto "https"
+    # ...the proxy lines above...
+</VirtualHost>
+
+# in both virtual hosts, before the ProxyPass lines:
+Alias /.well-known/acme-challenge/ /var/www/acme/.well-known/acme-challenge/
+ProxyPass /.well-known/acme-challenge/ !
+```
+
+`deploy/nginx.conf` already sends `X-Forwarded-Proto`. Once the site answers
+on 443, redirect port 80 to it. Sessions begun over HTTP do not carry over:
+draw the pattern once more.
+
+Whatever serves the site, check that it serves nothing else:
+`curl -i http://<server ip>/.env` and `/data/aurora.db` must both be `404`.
+
+---
+
 ## Configuration
 
 Everything is `AURORA_`-prefixed, read from the environment or `.env`.
@@ -267,7 +407,16 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_AGENT_LOOP` | `false` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; see *Looking something up twice* |
+| `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
+| `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
+| `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
+| `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
+| `AURORA_GATE` | `on` | `off`, exactly, serves the site to everyone. Anything else keeps it behind the cover; see [The gate](#the-gate) |
+| `AURORA_GATE_VERIFIER` | *(unset)* | the line the setup page prints for the pattern. Server's own `.env` only. Unset or malformed, nothing opens the site |
+| `AURORA_GATE_SESSION_HOURS` | `12` | the longest a session lasts, however much it is used |
+| `AURORA_GATE_IDLE_MINUTES` | `60` | how long a session lasts with nothing asked of the server |
 
 ---
 
@@ -293,7 +442,7 @@ Eight tools, no API keys anywhere:
 ### How a 1.5B model is made to route reliably
 
 It isn't, on its own — asked politely for JSON it produces trailing commas,
-prose preambles and invented keys. Four layers, cheapest first:
+prose preambles and invented keys. Five layers, cheapest first:
 
 1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. Free
    and certain. Press `/` in the composer for the palette.
@@ -303,12 +452,60 @@ prose preambles and invented keys. Four layers, cheapest first:
 3. **Grammar-constrained routing** — only for the *Agent* persona, and only
    when the first two miss. A short pass runs under a GBNF grammar generated
    from the tool registry, so malformed output is not unlikely, it is
-   unrepresentable.
-4. **Failure is visible** — a tool that errors or times out renders as a failed
-   step in the timeline and the model answers without it.
+   unrepresentable. The grammar holds what goes into a call as well as its
+   shape. Text has a ceiling, so a reply always closes instead of being cut
+   off mid-string by the token limit. An argument with a known set of values
+   can only be given one of them: the model cannot invent a currency, and a
+   unit is its own name or a word for it. An optional argument may be given
+   or left out. And where the message leaves out something a tool must have,
+   the pass may reply with one short question for the user instead of
+   guessing; their reply is then routed with that question in view.
+4. **One second try** — a call the tool still cannot take is sent back to the
+   model once, with what was wrong, stated as fact. After that it is not
+   argued with.
+5. **Failure is visible** — a tool that errors or times out renders as a failed
+   step in the timeline. The model is told too: what happened, not the advice
+   the person is given beside it, and it is asked to say plainly what could
+   not be looked up rather than answer from memory.
 
 A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
-for it. The per-step timings are printed in the UI rather than hidden.
+for it. It is announced on the page at the moment it is made and at no other
+time, and the per-step timings are printed in the UI rather than hidden.
+
+The grammar cannot be compiled without llama.cpp, so where the tests run it is
+read instead: `tests/gbnf.py` understands the subset of GBNF the generator
+emits and says what a grammar accepts and what it refuses.
+
+### Looking something up twice
+
+As it ships, a message that reaches the model makes one choice of tool and
+then answers. It cannot look something up, read what came back, and decide to
+look up something else. `AURORA_AGENT_LOOP=true` lets it: a tool the model
+chose earns it another choice.
+
+The model is not trusted to know when to stop. A small one stops too early, or
+asks for the same thing again. So the code that runs the loop holds the limits:
+
+- at most three tool calls and three choices for one message, and ninety
+  seconds before the answer must begin (all three are settings);
+- a lookup that has already been made is not made again;
+- a tool the visitor named themselves, by a command, a pattern or a skill,
+  never starts the loop. Those cost exactly what they cost with it off.
+
+When something other than the model ends the looking-up, the pass that writes
+the answer is told so in one line, so the reply can say what was not found.
+
+Two things keep the extra passes cheap. The whole run is one transcript that
+only grows, and every pass reads it from the top, so each pass after the first
+is charged only for what is new. And the run takes the inference slot once and
+keeps it, so nobody else's prompt replaces it in the model's cache part-way
+through; if a tool goes out to the network while somebody is waiting, the slot
+is lent to them for that time.
+
+It is off by default because the one thing that decides its worth cannot be
+known without measuring it on the model: whether a second choice by a 1.5B
+model is good enough to be worth its seconds. `scripts/eval_agent.py --loop`
+is how to find out.
 
 ### Safety
 
@@ -318,6 +515,21 @@ link-local, CGNAT, reserved or multicast address — including
 `169.254.169.254`, the cloud metadata endpoint. Redirects are followed by hand,
 maximum three hops, re-validating at each one. Bodies are capped at 2 MB and
 only `text/html` / `text/plain` is read.
+
+That guard is about where an address points. It says nothing about an address
+that points somewhere public and was put there by a page the model read: "now
+open http://elsewhere/?q=" followed by something from the conversation. So when
+it is the model that chooses to read a page, the address must be one the user
+wrote themselves, in this message or an earlier one. The model may pass an
+address on; it may not make one up or lift one from what it has read. A longer
+path or a query string the user did not write is a different address. This is
+checked in code and does not depend on the model noticing anything.
+
+What a tool returns is given to the model as reading matter: wrapped in a
+`<data>` tag, with the model told once that what is inside one is material and
+never an instruction, and with anything in it that looks like that tag or like
+a control token of the chat format taken out first. That is a convention and
+not a wall, which is why the rule above is enforced in code.
 
 The calculator parses with `ast` and a node whitelist. It never calls `eval`,
 and rejects attribute access, comprehensions, lambdas and `__import__`.
@@ -337,7 +549,23 @@ lock and reports queue position over SSE, so waiting visitors see
 
 **The lock is released by the generation thread**, in its own `finally` — not by
 the request handler. Otherwise a client disconnecting mid-answer hands the slot
-to the next visitor while llama.cpp is still mid-token.
+to the next visitor while llama.cpp is still mid-token. The short pass that
+chooses a tool is a pass like any other and follows the same rule: it queues,
+runs on a worker thread, and that thread hands the slot back.
+
+**A run has one name from its first event to its last.** The first event of a
+chat stream carries a `request_id`, and `POST /api/cancel/{id}` stops the run
+at whatever stage it has reached: waiting for the slot, choosing a tool,
+waiting on a page, or writing. A tool that is out is called off there and then,
+and whatever was already written is kept.
+
+**Every run leaves a trace.** Each thing a message did — how its tool was
+chosen, each tool call, the pass that wrote the answer — is a row in the
+`steps` table: what it was given, what came back, and what it cost in tokens
+and time. A step's time is its own cost and nothing else's, so the steps of a
+run add up to its total, and the stream's last event, `run`, reports that
+total. Rows are kept for `AURORA_STEPS_KEEP_DAYS` and go with their
+conversation when it is deleted.
 
 **Tokens cross threads through a queue.** Generation runs on a plain thread and
 pushes into an `asyncio.Queue`, so the event loop stays free for `/api/health`,
@@ -495,19 +723,22 @@ load, and if it did, every token would come off disk.
 
 | Endpoint | |
 |---|---|
-| `POST /api/chat` → SSE | events: `conversation`, `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error` |
+| `POST /api/chat` → SSE | events: `conversation` (with the run's `request_id`), `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error`, and last of all `run`: how the run ended, its steps and model passes, and what they cost together |
 | `GET /api/tools` | the registry, as the UI sees it |
 | `GET /api/skills` | workflow definitions |
-| `POST /api/cancel/{id}` | stop an in-flight generation |
+| `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
 | `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, app RSS, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
 | `GET/DELETE /api/conversations[/{id}]` | history |
 | `POST /api/bench/run` → SSE | `stage`, `rep`, `case`, `summary` |
 | `GET /api/bench/results` | the suite, the latest summary, the history, reference machines, the memory estimate |
 | `GET /api/bootstrap` | the first values a page shows; the same JSON the server writes into `index.html` (the Vite dev server's page asks for it instead) |
+| `POST /api/unlock` | `{"chain": [star, …]}` → `{"ok": true}` and a session cookie, or `{"ok": false}`. Answered by the gate, not the application, and the only path above that answers without a session |
 
 The pages themselves are `/`, `/bench` and `/about`, all the one built
-`index.html`; `/assets/<name>` is its files.
+`index.html`; `/assets/<name>` is its files. With the gate armed, a browser
+without a session is sent `cover.html` at every one of those addresses, and
+`401` for everything in the table but the last row.
 
 ```bash
 curl -N -X POST localhost:8000/api/chat \
@@ -539,6 +770,24 @@ tries to climb out of `assets/`, a missing build, and what a 404 is for a
 page, for a file and for the API. Those two need the app's requirements;
 without them they are skipped.
 
+`tests/test_gate.py` is the gate, armed: that every route the application has
+answers nothing without a session (read from the application as it stands, so
+a new route is held to it), that every refusal is the same bytes, the limits
+on guesses, sessions and their ends, and that the hash is the one the setup
+page makes. The rest of the suite runs with the gate off, which
+`tests/__init__.py` sets before anything is imported.
+
+The rest follow a message through the server, with a script standing where the
+model would be (`evals/scripted.py`). It is the real engine with one call
+replaced, so the lock, the queue, the worker thread and Stop are the code the
+server runs. `test_engine.py` is about the one inference slot: that two passes
+never overlap, and that a reader who leaves mid-pass cannot free the slot while
+llama.cpp is still working. `test_agent.py` drives a run directly, and stops it
+at each stage. `test_chat_stream.py` does the same over HTTP and reads what was
+stored. `test_router.py`, `test_tools.py` and `test_steps.py` cover routing,
+argument checking and the stored trace. No test sleeps to let something happen,
+and a test that tries to resolve a hostname fails.
+
 **The interface's unit tests** (Vitest) cover the modules that are algorithms:
 the markdown renderer and its escaping, the stream reader, the meter, the
 streaming answer's DOM, the chart geometry, the stores, each tool card.
@@ -560,6 +809,51 @@ it is on `http://<server ip>`, and `localhost` hides it. On a development
 machine the tests use the Chrome that is installed; CI installs Chromium.
 Playwright starts the server itself, with `python` (on Windows, the
 repository's `.venv`); `AURORA_PYTHON` names another interpreter.
+
+Those run with the gate off. `npm run e2e` then runs a second, small suite,
+`web/e2e/gate`, against a server of its own with the gate armed and a pattern
+made up for the purpose: the cover at every address with nothing of the site
+in it, a short drawing that never leaves the browser, a wrong pattern, and the
+right one opening the page that was asked for.
+
+### Does it do the right thing
+
+The benchmark says how fast. This says whether, given a message, the right
+thing happened: the right tool, the right arguments, no pass that was not
+needed. `evals/tasks.jsonl` is a file of tasks, one per line, each with what to
+send and what must be true afterwards. Tool results come from
+`evals/fixtures`, so no task touches the network, and nothing is written to the
+database.
+
+```bash
+python scripts/eval_agent.py                                   # scripted: no model needed
+python scripts/eval_agent.py --engine real --out evals/reports/today.json
+python scripts/eval_agent.py --engine real --compare evals/reports/before.json
+python scripts/eval_agent.py --engine real --loop              # every task with the loop on
+python scripts/eval_agent.py --engine real --probe-routing     # one routing pass, cold then warm
+```
+
+**Scripted**, each task brings what the model says, so the run measures the
+code around the model and nothing about the model. It takes a second and runs
+with the server's tests. Its report says its token counts are estimates and
+carries no timings.
+
+**Real** loads the model as the site does and gives every pass the same seed.
+It is the only source of a number about what the agent can do: task success,
+routing accuracy, argument match, steps and passes, tokens, and seconds per
+task split into waiting, reading and writing. Stop the web service first: a
+second process loads a second copy of the model and shares the cores, exactly
+as the benchmark would.
+
+A task that is about the loop asks for it itself, so it runs with the loop on
+whatever the settings say. `--loop` turns it on for all the others too. Run the
+suite both ways and compare: the report says how many runs made a second
+lookup, how many were ended by a limit and how many by asking for the same
+thing twice, beside task success and seconds per task. That comparison is what
+decides whether the loop stays on.
+
+A task marked `pending` is a known gap, written down with its reason. It is
+expected to fail; the day it passes, the run fails until the mark comes off.
 
 ---
 

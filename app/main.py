@@ -5,20 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from contextlib import asynccontextmanager
+import uuid
+from contextlib import aclosing, asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__, bench, db, telemetry
+from . import __version__, agent, bench, db, telemetry
 from .config import settings
+from .gate import GateMiddleware
 from .llm import engine
 from .personas import DEFAULT_PERSONA, get_persona, persona_list
-from .router import route
-from .skills import build_prompt, get_skill, skill_list
-from .tools import REGISTRY, call_tool
+from .skills import get_skill, skill_list
 from .tools.base import available as available_tools
 from .web import Frontend, not_found
 
@@ -45,6 +45,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Aurora", lifespan=lifespan, docs_url=None, redoc_url=None)
+# Before every route and every error page: see app/gate.py.
+app.add_middleware(GateMiddleware)
 frontend = Frontend()
 
 
@@ -185,173 +187,122 @@ async def api_chat(payload: ChatRequest):
         created = True
 
     history = db.conversation_messages(cid)
+    # Whether this message answers a question the model put to the visitor.
+    follows_ask = db.last_message_asked(cid)
     db.add_message(cid, "user", user_text)
     db.touch_conversation(cid, persona.id)
-    sampling = persona.sampling()
+
+    # The name this run can be stopped by, from here to its last event.
+    run_id = uuid.uuid4().hex
 
     async def event_stream() -> AsyncIterator[str]:
-        convo = db.get_conversation(cid)
-        yield sse(
-            "conversation",
-            {
-                "id": cid,
-                "title": convo["title"] if convo else "",
-                "created": created,
-                "skill": skill.id if skill else None,
-                "persona": persona.id,
-            },
-        )
-
-        calls: list = []
-        stored_call_ids: list[str] = []
-        summaries: list[str] = []
-
-        try:
-            # ---------------------------------------------------- routing --
-            if skill is not None:
-                calls = skill.prepare(user_text)
-                yield sse("step", {
-                    "id": "route", "kind": "route", "status": "ok",
-                    "label": skill.name, "detail": "skill",
-                    "glyph": skill.glyph, "tool": skill.id, "ms": 0,
-                })
-            elif settings.tools_enabled:
-                needs_pass = persona.tools and not user_text.startswith("/")
-                if needs_pass:
-                    yield sse("step", {
-                        "id": "route", "kind": "route", "status": "running",
-                        "label": "Choosing a tool", "glyph": "◇",
-                    })
-                call, telemetry = await route(
-                    user_text, tools_enabled=persona.tools, engine=engine
-                )
-                if call is not None:
-                    calls = [call]
-                if call is not None or needs_pass:
-                    yield sse("step", {
-                        "id": "route", "kind": "route", "status": "ok",
-                        "label": REGISTRY[call.name].label if call else "No tool needed",
-                        "detail": telemetry.get("tier") or "direct",
-                        "glyph": REGISTRY[call.name].glyph if call else "◇",
-                        "tool": call.name if call else None,
-                        "ms": round(telemetry.get("ms") or 0, 1),
-                    })
-
-            # ------------------------------------------------ run the tools --
-            for index, call in enumerate(calls):
-                tool = REGISTRY.get(call.name)
-                step_id = f"tool-{index}"
-                yield sse("step", {
-                    "id": step_id, "kind": "tool", "status": "running",
-                    "label": tool.label if tool else call.name,
-                    "glyph": tool.glyph if tool else "◆",
-                    "tool": call.name, "args": call.args,
-                })
-                result = await call_tool(call.name, call.args)
-                stored_call_ids.append(db.add_tool_call(
-                    cid, call.name, via=call.via, args=call.args,
-                    card=result.card if result.ok else None,
-                    data=result.data, summary=result.summary or result.error or "",
-                    ms=result.ms, ok=result.ok,
-                ))
-                yield sse("step", {
-                    "id": step_id, "kind": "tool", "status": "ok" if result.ok else "failed",
-                    "label": tool.label if tool else call.name,
-                    "glyph": tool.glyph if tool else "◆",
-                    "tool": call.name, "ms": round(result.ms, 1),
-                    "detail": None if result.ok else (result.error or "failed"),
-                })
-                if result.ok:
-                    summaries.append(f"{call.name}: {result.summary}")
-                    yield sse("card", {
-                        "step_id": step_id, "card": result.card,
-                        "tool": call.name, "data": result.data,
-                    })
-                else:
-                    # A failed tool is shown, not hidden — the model still answers.
-                    yield sse("card", {
-                        "step_id": step_id, "card": "error", "tool": call.name,
-                        "data": {"message": result.summary or result.error},
-                    })
-
-            # ------------------------------------------------ build prompt --
-            messages = [{"role": "system", "content": persona.system}]
-            messages += [{"role": m["role"], "content": m["content"]} for m in history]
-
-            if skill is not None:
-                messages.append({"role": "user", "content": build_prompt(
-                    skill, user_text, summaries
-                )})
-            else:
-                if summaries:
-                    # The tool output goes inside the user turn, not into a
-                    # second system message. A 1.5B model barely attends to a
-                    # trailing system message and falls back on its "I don't
-                    # have real-time data" prior — it will describe the weather
-                    # as unavailable while the card beside it shows today's
-                    # temperature. Stated as part of the question, it complies.
-                    facts = "\n".join(f"- {s}" for s in summaries)
-                    messages.append({"role": "user", "content": (
-                        f"{user_text}\n\n"
-                        f"Live data, retrieved just now by a tool:\n{facts}\n\n"
-                        "Answer the question using only the data above. It is "
-                        "current and correct. Do not say you lack real-time "
-                        "access, and do not recalculate any figure."
-                    )})
-                else:
-                    messages.append({"role": "user", "content": user_text})
-
-            fitted, prompt_tokens, dropped = engine.fit_context(
-                messages, sampling["max_tokens"]
+        # Open before the page is told the id, so a Stop sent the moment it
+        # arrives finds a run to stop.
+        with engine.hold(run_id):
+            convo = db.get_conversation(cid)
+            yield sse(
+                "conversation",
+                {
+                    "id": cid,
+                    "title": convo["title"] if convo else "",
+                    "created": created,
+                    "skill": skill.id if skill else None,
+                    "persona": persona.id,
+                    "request_id": run_id,
+                },
             )
-            if dropped:
-                yield sse("trimmed", {"dropped": dropped})
 
-            # ---------------------------------------------------- generate --
-            yield sse("step", {
-                "id": "answer", "kind": "model", "status": "running",
-                "label": "Writing the answer", "glyph": "✦",
-            })
-
-            async for event, data in engine.stream_chat(fitted, sampling):
-                if event == "done":
-                    text = data.pop("text", "")
-                    data["tool_calls"] = len(calls)
-                    if text.strip():
-                        mid = db.add_message(
-                            cid, "assistant", text,
-                            ttft_ms=data.get("ttft_ms"),
-                            gen_tps=data.get("gen_tps"),
-                            prompt_tokens=data.get("prompt_tokens"),
-                            completion_tokens=data.get("completion_tokens"),
-                        )
-                        db.attach_tool_calls(mid, stored_call_ids)
-                        db.touch_conversation(cid)
-                        db.add_run(
-                            "chat",
-                            label=persona.id,
-                            prompt_tokens=data.get("prompt_tokens"),
-                            gen_tokens=data.get("completion_tokens"),
-                            ttft_ms=data.get("ttft_ms"),
-                            prefill_tps=data.get("prefill_tps"),
-                            gen_tps=data.get("gen_tps"),
-                            rss_mb=data.get("rss_mb"),
-                        )
-                    yield sse("step", {
-                        "id": "answer", "kind": "model", "status": "ok",
-                        "label": "Answer", "glyph": "✦",
-                        "ms": round(data.get("total_ms") or 0, 1),
-                    })
-                    yield sse("done", data)
-                else:
-                    yield sse(event, data)
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+            trace = agent.Trace(run_id=run_id)
+            keeper = _Keeper(cid, persona.id, trace)
+            run = agent.run(
+                user_text, persona=persona, skill=skill, history=history, trace=trace,
+                engine=engine, request_id=run_id, follows_ask=follows_ask,
+            )
+            try:
+                # Closed with this response, not whenever it is collected: a
+                # run that nobody is reading must let go of the engine.
+                async with aclosing(run) as events:
+                    async for event, data in events:
+                        keeper.keep()
+                        yield sse(event, data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+class _Keeper:
+    """Stores what a run has done, before the page is told it happened.
+
+    The run records each thing it finishes and then says so. ``keep`` is called
+    as each event arrives and before it is sent on, so a tool call is in the
+    database before its step closes, and the answer before ``done``, which the
+    page answers by asking for the conversation list.
+    """
+
+    def __init__(self, cid: str, persona_id: str, trace: agent.Trace) -> None:
+        self.cid = cid
+        self.persona_id = persona_id
+        self.trace = trace
+        self.call_ids: list[str] = []
+        self.steps_kept = 0
+        self.answered = False
+
+    def keep(self) -> None:
+        for call, result in self.trace.calls[len(self.call_ids):]:
+            self.call_ids.append(db.add_tool_call(
+                self.cid, call.name, via=call.via, args=call.args,
+                card=result.card if result.ok else None,
+                data=result.data, summary=result.summary or result.error or "",
+                ms=result.ms, ok=result.ok,
+            ))
+
+        for step in self.trace.steps[self.steps_kept:]:
+            db.add_step(
+                self.trace.run_id, self.cid, self.steps_kept, step.kind,
+                name=step.name, via=step.via, input=step.input, output=step.output,
+                prompt_tokens=step.prompt_tokens, new_tokens=step.new_tokens,
+                output_tokens=step.output_tokens, queue_ms=step.queue_ms,
+                first_token_ms=step.first_token_ms, total_ms=step.total_ms,
+                ok=step.ok, error=step.error, created_at=step.at,
+            )
+            self.steps_kept += 1
+
+        if self.trace.answer is None or self.answered:
+            return
+        self.answered = True
+        # An answer with nothing in it is not a message. Its tool calls stay
+        # with the conversation and are replayed from there.
+        if not self.trace.answer.strip():
+            return
+        usage = self.trace.usage
+        mid = db.add_message(
+            self.cid, "assistant", self.trace.answer,
+            ttft_ms=usage.get("ttft_ms"),
+            gen_tps=usage.get("gen_tps"),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        )
+        db.attach_tool_calls(mid, self.call_ids)
+        db.attach_steps(mid, self.trace.run_id)
+        db.touch_conversation(self.cid)
+        if usage.get("asked"):
+            # A question put back to the visitor was written by a routing
+            # pass. It is a message, and it is not a sample of how fast this
+            # machine writes answers.
+            return
+        db.add_run(
+            "chat",
+            label=self.persona_id,
+            prompt_tokens=usage.get("prompt_tokens"),
+            gen_tokens=usage.get("completion_tokens"),
+            ttft_ms=usage.get("ttft_ms"),
+            prefill_tps=usage.get("prefill_tps"),
+            gen_tps=usage.get("gen_tps"),
+            rss_mb=usage.get("rss_mb"),
+        )
 
 
 @app.get("/api/tools")

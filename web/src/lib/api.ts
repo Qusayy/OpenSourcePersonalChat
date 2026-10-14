@@ -2,6 +2,7 @@
    POST /api/bench/run) are read with `sse.ts`; their event types are
    `ChatEvents` and `BenchEvents`. */
 
+import { relock } from "./gate";
 import type {
   BenchResults,
   Bootstrap,
@@ -26,6 +27,7 @@ export class ApiError extends Error {
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
+  if (res.status === 401) relock();
   if (!res.ok) throw new ApiError(res.status, `${init?.method ?? "GET"} ${url}: ${res.status}`);
   return (await res.json()) as T;
 }

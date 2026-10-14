@@ -1,0 +1,21 @@
+{
+  "tool": "wikipedia",
+  "args": {
+    "query": "Ada Lovelace"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Wikipedia — Ada Lovelace: Augusta Ada King, Countess of Lovelace, was an English mathematician and writer, chiefly known for her work on Charles Babbage's proposed mechanical general-purpose computer, the Analytical Engine. She published the first algorithm intended to be carried out by such a machine in 1843.",
+    "card": "wikipedia",
+    "data": {
+      "title": "Ada Lovelace",
+      "description": "English mathematician (1815–1852)",
+      "extract": "Augusta Ada King, Countess of Lovelace, was an English mathematician and writer, chiefly known for her work on Charles Babbage's proposed mechanical general-purpose computer, the Analytical Engine. She published the first algorithm intended to be carried out by such a machine in 1843.",
+      "url": "https://en.wikipedia.org/wiki/Ada_Lovelace",
+      "lang": "en"
+    },
+    "error": null
+  }
+}

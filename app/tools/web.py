@@ -87,7 +87,7 @@ register(Tool(
     label="Wikipedia",
     glyph="◍",
     description="Look up a factual summary of a person, place, thing or event.",
-    args=(Arg("query", "string", True, "what to look up"),),
+    args=(Arg("query", "string", True, "what to look up", max_len=80),),
     run=_wikipedia,
     card="wikipedia",
     network=True,
@@ -199,7 +199,7 @@ register(Tool(
     label="Weather",
     glyph="☁",
     description="Current conditions and a five-day forecast for a place.",
-    args=(Arg("location", "string", True, "city or place name"),),
+    args=(Arg("location", "string", True, "city or place name", max_len=60),),
     run=_weather,
     card="weather",
     network=True,
@@ -208,6 +208,18 @@ register(Tool(
 
 
 # --------------------------------------------------------------- currency ---
+
+# The currencies the European Central Bank publishes a reference rate for.
+# A model choosing this tool can write only one of these codes.
+CURRENCY_CODES = (
+    "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP", "HKD",
+    "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KRW", "MXN", "MYR", "NOK", "NZD",
+    "PHP", "PLN", "RON", "RUB", "SEK", "SGD", "THB", "TRY", "USD", "ZAR",
+)
+
+
+def _currency_code(text: str) -> str:
+    return (text or "").strip().upper()
 
 
 async def _currency(amount: float, from_currency: str, to_currency: str) -> ToolResult:
@@ -269,8 +281,10 @@ register(Tool(
     description="Convert an amount between currencies at the current ECB rate.",
     args=(
         Arg("amount", "number", True, "how much"),
-        Arg("from_currency", "string", True, "ISO code, e.g. EUR"),
-        Arg("to_currency", "string", True, "ISO code, e.g. USD"),
+        Arg("from_currency", "string", True, "ISO code, e.g. EUR",
+            choices=CURRENCY_CODES, canon=_currency_code),
+        Arg("to_currency", "string", True, "ISO code, e.g. USD",
+            choices=CURRENCY_CODES, canon=_currency_code),
     ),
     run=_currency,
     card="currency",

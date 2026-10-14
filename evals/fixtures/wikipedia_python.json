@@ -1,0 +1,21 @@
+{
+  "tool": "wikipedia",
+  "args": {
+    "query": "Python"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Wikipedia — Python (programming language): Python is a high-level, general-purpose programming language. Its design philosophy emphasizes code readability. It is dynamically typed and garbage-collected, and was first released in 1991.",
+    "card": "wikipedia",
+    "data": {
+      "title": "Python (programming language)",
+      "description": "General-purpose programming language",
+      "extract": "Python is a high-level, general-purpose programming language. Its design philosophy emphasizes code readability. It is dynamically typed and garbage-collected, and was first released in 1991.",
+      "url": "https://en.wikipedia.org/wiki/Python_(programming_language)",
+      "lang": "en"
+    },
+    "error": null
+  }
+}

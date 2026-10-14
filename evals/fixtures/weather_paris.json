@@ -1,0 +1,52 @@
+{
+  "tool": "weather",
+  "args": {
+    "location": "Paris"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Paris, France: Overcast, 12.9°C (feels 11.6°C), wind 9.4 km/h.",
+    "card": "weather",
+    "data": {
+      "place": "Paris",
+      "country": "France",
+      "condition": "Overcast",
+      "icon": "cloud",
+      "temperature": 12.9,
+      "feels_like": 11.6,
+      "humidity": 71,
+      "precipitation": 0.0,
+      "wind": 9.4,
+      "days": [
+        {
+          "date": "2026-10-13",
+          "max": 14.9,
+          "min": 7.9,
+          "condition": "Overcast",
+          "icon": "cloud"
+        },
+        {
+          "date": "2026-10-14",
+          "max": 13.9,
+          "min": 6.9,
+          "condition": "Partly cloudy",
+          "icon": "cloud-sun"
+        }
+      ],
+      "hourly": [
+        8.9,
+        9.9,
+        11.9,
+        12.9,
+        13.9,
+        14.9,
+        12.9,
+        10.9
+      ],
+      "units": "°C"
+    },
+    "error": null
+  }
+}

@@ -313,7 +313,7 @@ register(Tool(
     glyph="◷",
     description="Current date and time, optionally in a named timezone.",
     args=(Arg("timezone_name", "string", False, "IANA zone, e.g. Europe/Paris",
-              default="UTC"),),
+              default="UTC", max_len=40),),
     run=_clock,
     card="clock",
     example="/clock Asia/Tokyo",
@@ -380,6 +380,11 @@ def _canon(unit: str) -> str:
     return ALIASES.get(u, u)
 
 
+# Every way a unit may be written: its own name, or a word for it. A model
+# choosing this tool can write only one of these, and each means one unit.
+UNIT_SPELLINGS = tuple(sorted({*UNITS, *TEMPS, *ALIASES}))
+
+
 def _to_celsius(value: float, unit: str) -> float:
     return {"c": value, "f": (value - 32) * 5 / 9, "k": value - 273.15}[unit]
 
@@ -442,8 +447,10 @@ register(Tool(
     description="Convert a value between units (length, mass, time, data, speed, volume, temperature).",
     args=(
         Arg("value", "number", True, "the quantity"),
-        Arg("from_unit", "string", True, "unit to convert from"),
-        Arg("to_unit", "string", True, "unit to convert to"),
+        Arg("from_unit", "string", True, "unit to convert from",
+            choices=UNIT_SPELLINGS, canon=_canon),
+        Arg("to_unit", "string", True, "unit to convert to",
+            choices=UNIT_SPELLINGS, canon=_canon),
     ),
     run=_convert,
     card="convert",
@@ -499,7 +506,7 @@ register(Tool(
     label="Text stats",
     glyph="▤",
     description="Word, sentence and reading-time statistics for a block of text.",
-    args=(Arg("text", "string", True, "the text to measure"),),
+    args=(Arg("text", "string", True, "the text to measure", max_len=200),),
     run=_text_stats,
     card="textstats",
     example="/stats <paste some text>",

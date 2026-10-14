@@ -168,6 +168,32 @@ describe("applyStep", () => {
     expect(failed).toEqual([]);
   });
 
+  it("takes a step off the line when the run was stopped in the middle of it", () => {
+    const choosing = applyStep(none, step({}));
+    expect(applyStep(choosing, step({ status: "stopped", ms: 310 }))).toEqual([]);
+    const fetching = applyStep(
+      none,
+      step({ id: "tool-0", kind: "tool", label: "Weather", tool: "weather" }),
+    );
+    expect(
+      applyStep(
+        fetching,
+        step({ id: "tool-0", kind: "tool", status: "stopped", label: "Weather", tool: "weather" }),
+      ),
+    ).toEqual([]);
+    // Only that step: a decision already made stays where it is.
+    let rows = applyStep(
+      none,
+      step({ status: "ok", label: "Weather", detail: "model", tool: "weather" }),
+    );
+    rows = applyStep(rows, step({ id: "tool-0", kind: "tool", label: "Weather", tool: "weather" }));
+    rows = applyStep(
+      rows,
+      step({ id: "tool-0", kind: "tool", status: "stopped", label: "Weather" }),
+    );
+    expect(rows.map((r) => r.id)).toEqual(["route"]);
+  });
+
   it("gives a tool with no picture the generic one", () => {
     const rows = applyStep(
       none,

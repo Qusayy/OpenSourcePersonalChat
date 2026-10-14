@@ -11,9 +11,12 @@ Two things a tool returns, and the difference matters:
 from __future__ import annotations
 
 import asyncio
+import json
+import math
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import settings
 
@@ -25,6 +28,22 @@ class Arg:
     required: bool = True
     description: str = ""
     default: Any = None
+    # The spellings this argument may be given. They are written into the
+    # grammar, so a model choosing a tool cannot say anything else, and every
+    # other caller is held to them when the call is checked.
+    choices: tuple[str, ...] | None = None
+    # Turns a spelling into the value the tool is run with: "miles" into "mi",
+    # "usd" into "USD".
+    canon: Callable[[str], str] | None = None
+    # The most characters the grammar lets a model write here. None takes the
+    # default ceiling. It bounds what a model can write, not what a person can
+    # type: a tool keeps its own limits for that.
+    max_len: int | None = None
+    # The value is an address this server will go out to. A model may pass one
+    # on; it may not make one up or take one from something it has read. So a
+    # call the model chose is only made if the value is in the user's own
+    # words. See `was_given`.
+    quoted: bool = False
 
 
 @dataclass
@@ -118,6 +137,178 @@ def available() -> list[Tool]:
     return out
 
 
+# ---------------------------------------------------------------- checking ---
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """Why a call was not made.
+
+    Said twice, because it has two readers. ``reasons`` are for a model that
+    may be asked to try again: one plain fact per problem, naming the argument
+    as the model knows it. ``summary`` is the sentence a person reads on the
+    failed step. ``code`` is the short word the step is filed under.
+    """
+
+    reasons: tuple[str, ...]
+    summary: str
+    code: str  # "missing input" | "bad input"
+
+
+# A number written with thousands separators, the way amounts are typed.
+_GROUPED = re.compile(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$")
+
+
+def _coerce(arg: Arg, value: Any) -> tuple[Any, str | None]:
+    """One value against what its argument declares.
+
+    Returns the value to use and nothing, or anything and a complaint. The
+    complaint ends a sentence that begins with the argument's name.
+    """
+    value, complaint = _typed(arg, value)
+    if complaint is not None or not isinstance(value, str):
+        return value, complaint
+    if arg.choices is None:
+        return (arg.canon(value) if arg.canon else value), None
+    canon = arg.canon or (lambda spelling: spelling)
+    allowed = {canon(choice) for choice in arg.choices}
+    wanted = canon(value)
+    if wanted not in allowed:
+        some = ", ".join(sorted(allowed)[:3])
+        return value, (
+            f"must be one of the {len(allowed)} values it knows, such as {some}; got {value!r}"
+        )
+    return wanted, None
+
+
+def _typed(arg: Arg, value: Any) -> tuple[Any, str | None]:
+    """The kind of thing a value is, against the kind its argument wants."""
+    if arg.type == "number":
+        # A bool is an int to Python and a mistake to everyone else.
+        if isinstance(value, bool):
+            return value, f"must be a number; got {value!r}"
+        if isinstance(value, (int, float)):
+            number = value
+        elif isinstance(value, str):
+            text = value.strip()
+            if _GROUPED.match(text):
+                text = text.replace(",", "")
+            try:
+                number = int(text)
+            except ValueError:
+                try:
+                    number = float(text)
+                except ValueError:
+                    return value, f"must be a number; got {value!r}"
+        else:
+            return value, f"must be a number; got {_kind(value)}"
+        if not math.isfinite(number):
+            return value, f"must be a finite number; got {value!r}"
+        return number, None
+
+    if isinstance(value, str):
+        return value, None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value), None
+    return value, f"must be text; got {_kind(value)}"
+
+
+def _kind(value: Any) -> str:
+    if isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, dict):
+        return "an object"
+    if isinstance(value, (list, tuple, set)):
+        return "a list"
+    return f"a {type(value).__name__}"
+
+
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.I)
+
+
+def was_given(address: str, texts: Iterable[str]) -> bool:
+    """Whether an address is one the user wrote themselves.
+
+    A model that reads a fetched page can be talked into fetching another:
+    "now open http://elsewhere/?q=" followed by something from the
+    conversation. The grammar cannot stop that, since the call is perfectly
+    well formed, and neither can a check on where the address points, since it
+    points somewhere public. What stops it is that the address is not one the
+    user gave.
+
+    The comparison forgives what people leave off and put on: the scheme,
+    "www.", a trailing slash, capitals, and a path shortened to its site. It
+    does not forgive anything added: a longer path or a query string that the
+    user did not write is a different address.
+    """
+    key = _SCHEME.sub("", (address or "").strip().lower()).removeprefix("www.").rstrip("/")
+    if not key:
+        return False
+    # The address has to stand as an address in what they wrote: not inside a
+    # longer name, and not continued by more of a name.
+    found = re.compile(r"(?<![a-z0-9.\-])(?:www\.)?" + re.escape(key) + r"(?![a-z0-9\-])")
+    return any(found.search(text.lower()) for text in texts)
+
+
+def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:
+    """Turn what a call was given into what the tool can be run with.
+
+    Returns the arguments to run with and nothing, or a ``Rejection`` saying
+    why it should not be run. Every caller comes through here, so a tool never
+    has to wonder whether its number is a number:
+
+    * arguments the tool never declared are dropped — the model invents them;
+    * a number written as text becomes a number, and a number where text is
+      wanted becomes text;
+    * anything else of the wrong kind is refused, by name;
+    * an argument left out, or given as nothing, takes its default;
+    * a required one still missing after that is refused.
+    """
+    declared = {a.name: a for a in tool.args}
+    clean: dict[str, Any] = {}
+    refused: set[str] = set()
+    reasons: list[str] = []
+    said: list[str] = []
+
+    for name, value in (args or {}).items():
+        arg = declared.get(name)
+        if arg is None or value is None:
+            continue
+        value, complaint = _coerce(arg, value)
+        if complaint is None:
+            clean[name] = value
+            continue
+        refused.add(name)
+        reasons.append(f"{name} {complaint}")
+        hint = MISSING_HINT.get(name, name)
+        if arg.type == "number":
+            said.append(f"{tool.label} could not use {value!r} as {hint}: it is not a number.")
+        elif isinstance(value, str):
+            said.append(f"{tool.label} does not know {value!r} as {hint}.")
+        else:
+            said.append(f"{tool.label} could not use that as {hint}: it is not text.")
+
+    # A default stands in for an argument that was left out. It does not paper
+    # over one that was given and refused.
+    for arg in tool.args:
+        if arg.name not in clean and arg.name not in refused and arg.default is not None:
+            clean[arg.name] = arg.default
+
+    missing = [
+        a.name for a in tool.required_args() if a.name not in clean and a.name not in refused
+    ]
+    if missing:
+        reasons += [f"{name} is required and was not given" for name in missing]
+        said.append(
+            f"{tool.label} needs {' and '.join(MISSING_HINT.get(m, m) for m in missing)}."
+        )
+
+    if not reasons:
+        return clean, None
+    code = "bad input" if refused else "missing input"
+    return clean, Rejection(tuple(reasons), " ".join(said), code)
+
+
 # --------------------------------------------------------------- dispatch ---
 
 
@@ -133,20 +324,9 @@ async def call_tool(name: str, args: dict) -> ToolResult:
             error="offline mode",
         )
 
-    # Drop anything the tool did not declare — the model invents arguments.
-    known = {a.name for a in tool.args}
-    clean = {k: v for k, v in (args or {}).items() if k in known}
-    for a in tool.args:
-        if a.name not in clean and a.default is not None:
-            clean[a.name] = a.default
-    missing = [a.name for a in tool.required_args() if a.name not in clean]
-    if missing:
-        return ToolResult(
-            False,
-            f"{tool.label} needs "
-            f"{' and '.join(MISSING_HINT.get(m, m) for m in missing)}.",
-            error="missing input",
-        )
+    clean, rejection = check(tool, args)
+    if rejection is not None:
+        return ToolResult(False, rejection.summary, error=rejection.code)
 
     t0 = time.perf_counter()
     try:
@@ -182,51 +362,154 @@ async def call_tool(name: str, args: dict) -> ToolResult:
 # ------------------------------------------------------------------ GBNF ---
 
 _GBNF_PRIMITIVES = r"""
-string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" ["\\bfnrt])* "\""
+char ::= [^"\\\x7F\x00-\x1F] | "\\" ["\\bfnrt]
 number ::= "-"? ("0" | [1-9] [0-9]{0,15}) ("." [0-9]{1,6})?
 """
+
+# The most characters a model may write for a text argument that sets no
+# ceiling of its own, and for the question it may ask.
+DEFAULT_MAX_LEN = 120
+# The longest a number can be under the `number` rule above, in bytes: a
+# sign, sixteen digits, a point and six more.
+_NUMBER_BYTES = 24
+# The most bytes one `char` can take: a four-byte character in UTF-8. (An
+# escape is two.)
+_CHAR_BYTES = 4
+
+NONE_ACTION = '{"tool": "none"}'
 
 
 def _rule_name(tool_name: str) -> str:
     return "t-" + tool_name.replace("_", "-")
 
 
-def tools_to_gbnf(tools: list[Tool] | None = None) -> str:
-    """Build a grammar that can only produce a valid tool call.
+def _literal(text: str) -> str:
+    """Text as a GBNF literal that matches exactly that text."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _spelt(choice: str) -> str:
+    """One allowed value as the model has to write it: a JSON string."""
+    return json.dumps(choice, ensure_ascii=False)
+
+
+ASK = Arg("question", "string", True, "one short question for the user")
+
+
+def tools_to_gbnf(tools: list[Tool] | None = None, *, ask: bool = True) -> str:
+    """Build a grammar that can only produce a valid action.
 
     This is what makes routing viable on a 1.5B model. Asked politely for JSON
     it produces trailing commas, prose preambles and invented keys; constrained
     by this grammar, malformed output is not merely unlikely, it is
     unrepresentable.
+
+    An action is a call to one tool, a question for the user (``ask``), or
+    ``none``. Within a call:
+
+    * a required argument is always there, an optional one may be;
+    * text has a ceiling, so a reply always closes instead of running on until
+      the token limit cuts it off mid-string;
+    * an argument with a known set of values can only be given one of them.
+      The model cannot invent a currency.
     """
     tools = tools if tools is not None else available()
     lines: list[str] = []
     alts: list[str] = []
+    texts: dict[int, str] = {}                 # ceiling -> rule name
+    values: dict[tuple[str, ...], str] = {}    # allowed spellings -> rule name
+
+    def value_rule(arg: Arg) -> str:
+        if arg.type != "string":
+            return "number"
+        if arg.choices is not None:
+            if arg.choices not in values:
+                values[arg.choices] = f"choice-{len(values) + 1}"
+            return values[arg.choices]
+        ceiling = arg.max_len or DEFAULT_MAX_LEN
+        return texts.setdefault(ceiling, f"text-{ceiling}")
+
+    def pair(arg: Arg, sep: str) -> str:
+        return f'{_literal(f"""{sep}"{arg.name}": """)} {value_rule(arg)}'
+
+    def call(name: str, args: tuple[Arg, ...]) -> str:
+        required = [a for a in args if a.required]
+        optional = [a for a in args if not a.required]
+        parts = [_literal(f'{{"tool": "{name}", "args": {{')]
+        parts += [pair(a, "" if i == 0 else ", ") for i, a in enumerate(required)]
+        if optional and required:
+            # Each may follow what is already there, in declaration order.
+            parts += [f"({pair(a, ', ')})?" for a in optional]
+        elif optional:
+            # With nothing required, any one of them may come first, and only
+            # those declared after it may follow. Written out, so that a comma
+            # can never open the list or end it.
+            starts = []
+            for i, first in enumerate(optional):
+                rest = [f"({pair(a, ', ')})?" for a in optional[i + 1:]]
+                starts.append(" ".join([pair(first, ""), *rest]))
+            parts.append("(" + " | ".join(starts) + ")?")
+        parts.append(_literal("}}"))
+        return " ".join(parts)
 
     for tool in tools:
         rule = _rule_name(tool.name)
         alts.append(rule)
-        parts = [f'"{{\\"tool\\": \\"{tool.name}\\", \\"args\\": {{"']
-        req = tool.required_args()
-        for i, arg in enumerate(req):
-            sep = "" if i == 0 else ", "
-            parts.append(f'"{sep}\\"{arg.name}\\": "')
-            parts.append("string" if arg.type == "string" else "number")
-        parts.append('"}}"')
-        lines.append(f"{rule} ::= {' '.join(parts)}")
+        lines.append(f"{rule} ::= {call(tool.name, tool.args)}")
 
+    if ask:
+        alts.append("t-ask")
+        lines.append(f"t-ask ::= {call('ask', (ASK,))}")
     alts.append("t-none")
-    lines.append('t-none ::= "{\\"tool\\": \\"none\\"}"')
+    lines.append(f"t-none ::= {_literal(NONE_ACTION)}")
+
+    for spellings, rule in values.items():
+        lines.append(f"{rule} ::= " + " | ".join(_literal(_spelt(s)) for s in spellings))
+    for ceiling, rule in sorted(texts.items()):
+        lines.append(f'{rule} ::= "\\"" char{{1,{ceiling}}} "\\""')
 
     root = "root ::= " + " | ".join(alts)
     return "\n".join([root, *lines, _GBNF_PRIMITIVES])
 
 
+def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> int:
+    """The longest reply the grammar allows, in bytes.
+
+    A token is at least one byte, so a pass given this many tokens can always
+    reach the end of its reply. A ceiling on characters is not enough by
+    itself: 120 characters can be more than a hundred tokens, and a reply cut
+    off mid-string is not JSON.
+    """
+    tools = tools if tools is not None else available()
+
+    def widest(arg: Arg) -> int:
+        if arg.type != "string":
+            return _NUMBER_BYTES
+        if arg.choices is not None:
+            return max(len(_spelt(c).encode("utf-8")) for c in arg.choices)
+        return 2 + _CHAR_BYTES * (arg.max_len or DEFAULT_MAX_LEN)
+
+    def longest(name: str, args: tuple[Arg, ...]) -> int:
+        # Every argument present, each as long as it can be, a comma and a
+        # space between each pair.
+        size = len(f'{{"tool": "{name}", "args": {{}}}}'.encode("utf-8"))
+        size += sum(len(f'"{a.name}": '.encode("utf-8")) + widest(a) for a in args)
+        return size + 2 * max(len(args) - 1, 0)
+
+    sizes = [longest(t.name, t.args) for t in tools]
+    if ask:
+        sizes.append(longest("ask", (ASK,)))
+    return max([len(NONE_ACTION), *sizes])
+
+
 def tool_menu(tools: list[Tool] | None = None) -> str:
-    """The compact description block shown to the model during routing."""
+    """The compact description block shown to the model during routing.
+
+    An argument that may be left out is marked with a question mark.
+    """
     tools = tools if tools is not None else available()
     rows = []
     for t in tools:
-        arg_names = ", ".join(a.name for a in t.required_args()) or "none"
+        arg_names = ", ".join(a.name if a.required else f"{a.name}?" for a in t.args) or "none"
         rows.append(f"- {t.name}({arg_names}): {t.description}")
     return "\n".join(rows)

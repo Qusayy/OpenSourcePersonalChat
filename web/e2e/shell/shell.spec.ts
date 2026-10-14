@@ -78,7 +78,7 @@ test.describe("the status line", () => {
     await more.click();
     await expect(more).toHaveText("Hide");
     await expect(more).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator("#status-extra")).toContainText("this app holds 1.3 GB");
+    await expect(page.locator("#status-extra")).toContainText("the app and its model hold 1.3 GB");
     await expect(page.locator("#status-extra")).toContainText("service limit 2.5 GB");
   });
 });

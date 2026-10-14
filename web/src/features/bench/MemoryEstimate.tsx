@@ -9,7 +9,7 @@ import { AFTER_CHART } from "./parts";
 
 /**
  * What a loaded model takes, part by part: the chart, then the total in a
- * sentence, then what the process actually holds right now.
+ * sentence, then what the app and its model actually hold right now.
  *
  * The estimate is arithmetic done on the server when the page was sent (the
  * size of the model's file, the context length, two round figures), and the
@@ -51,7 +51,7 @@ export function MemoryEstimate({
         <SysRow fact="rss-exact">
           {(value) => (
             <>
-              {"Measured now: this process holds "}
+              {"Measured now: the app and its model hold "}
               <b className="num">{value}</b>
               {" resident."}
             </>

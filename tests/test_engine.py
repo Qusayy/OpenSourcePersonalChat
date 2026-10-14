@@ -928,6 +928,14 @@ class ServerLoadTests(unittest.TestCase):
         self.assertTrue(engine.ready)
         self.assertIsNone(engine.state.error)
 
+    def test_the_servers_memory_is_counted_once_it_answers(self) -> None:
+        server = FakeServer()
+        server.port = 8081
+        engine = served(server)
+        with mock.patch("app.llm.follow_server") as follow:
+            engine.load_blocking()
+        follow.assert_called_once_with(8081)
+
     def test_tokens_are_counted_by_the_server_once_it_answers(self) -> None:
         engine = served(FakeServer())
         self.assertEqual(engine.count_tokens("one two three four"), 4, "an estimate before it answers")

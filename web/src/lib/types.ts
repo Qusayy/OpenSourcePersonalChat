@@ -20,11 +20,14 @@ export interface EngineInfo {
   /** A phrase describing the machine, measured unless the operator set one. */
   hardware: string;
   mock: boolean;
+  /** What holds the model: this app's own process, or a llama-server beside it. */
+  runtime: "llama-cpp-python" | "llama-server";
   busy: boolean;
   queued: number;
   completed: number;
   load_ms: number | null;
   uptime_s: number;
+  /** The app and its model, resident: one process, or the app and its llama-server. */
   rss_mb: number | null;
   platform: string;
   /** CPUs this process can use (affinity and cgroup quota). */
@@ -41,6 +44,7 @@ export interface SystemSnapshot {
   cores_pct: number[] | null;
   mem_total_mb: number | null;
   mem_used_mb: number | null;
+  /** The app and its model, resident, as in `EngineInfo.rss_mb`. */
   rss_mb: number | null;
   limit_mb: number | null;
   limit_high_mb: number | null;

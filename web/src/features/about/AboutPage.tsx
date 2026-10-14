@@ -69,7 +69,7 @@ export function AboutPage() {
           <Measured fact="cpus" term="CPUs this app can use" />
           <Measured fact="cpu" term="CPU load now" />
           <Measured fact="ram" term="Memory in use, whole machine" />
-          <Measured fact="rss" term="Memory held by this app" />
+          <Measured fact="rss" term="Memory held by the app and its model" />
           <Measured fact="limit" term="Memory limit on the service" />
           <Measured fact="load" term="Load average, 1 / 5 / 15 min" />
           {info.load_ms ? (
@@ -84,9 +84,21 @@ export function AboutPage() {
         <Panel>
           <P>
             <b>llama.cpp</b>
-            {" via "}
-            <Code>llama-cpp-python</Code>
-            {" holds the model — one instance, loaded once at startup and kept warm. "}
+            {info.runtime === "llama-server" ? (
+              <>
+                {" as a "}
+                <Code>llama-server</Code>
+                {
+                  " holds the model in a service of its own beside the app — loaded once at startup, kept warm, and sent each pass over the machine's own loopback. "
+                }
+              </>
+            ) : (
+              <>
+                {" via "}
+                <Code>llama-cpp-python</Code>
+                {" holds the model — one instance, loaded once at startup and kept warm. "}
+              </>
+            )}
             <b>FastAPI</b>
             {" on a single "}
             <Code>uvicorn</Code>

@@ -49,6 +49,12 @@ class LargerModelTests(unittest.TestCase):
         self.assertEqual(out["room_mb"], 3900)
         self.assertFalse(out["by_limit"])
 
+    def test_this_services_limit_does_not_bound_a_model_in_another_service(self) -> None:
+        out = bench.larger_model(BUDGET, system(total=15770, limit=3072), limited=False)
+        self.assertEqual(out["room_mb"], 15770)
+        self.assertFalse(out["by_limit"])
+        self.assertIs(out["fits"], True)
+
     def test_nothing_measured_means_no_claim(self) -> None:
         out = bench.larger_model(BUDGET, system())
         self.assertIsNone(out["fits"])

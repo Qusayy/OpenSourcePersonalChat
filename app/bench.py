@@ -272,17 +272,22 @@ def memory_budget(n_ctx: int) -> list[dict]:
     ]
 
 
-def larger_model(budget: list[dict], system: dict) -> dict:
+def larger_model(budget: list[dict], system: dict, limited: bool = True) -> dict:
     """Where a 7B model at the same quantisation would stand on this machine.
 
     It needs its own weights plus everything else in the budget, which is at
     least what this model needs. What it has to fit in is the machine's memory
     as measured, or the limit on the service where that is tighter. `fits` is
     None when neither can be read: the page then makes no claim either way.
+
+    ``limited`` false says the model is not in this service: it runs in a
+    llama-server with limits of its own, so this service's limit does not
+    bound it and only the machine's memory counts.
     """
     need = LARGER_WEIGHTS_MB + sum(b["mb"] for b in budget[1:])
     total = system.get("mem_total_mb")
-    limits = [v for v in (system.get("limit_mb"), system.get("limit_high_mb")) if v]
+    measured = (system.get("limit_mb"), system.get("limit_high_mb")) if limited else ()
+    limits = [v for v in measured if v]
     limit = min(limits) if limits else None
     rooms = [v for v in (total, limit) if v]
     room = min(rooms) if rooms else None

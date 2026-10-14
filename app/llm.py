@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
 from .config import Settings, settings as default_settings
-from .telemetry import describe, process_rss_mb, usable_cpu_count
+from .telemetry import describe, follow_server, process_rss_mb, usable_cpu_count
 
 log = logging.getLogger("aurora.llm")
 
@@ -274,6 +274,8 @@ class Engine:
                 return
             time.sleep(self.SERVER_POLL)
         self._server = server
+        # The model's memory is the server's now; the pages count it as ours.
+        follow_server(getattr(server, "port", None))
         self.state.status = "ready"
         self.state.error = None
         self.state.loaded_at = time.time()

@@ -65,7 +65,9 @@ def bench_static() -> dict:
         "cases": bench.CASES,
         "reference": bench.REFERENCE,
         "budget": budget,
-        "larger": bench.larger_model(budget, telemetry.snapshot()),
+        "larger": bench.larger_model(
+            budget, telemetry.snapshot(), limited=engine.runtime != "llama-server"
+        ),
         "latest": bench.latest_summary(),
     }
 

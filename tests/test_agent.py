@@ -1407,10 +1407,12 @@ class LoopSlotTests(LoopCase):
 
     async def test_while_a_tool_is_out_on_the_network_a_waiting_request_goes_in(self) -> None:
         engine = self.scripted(weather("Paris"), "Somebody else's answer.", NONE, "Take a coat.")
+        out = asyncio.Event()
         release = asyncio.Event()
         other: asyncio.Task | None = None
 
         async def slow(name: str, args: dict) -> ToolResult:
+            out.set()
             await release.wait()
             return found("Paris")
 
@@ -1419,7 +1421,11 @@ class LoopSlotTests(LoopCase):
             "Do I need a coat in Paris", persona=get_persona("agent"), history=[], trace=trace,
             engine=engine, call_tool=slow, loop=True,
         )))
-        await until(lambda: len(engine.passes) == 1 and not engine._inside)
+        # The other request arrives once the tool is out, not once the pass
+        # that chose it has ended: the tool goes out a moment after, and a
+        # request that arrives in between is waiting as it goes, and is lent
+        # the slot. That is another test.
+        await asyncio.wait_for(out.wait(), 5)
         other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
         # Nobody was waiting when the tool went out, so the slot was kept...
         await until(lambda: engine.info()["queued"] == 1)

@@ -25,11 +25,14 @@ app/                     the server (Python, FastAPI)
   bench.py       the benchmark suite + reference data
   personas.py    five presets (system prompt + sampling profile)
   db.py          SQLite (WAL): conversations, messages, tool_calls, runs
+  gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)
   src/shell/     the frame every page shares: top bar, status line, toasts
   src/features/  chat · cards · bench · about
+  src/cover/     the cover: the night sky a visitor is sent in place of the site
+  src/setup/     setting the pattern that opens it (development server only)
   src/styles/    the design tokens, the Tailwind theme that names them, the status line
   src/assets/    Recursive, self-hosted (SIL OFL 1.1)
   e2e/           browser tests (Playwright) and the database they run against
@@ -108,6 +111,11 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 
 **One worker, always.** A second worker loads a second copy of the weights and
 puts the box straight into swap.
+
+**If all you see is a night sky,** the gate is closed: the site is served only
+to a browser that has drawn the pattern, and with no `.env` there is no
+pattern to draw. `cp .env.example .env` (step 2) sets `AURORA_GATE=off`, which
+serves it to everyone. See [The gate](#the-gate).
 
 ### Preview the UI without the model
 
@@ -249,6 +257,134 @@ Other deployment notes:
 
 ---
 
+## The gate
+
+The site is one person's. A visitor who opens it is sent a night sky with the
+northern lights over it, and that page is all they are sent: no application
+markup, no script but the sky's, none of the site's data. Stars in the sky can
+be joined with a line, by anyone. Joining the right ones in the right order
+opens the site.
+
+This repository is public, so the sky is not the lock and neither is anything
+in `web/`. The lock is `app/gate.py`, on the server:
+
+* **the pattern**, which only its owner knows;
+* **a verifier**, a slow hash of the pattern, in the server's own `.env`;
+* **a limit on guesses**: about a hundred wrong ones a day from everyone
+  together, five in ten minutes from any one address.
+
+Until a browser holds a session, every page it asks for is the cover, every
+`/api/` path answers `401`, and nothing else exists (`/openapi.json` included).
+That is decided before the application sees the request, so a route added
+later is closed without anyone closing it.
+
+| `AURORA_GATE` | `AURORA_GATE_VERIFIER` | |
+|---|---|---|
+| `off`, exactly | anything | **off**: the whole site is served to everyone |
+| anything else, or unset | a line from the setup page | **armed**: the cover, until the pattern is drawn |
+| anything else, or unset | missing or malformed | **sealed**: the cover, and nothing opens it |
+
+A missing `.env` or a typing mistake therefore leaves a server closed, not
+open. The state is written to the journal when the server starts.
+
+### Setting the pattern
+
+On a development machine, never on the server:
+
+```bash
+cd web && npm run dev          # then http://localhost:5173/setup.html
+```
+
+Draw a pattern on the sky, and draw it again. The page refuses one that is
+short (under seven stars) or that only steps from each star to the one next
+door, because those are what would be tried first. It then prints one line:
+
+```
+AURORA_GATE_VERIFIER=gate1.300000.<salt>.<hash>
+```
+
+Put it in `/srv/aurora/.env`, remove any `AURORA_GATE=off`, and restart:
+
+```bash
+chmod 600 /srv/aurora/.env
+sudo systemctl restart aurora
+.venv/bin/python -m app.gate status
+```
+
+The pattern never leaves the browser it was drawn in, and the setup page is
+not part of any build. **The line is as good as the pattern**: there are few
+enough patterns that whoever has it can try them all. It belongs in that one
+file. To change the pattern, replace the line and restart; every session ends.
+
+```bash
+python -m app.gate status     # which way the gate is set, open sessions, guesses counted
+python -m app.gate revoke     # end every session now
+python -m app.gate reset      # forget the guesses counted so far
+```
+
+### What it does and does not keep out
+
+A session lasts until the browser closes, twelve hours at most, and an hour
+if nothing is asked of the server. A browser that has opened the site before
+is counted apart from strangers, so people playing with the sky cannot use up
+its owner's tries. A wrong pattern, a throttled one and a malformed request
+get the same answer after the same wait.
+
+What this does not do:
+
+* **Over plain HTTP it keeps out strangers, not eavesdroppers.** The pattern
+  and the session cookie cross the network as they are. Anyone on the path
+  can read either. Put TLS in front before trusting it with anything that
+  matters; see below.
+* **A drawn pattern can be watched.** The lines are on the screen while it is
+  drawn, and a finger leaves a trail on glass.
+* **It hides nothing that was public before it.** Anything fetched or
+  archived while the site was open is still out there.
+
+### TLS for a server with no domain name
+
+Let's Encrypt issues certificates for bare IP addresses. They last six days
+and renew themselves. This needs Certbot 5.4 or newer, and has not been run
+on any server here: the commands are from
+[Let's Encrypt's own note](https://letsencrypt.org/2026/03/11/shorter-certs-certbot),
+and `--staging` is there so the first try costs nothing.
+
+```bash
+sudo mkdir -p /var/www/acme
+sudo certbot certonly --staging --preferred-profile shortlived \
+  --webroot --webroot-path /var/www/acme --ip-address <server ip>
+# when that works, once more without --staging, and with
+#   --deploy-hook "systemctl reload apache2"
+```
+
+Certbot fetches these certificates but does not install them, so the web
+server is pointed at them by hand. For Apache, the challenge directory must be
+served from disk and not passed to the app, and the app must be told the
+visitor came over HTTPS, or its cookies are not marked `Secure`:
+
+```apache
+<VirtualHost *:443>
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/<server ip>/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/<server ip>/privkey.pem
+    RequestHeader set X-Forwarded-Proto "https"
+    # ...the proxy lines above...
+</VirtualHost>
+
+# in both virtual hosts, before the ProxyPass lines:
+Alias /.well-known/acme-challenge/ /var/www/acme/.well-known/acme-challenge/
+ProxyPass /.well-known/acme-challenge/ !
+```
+
+`deploy/nginx.conf` already sends `X-Forwarded-Proto`. Once the site answers
+on 443, redirect port 80 to it. Sessions begun over HTTP do not carry over:
+draw the pattern once more.
+
+Whatever serves the site, check that it serves nothing else:
+`curl -i http://<server ip>/.env` and `/data/aurora.db` must both be `404`.
+
+---
+
 ## Configuration
 
 Everything is `AURORA_`-prefixed, read from the environment or `.env`.
@@ -273,6 +409,10 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
 | `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
+| `AURORA_GATE` | `on` | `off`, exactly, serves the site to everyone. Anything else keeps it behind the cover; see [The gate](#the-gate) |
+| `AURORA_GATE_VERIFIER` | *(unset)* | the line the setup page prints for the pattern. Server's own `.env` only. Unset or malformed, nothing opens the site |
+| `AURORA_GATE_SESSION_HOURS` | `12` | the longest a session lasts, however much it is used |
+| `AURORA_GATE_IDLE_MINUTES` | `60` | how long a session lasts with nothing asked of the server |
 
 ---
 
@@ -589,9 +729,12 @@ load, and if it did, every token would come off disk.
 | `POST /api/bench/run` → SSE | `stage`, `rep`, `case`, `summary` |
 | `GET /api/bench/results` | the suite, the latest summary, the history, reference machines, the memory estimate |
 | `GET /api/bootstrap` | the first values a page shows; the same JSON the server writes into `index.html` (the Vite dev server's page asks for it instead) |
+| `POST /api/unlock` | `{"chain": [star, …]}` → `{"ok": true}` and a session cookie, or `{"ok": false}`. Answered by the gate, not the application, and the only path above that answers without a session |
 
 The pages themselves are `/`, `/bench` and `/about`, all the one built
-`index.html`; `/assets/<name>` is its files.
+`index.html`; `/assets/<name>` is its files. With the gate armed, a browser
+without a session is sent `cover.html` at every one of those addresses, and
+`401` for everything in the table but the last row.
 
 ```bash
 curl -N -X POST localhost:8000/api/chat \
@@ -622,6 +765,13 @@ served: the page and its embedded values, escaping, cache headers, a path that
 tries to climb out of `assets/`, a missing build, and what a 404 is for a
 page, for a file and for the API. Those two need the app's requirements;
 without them they are skipped.
+
+`tests/test_gate.py` is the gate, armed: that every route the application has
+answers nothing without a session (read from the application as it stands, so
+a new route is held to it), that every refusal is the same bytes, the limits
+on guesses, sessions and their ends, and that the hash is the one the setup
+page makes. The rest of the suite runs with the gate off, which
+`tests/__init__.py` sets before anything is imported.
 
 The rest follow a message through the server, with a script standing where the
 model would be (`evals/scripted.py`). It is the real engine with one call
@@ -655,6 +805,12 @@ it is on `http://<server ip>`, and `localhost` hides it. On a development
 machine the tests use the Chrome that is installed; CI installs Chromium.
 Playwright starts the server itself, with `python` (on Windows, the
 repository's `.venv`); `AURORA_PYTHON` names another interpreter.
+
+Those run with the gate off. `npm run e2e` then runs a second, small suite,
+`web/e2e/gate`, against a server of its own with the gate armed and a pattern
+made up for the purpose: the cover at every address with nothing of the site
+in it, a short drawing that never leaves the browser, a wrong pattern, and the
+right one opening the page that was asked for.
 
 ### Does it do the right thing
 

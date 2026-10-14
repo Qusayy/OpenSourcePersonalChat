@@ -15,9 +15,11 @@ from unittest import mock
 try:
     from app.tools import base
     from app.tools.base import (
-        Arg, Tool, ToolResult, call_tool, check, decision_ceiling, tool_menu, tools_to_gbnf,
-        was_given,
+        Arg, Tool, ToolResult, args_ceiling, args_to_gbnf, call_tool, check, check_args,
+        decision_ceiling, tool_menu, tools_to_gbnf, was_given,
     )
+    from app.excerpt import estimate
+    from evals import fixtures
     from tests import support
     from tests.gbnf import Grammar
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -179,6 +181,62 @@ PROBE = Tool(
     run=None,  # never run: these tests stop at the check
     card="probe",
 )
+
+
+LONG = " ".join(f"Sentence {i} says a thing about lighthouse number {i}." for i in range(400))
+
+
+def recorded(name: str) -> ToolResult:
+    return ToolResult(**fixtures.load(name)["result"])
+
+
+class ObservationTests(unittest.TestCase):
+    """What the model reads of a result: never more than the budget."""
+
+    def long_result(self) -> ToolResult:
+        return ToolResult(True, LONG, data={
+            "text": LONG, "extract": LONG, "title": "Lights", "domain": "example.org",
+        })
+
+    def test_every_tool_reads_a_long_result_within_its_budget(self) -> None:
+        for name, tool in base.REGISTRY.items():
+            with self.subTest(tool=name):
+                seen = tool.observation(self.long_result(), "lighthouse number 7")
+                self.assertTrue(seen)
+                self.assertLessEqual(estimate(seen), tool.budget)
+                self.assertLessEqual(estimate(tool.observation(self.long_result(), "", 30)), 30)
+
+    def test_a_budget_given_never_raises_the_tools_own(self) -> None:
+        for name, tool in base.REGISTRY.items():
+            with self.subTest(tool=name):
+                seen = tool.observation(self.long_result(), "", 10_000)
+                self.assertLessEqual(estimate(seen), tool.budget)
+
+    def test_a_page_and_an_article_are_given_more_than_a_line(self) -> None:
+        self.assertEqual(base.REGISTRY["read_url"].budget, 250)
+        self.assertEqual(base.REGISTRY["wikipedia"].budget, 175)
+        self.assertEqual(base.REGISTRY["weather"].budget, 80)
+
+    def test_a_one_line_result_is_read_as_it_is(self) -> None:
+        result = recorded("weather_paris.json")
+        self.assertEqual(base.REGISTRY["weather"].observation(result, "coat?"), result.summary)
+
+    def test_a_long_page_is_read_for_the_question_asked(self) -> None:
+        tool = base.REGISTRY["read_url"]
+        seen = tool.observation(recorded("read_url_lighthouses.json"), "how tall is the Fastnet lighthouse?")
+        self.assertTrue(seen.startswith("Page “Lighthouses of Ireland” (example.org): "))
+        self.assertIn("The Fastnet Rock lighthouse stands 54 metres tall", seen)
+        self.assertLessEqual(estimate(seen), 250)
+
+    def test_a_long_article_is_read_for_the_question_asked(self) -> None:
+        article = ToolResult(True, "Wikipedia — Lights: …", data={"title": "Lights", "extract": LONG})
+        seen = base.REGISTRY["wikipedia"].observation(article, "lighthouse number 377")
+        self.assertTrue(seen.startswith("Wikipedia — Lights: "))
+        self.assertIn("Sentence 377 says", seen)
+
+    def test_a_result_without_its_text_is_read_by_its_summary(self) -> None:
+        page = ToolResult(True, "Page “Tides” (example.org): High water at six.", data={})
+        self.assertEqual(base.REGISTRY["read_url"].observation(page), page.summary)
 
 
 class CheckTests(unittest.TestCase):
@@ -510,6 +568,45 @@ class GrammarTests(unittest.TestCase):
             rows[1],
             "- clock(timezone_name?): Current date and time, optionally in a named timezone.",
         )
+
+
+class ArgsGrammarTests(unittest.TestCase):
+    """The grammar a pass is held to when it fills in a set of arguments."""
+
+    PAIR = (Arg("a", "string", True, "the first", max_len=10),
+            Arg("b", "string", True, "the second", max_len=10))
+
+    def test_it_is_one_object_of_those_arguments_and_nothing_else(self) -> None:
+        grammar = Grammar(args_to_gbnf(self.PAIR))
+        self.assertTrue(grammar.accepts('{"a": "Python", "b": "Rust"}'))
+        for text in ('{"a": "Python"}', '{"b": "Rust", "a": "Python"}', '{"a": "Python", "b": "Rust", "c": "C"}',
+                     '{"tool": "none"}', '{"a": "Python", "b": "far too long for it"}',
+                     'Sure! {"a": "Python", "b": "Rust"}'):
+            with self.subTest(text=text):
+                self.assertFalse(grammar.accepts(text))
+
+    def test_it_holds_each_argument_to_its_kind(self) -> None:
+        spec = (Arg("n", "number", True, "how many"),
+                Arg("unit", "string", True, "which", choices=("km", "mi")),
+                Arg("note", "string", False, "anything", max_len=5))
+        grammar = Grammar(args_to_gbnf(spec))
+        self.assertTrue(grammar.accepts('{"n": 3, "unit": "km"}'))
+        self.assertTrue(grammar.accepts('{"n": 3, "unit": "mi", "note": "hi"}'))
+        self.assertFalse(grammar.accepts('{"n": "three", "unit": "km"}'))
+        self.assertFalse(grammar.accepts('{"n": 3, "unit": "miles"}'))
+
+    def test_enough_tokens_are_given_for_the_longest_object_it_allows(self) -> None:
+        longest = '{"a": "' + "é" * 10 + '", "b": "' + "é" * 10 + '"}'
+        self.assertTrue(Grammar(args_to_gbnf(self.PAIR)).accepts(longest))
+        self.assertGreaterEqual(args_ceiling(self.PAIR), len(longest.encode("utf-8")))
+
+    def test_a_set_of_arguments_is_checked_as_a_tools_are(self) -> None:
+        clean, rejection = check_args("Compare", self.PAIR, {"a": "Python", "c": "x"})
+        self.assertEqual(clean, {"a": "Python"})
+        self.assertEqual(rejection.reasons, ("b is required and was not given",))
+        self.assertEqual(rejection.summary, "Compare needs b.")
+        self.assertEqual(check_args("Compare", self.PAIR, {"a": "Python", "b": 3}),
+                         ({"a": "Python", "b": "3"}, None))
 
 
 class GrammarReaderTests(unittest.TestCase):

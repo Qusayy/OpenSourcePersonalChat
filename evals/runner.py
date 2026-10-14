@@ -15,6 +15,9 @@ Two engines:
 
 A scripted report says in so many words that its token counts are estimates
 and carries no timings: a script's speed is the speed of a loop in Python.
+
+How much of each prompt the model actually read, the rest coming from its
+cache, is in a row only where the model server reported it for every pass.
 """
 
 from __future__ import annotations
@@ -25,12 +28,14 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app import agent
+from app.config import settings
+from app.context import Turn as Sent
 from app.llm import Engine
 from app.personas import get_persona
 from app.skills import get_skill
 
 from . import fixtures
-from .score import route_match, score
+from .score import route_match, score, skill_match
 from .scripted import ScriptedEngine
 from .tasks import Task, Turn
 
@@ -71,10 +76,14 @@ class Outcome:
             return row
         steps = [s for turn in self.turns for s in turn.trace.steps]
         models = [s for s in steps if s.model]
+        reported = [s.new_tokens for s in models]
         row.update(
             steps=sum(1 for s in steps if s.kind == "tool"),
             passes=len(models),
             prompt_tokens=sum(s.prompt_tokens or 0 for s in models),
+            # Of those, what the model read. A total with a pass missing from
+            # it would look like a cache that worked, so there is none.
+            read_tokens=sum(reported) if models and None not in reported else None,
             output_tokens=sum(s.output_tokens or 0 for s in models),
         )
         if timed:
@@ -92,35 +101,39 @@ class Outcome:
 
 
 async def run_task(
-    task: Task, *, engine: Engine, seed: int | None = None, loop: bool = False
+    task: Task, *, engine: Engine, seed: int | None = None, loop: bool | None = None
 ) -> Outcome:
     """Play one task's messages through a run each, then score the last.
 
-    ``loop`` turns the loop on for a task that does not ask for it itself.
+    ``loop`` is whether a tool the model chose earns it another choice, for a
+    task that does not ask for the loop itself; left unset, the setting
+    decides, as on the site.
     """
     began = time.perf_counter()
     persona = get_persona(get_skill(task.skill).persona if get_skill(task.skill) else task.persona)
     history: list[dict] = []
+    sent: list[Sent] = []
     turns: list[Turn] = []
     with fixtures.recorded(task.tools):
         for text in task.turns:
             trace = agent.Trace()
-            # As the site works it out from what it stored of the last message.
-            follows_ask = bool(turns) and turns[-1].trace.outcome == "asked"
             events = [
                 event
                 async for event in agent.run(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
-                    follows_ask=follows_ask, loop=task.loop or loop,
+                    loop=True if task.loop else loop, context=list(sent),
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
             # The next message is read with this exchange before it, as the
-            # site replays a conversation.
+            # site replays a conversation: what was said, and what was sent.
             history.append({"role": "user", "content": text})
             if trace.answer and trace.answer.strip():
                 history.append({"role": "assistant", "content": trace.answer})
+                sent.append(trace.turn(text))
+            else:
+                sent.append(Sent(text, ""))
 
     failures = score(task, turns)
     if task.pending:
@@ -137,14 +150,15 @@ async def run_suite(
     engine: Engine | None = None,
     seed: int | None = 0,
     categories: Iterable[str] | None = None,
-    loop: bool = False,
+    loop: bool | None = None,
 ) -> dict:
     """Run every task this engine can run, and return the report.
 
     ``engine`` is the loaded model for ``engine_kind="real"``. A scripted run
-    makes an engine per task from the task's own script. ``loop`` runs every
-    task with the loop on, where only some ask for it: the way to see what
-    the loop does to the tasks that were written without it.
+    makes an engine per task from the task's own script. ``loop`` is what the
+    site's setting would be: unset, it is the setting; False makes every
+    task that does not ask for the loop choose once, the way to see what the
+    loop is worth. Scripts are written for the loop on.
     """
     if engine_kind not in ("scripted", "real"):
         raise ValueError(f"unknown engine {engine_kind!r}")
@@ -173,8 +187,8 @@ async def run_suite(
     return {
         "engine": engine_kind,
         "seed": seed,
-        # Whether the loop was on for every task, or only for those that ask.
-        "loop": loop,
+        # Whether the loop was on for the tasks that do not ask for it.
+        "loop": settings.agent_loop if loop is None else loop,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "model": _model(engine) if timed else None,
         # Without a tokenizer a token is counted as four characters.
@@ -220,6 +234,7 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     ran = [o for o in outcomes if o.status != SKIPPED]
     counted = [o for o in ran if not o.task.pending]
     routed = [route_match(o.task, o.turns[-1]) for o in ran]
+    skills = [hit for o in ran if (hit := skill_match(o.task, o.turns[-1])) is not None]
     tools_right = [tool for tool, _ in routed if tool is not None]
     args_right = [args for _, args in routed if args is not None]
     decisions = [s for o in ran for t in o.turns for s in t.trace.steps
@@ -241,6 +256,8 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         # Over the tasks that are meant to pass.
         "task_success": _share(sum(o.status == PASSED for o in counted), len(counted)),
         "routing_accuracy": _share(sum(tools_right), len(tools_right)),
+        # Over the tasks that say which skill, if any, should have run.
+        "skill_selection": _share(sum(skills), len(skills)),
         "argument_match": _share(sum(args_right), len(args_right)),
         # Decisions that did not come back as a complete JSON object. Under a
         # grammar this can only be a reply that ran out of tokens.
@@ -262,6 +279,10 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         "output_tokens": _spread([float(r["output_tokens"]) for r in rows]),
     }
     if timed:
+        # Over the tasks whose every pass the server reported on.
+        summary["read_tokens"] = _spread(
+            [float(r["read_tokens"]) for r in rows if r.get("read_tokens") is not None]
+        )
         summary["seconds"] = {
             part: _spread([r["ms"][part] / 1000 for r in rows])
             for part in ("waiting", "reading", "writing", "tools", "total")

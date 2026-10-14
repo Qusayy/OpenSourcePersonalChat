@@ -138,7 +138,9 @@ class PlayedEngine(Engine):
             self.state.status = "ready"
         self.answer = answer
         # A dict is what the model chose. A string is its raw reply, for the
-        # replies that are not JSON at all. None is "no tool".
+        # replies that are not JSON at all. None is "no tool". It is what the
+        # model says whenever it is asked to choose, except straight after
+        # reading a result: it looks one thing up, then says "no tool".
         self.decision = decision
         self.answer_prompts: list[list[dict]] = []
         self.samplings: list[dict] = []
@@ -161,6 +163,8 @@ class PlayedEngine(Engine):
         self.grammars.append(grammar_text)
         self.route_limits.append(max_tokens)
         decision = {"tool": "none"} if self.decision is None else self.decision
+        if messages[-1]["content"].startswith("<data"):
+            decision = {"tool": "none"}
         raw = decision if isinstance(decision, str) else json.dumps(decision)
         try:
             parsed = json.loads(raw)

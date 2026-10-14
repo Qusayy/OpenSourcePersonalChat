@@ -1,0 +1,24 @@
+{
+  "tool": "read_url",
+  "args": {
+    "url": "https://example.org/lighthouses"
+  },
+  "recorded": null,
+  "source": "written by hand: a long page whose answer is near its end",
+  "result": {
+    "ok": true,
+    "summary": "Page “Lighthouses of Ireland” (example.org): Ireland's coast is ringed by more than seventy lighthouses, most of them built in the nineteenth century. They were raised where ships had been lost, often after a single winter took several vessels on the same rocks. Each tower was painted in its own bands of colour, so that a sailor could tell one from another by day. At night every light shows a character of its own, a pattern of flashes and…",
+    "card": "url",
+    "data": {
+      "url": "https://example.org/lighthouses",
+      "domain": "example.org",
+      "title": "Lighthouses of Ireland",
+      "text": "Ireland's coast is ringed by more than seventy lighthouses, most of them built in the nineteenth century. They were raised where ships had been lost, often after a single winter took several vessels on the same rocks. Each tower was painted in its own bands of colour, so that a sailor could tell one from another by day. At night every light shows a character of its own, a pattern of flashes and dark that is printed on the charts. The Commissioners of Irish Lights, founded in 1867, still run them from an office in Dún Laoghaire. For more than a century each station had keepers, usually three, who lived beside the tower in shifts. They trimmed the wicks, wound the clockwork that turned the lens and logged the weather every four hours. Families lived at the mainland stations, while the rock stations were reached by boat when the sea allowed. A relief could be delayed for weeks by a single storm, and the logbooks record the food running short. The lenses were made in Paris and Birmingham from hundreds of prisms set in brass. A first-order lens stands taller than a man and weighs several tonnes, yet floats on a bath of mercury. Automation began in the 1970s, when electric lamps and remote monitoring replaced the clockwork. The last keepers left the Baily lighthouse at Howth in 1997, and every station has run unattended since. Several of the old keepers' houses are now let to visitors who want a week at the edge of the land. Hook Head, in County Wexford, is often called the oldest working lighthouse in the world. Monks are said to have kept a beacon there in the fifth century, and the present tower dates from the twelfth. Its walls are four metres thick, and the stair inside them climbs past rooms where the monks once slept. Further west, the Skelligs light stands on a crag that also holds an early Christian monastery. Loop Head, at the mouth of the Shannon, was first lit by a coal fire in a cottage on the cliff. Mizen Head is better known for its bridge than its light, a span over a chasm that the sea fills in a storm. Ballycotton stands on an island off County Cork, its tower painted black so that it shows against the sky. Wicklow Head has two old towers on its hill, one of them now a holiday let with a view down the coast. Rathlin Island, off Antrim, has a light built upside down, its lamp at the foot of the tower below the cliff top. Of all of them, the Fastnet is the one sailors speak of first. The Fastnet Rock lighthouse stands 54 metres tall and was first lit in 1904, replacing a cast-iron tower that the sea had shaken loose. Its granite blocks were cut in Cornwall and dovetailed together so that the tower moves as one piece in a gale. The rock is known as Ireland's Teardrop, because it was the last of Ireland that emigrants saw on the way to America. Today the lights are watched from Dún Laoghaire, and a fault on any of them raises an alarm there within minutes. Some have been fitted with LED lamps that can be seen for twenty nautical miles.",
+      "lede": "Ireland's coast is ringed by more than seventy lighthouses, most of them built in the nineteenth century. They were raised where ships had been lost, often after a single winter took several vessels on the same rocks. Each tower was painted in its own bands of colour, so that a sailor could tell one from another by day. At night every light shows a character of its own, a pattern of flashes and…",
+      "words": 551,
+      "reading_minutes": 2.8,
+      "truncated": false
+    },
+    "error": null
+  }
+}

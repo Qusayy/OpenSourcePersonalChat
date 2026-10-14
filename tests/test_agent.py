@@ -11,13 +11,22 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import unittest
 
 try:
     from app import agent
+    from app.context import SUMMARY_HEADING, merged
+    from app.router import fill_request
+    from app.transcript import CUE_PLAIN
+    from app.tools.base import args_to_gbnf
+    from app.transcript import data
+    from app.excerpt import estimate
     from app.personas import get_persona
+    from app.tools import REGISTRY
     from app.skills import get_skill
     from app.tools.base import ToolResult
+    from evals import fixtures
     from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import collect, listen, only, shape, until
@@ -30,10 +39,26 @@ PARIS = ToolResult(True, "Paris, France: overcast, 17.9°C.", card="weather", da
 ANSWER = ["step:answer:running", "start", "token", "step:answer:ok", "done", "run"]
 
 
+class Reporting(ScriptedEngine):
+    """A script that says, as a model server does, how much of each prompt it
+    read: ``READ`` tokens of it, and the rest from its cache."""
+
+    READ = 7
+
+    def _iter_chunks(self, messages, sampling, *, reading=None, **more):
+        yield from super()._iter_chunks(messages, sampling, **more)
+        if reading is not None:
+            reading.read = self.READ
+            reading.cached = self.prompt_tokens(messages) - self.READ
+
+
 class AgentCase(unittest.IsolatedAsyncioTestCase):
+    """A run with the loop off unless a test says otherwise: one choice, on
+    the same transcript the loop reads, then the answer."""
+
     def setUp(self) -> None:
         support.no_network(self)
-        support.with_settings(self, tools_enabled=True, allow_outbound=True)
+        support.with_settings(self, tools_enabled=True, allow_outbound=True, agent_loop=False)
 
     def scripted(self, *script, **options) -> ScriptedEngine:
         engine = ScriptedEngine(script, **options)
@@ -81,8 +106,10 @@ class RunTests(AgentCase):
         self.assertEqual(engine.most_at_once, 1)
         self.assertIsNotNone(engine.passes[0].grammar)
         self.assertIsNone(engine.passes[1].grammar)
-        self.assertIn("weather: Paris, France: overcast, 17.9°C.",
-                      engine.passes[1].messages[-1]["content"])
+        self.assertIn('<data tool="weather">Paris, France: overcast, 17.9°C.</data>',
+                      engine.passes[1].prompt)
+        # The answer reads on from where the choice left off.
+        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt + WEATHER))
         self.assertEqual([call.name for call, _ in trace.calls], ["weather"])
         self.assertEqual(trace.calls[0][0].via, "model")
         self.assertTrue(engine.free)
@@ -117,6 +144,216 @@ class RunTests(AgentCase):
         self.assertEqual(stream[-1][0], "run")
         self.assertEqual(stream[-1][1]["outcome"], "failed")
         self.assertEqual(engine.passes, [])
+
+
+class WindowTests(AgentCase):
+    """The conversation and the message fitted to the window."""
+
+    def tight(self, n_ctx: int, *script) -> ScriptedEngine:
+        from app.config import settings
+
+        cfg = settings.model_copy(update={"mock": True, "mock_delay": 0.0, "n_ctx": n_ctx})
+        engine = ScriptedEngine(script, cfg=cfg)
+        self.addAsyncCleanup(engine.settled)
+        return engine
+
+    async def test_a_message_too_long_for_the_window_is_cut_and_the_page_is_told(self) -> None:
+        engine = self.tight(1200, "Read it.")
+        message = "Please read this. " + "word " * 3000
+        trace = agent.Trace()
+        stream = await collect(self.run_message(message, engine, persona="concise", trace=trace))
+        self.assertEqual(only(stream, "trimmed"), [
+            {"dropped": 0, "turns": 0, "summarised": 0, "cut": True},
+        ])
+        sent = trace.prompt[-1]["content"]
+        self.assertTrue(sent.startswith("Please read this. word word"))
+        self.assertTrue(sent.endswith("…"))
+        room = 1200 - get_persona("concise").max_tokens - engine.cfg.reply_headroom
+        self.assertLessEqual(engine.prompt_tokens(trace.prompt), room)
+        self.assertEqual(trace.steps[-1].input["cut"], True)
+
+    async def test_a_message_that_fits_is_read_whole_and_nothing_is_said(self) -> None:
+        engine = self.scripted("Fine.")
+        trace = agent.Trace()
+        stream = await collect(self.run_message("Hello there", engine, persona="concise", trace=trace))
+        self.assertEqual(only(stream, "trimmed"), [])
+        self.assertEqual(trace.prompt[-1]["content"], "Hello there")
+
+    async def test_a_persona_without_tools_reads_the_conversation_as_it_always_has(self) -> None:
+        history = [{"role": "user", "content": "One?"}, {"role": "assistant", "content": "One."},
+                   {"role": "user", "content": "Two?"}, {"role": "assistant", "content": "Two."}]
+        engine = self.scripted("Three.")
+        trace = agent.Trace()
+        await collect(self.run_message("Three?", engine, persona="explainer", history=history,
+                                       trace=trace))
+        self.assertEqual(trace.prompt, [
+            {"role": "system", "content": get_persona("explainer").system}, *history,
+            {"role": "user", "content": "Three?"},
+        ])
+
+    async def test_without_tools_each_prompt_extends_the_last_and_its_answer(self) -> None:
+        engine = self.scripted("One.", "Two.", "Three.")
+        history: list[dict] = []
+        for text in ("One?", "Two?", "Three?"):
+            await collect(self.run_message(text, engine, persona="explainer", history=list(history)))
+            history += [{"role": "user", "content": text},
+                        {"role": "assistant", "content": engine.passes[-1].output}]
+        for before, after in zip(engine.passes, engine.passes[1:]):
+            self.assertTrue(after.prompt.startswith(before.prompt + before.output))
+
+    async def test_a_long_conversation_is_summed_up_at_the_top(self) -> None:
+        engine = self.tight(1000, "Short.")
+        history = []
+        for i in range(12):
+            history += [{"role": "user", "content": f"Question {i}? " * 12},
+                        {"role": "assistant", "content": f"Answer {i}. " * 12}]
+        trace = agent.Trace()
+        stream = await collect(self.run_message("And now?", engine, persona="concise",
+                                                history=history, trace=trace))
+        trimmed = only(stream, "trimmed")[0]
+        self.assertEqual(trimmed["turns"] + trimmed["summarised"], 12)
+        self.assertEqual(trimmed["dropped"], 2 * trimmed["summarised"])
+        self.assertTrue(trace.prompt[1]["content"].startswith(SUMMARY_HEADING))
+        self.assertEqual(trace.prompt[-1]["content"], "And now?")
+
+
+def fill(a: str, b: str) -> str:
+    return json.dumps({"a": a, "b": b})
+
+
+def article_of(title: str) -> ToolResult:
+    return ToolResult(True, f"Wikipedia — {title}: {title} is a language.", card="wikipedia",
+                      data={"title": title, "extract": f"{title} is a language."})
+
+
+class FillTests(AgentCase):
+    """A skill the visitor chose, whose pattern did not find all it needs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.asked = support.played_tools(self, {"wikipedia": [article_of("Python"), article_of("Rust")]})
+
+    async def compare(self, message: str, *script, **options):
+        engine = self.scripted(*script, **options)
+        trace = agent.Trace()
+        stream = await collect(agent.run(
+            message, persona=get_persona("agent"), skill=get_skill("compare"), history=[],
+            trace=trace, engine=engine, request_id="run",
+        ))
+        return engine, trace, stream
+
+    async def test_a_pattern_that_finds_both_makes_no_pass_to_fill_them(self) -> None:
+        engine, trace, stream = await self.compare("Python vs Rust", "| | Python | Rust |")
+        self.assertEqual(len(engine.passes), 1)
+        self.assertEqual([s.kind for s in trace.steps], ["route", "tool", "tool", "answer"])
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+
+    async def test_what_the_pattern_missed_is_filled_in_by_one_short_pass(self) -> None:
+        engine, trace, stream = await self.compare(
+            "Is Python faster than Rust?", fill("Python", "Rust"), "| | Python | Rust |",
+        )
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        self.assertEqual([s.kind for s in trace.steps], ["fill", "route", "tool", "tool", "answer"])
+        filled = trace.steps[0]
+        self.assertEqual((filled.model, filled.name, filled.ok), (True, "compare", True))
+        # It is held to a grammar of the skill's inputs, and given enough
+        # tokens to finish it.
+        self.assertEqual(engine.passes[0].grammar, args_to_gbnf(get_skill("compare").inputs))
+        self.assertIn(fill_request("Compare two things", get_skill("compare").inputs),
+                      engine.passes[0].prompt)
+        # It is the skill's own step on the page, which says what the pass cost.
+        self.assertEqual(shape(stream)[:2], ["step:route:running", "step:route:ok"])
+        route = support.step(stream, "route", "ok")
+        self.assertEqual((route["label"], route["detail"]), ("Compare two things", "skill"))
+        self.assertEqual(route["tokens_in"], filled.prompt_tokens)
+        # And the answer is written on from what the fill read and wrote.
+        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt + engine.passes[0].output))
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+
+    async def test_a_fill_that_cannot_be_used_leaves_the_whole_message_as_the_first(self) -> None:
+        for reply in ('{"a": "Python"}', "not json", '{"a": "Python", "b": ""}'):
+            with self.subTest(reply=reply):
+                self.asked["wikipedia"].clear()
+                engine, trace, _ = await self.compare("Is Python faster than Rust?", reply, "Python.")
+                self.assertEqual(self.asked["wikipedia"], [{"query": "Is Python faster than Rust?"}])
+                self.assertIs(trace.steps[0].ok, False)
+                # The answer is not written on from a fill that was not used.
+                self.assertNotIn(reply, engine.passes[1].prompt)
+                self.assertTrue(engine.free)
+
+    async def test_a_skill_with_no_pattern_or_only_an_address_to_find_never_fills(self) -> None:
+        for skill, message in (("weather_brief", "somewhere warm"), ("summarise_link", "that page")):
+            with self.subTest(skill):
+                engine = self.scripted("An answer.")
+                await collect(agent.run(message, persona=get_persona("agent"), skill=get_skill(skill),
+                                        history=[], engine=engine))
+                self.assertEqual(len(engine.passes), 1)
+
+    async def test_stopped_while_filling_nothing_is_looked_up(self) -> None:
+        engine = self.scripted(fill("Python", "Rust"), gated=True)
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "Is Python faster than Rust?", persona=get_persona("agent"), skill=get_skill("compare"),
+            history=[], trace=trace, engine=engine, request_id="run",
+        )))
+        await engine.entered(1)
+        engine.cancel("run")
+        engine.release()
+        stream = await reading
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:stopped", "done", "run"])
+        self.assertEqual(self.asked["wikipedia"], [])
+        self.assertIs(only(stream, "done")[0]["cancelled"], True)
+        await engine.settled()
+        self.assertTrue(engine.free)
+
+
+class KeptTests(unittest.TestCase):
+    """What a run leaves for the next message to be read with."""
+
+    def test_a_run_that_answered_or_asked_leaves_what_it_sent(self) -> None:
+        from app.context import Part
+
+        sent = [Part("user", "question", "Hi"), Part("assistant", "answer", "Hello")]
+        for outcome, kept in (("answered", tuple(sent)), ("asked", tuple(sent)),
+                              ("stopped", ()), ("failed", ())):
+            with self.subTest(outcome):
+                trace = agent.Trace(outcome=outcome, answer="Hello", sent=list(sent), system_key="k")
+                turn = trace.turn("Hi", at=5.0)
+                self.assertEqual((turn.question, turn.answer, turn.parts, turn.at),
+                                 ("Hi", "Hello", kept, 5.0))
+
+
+class ReplayedAddressTests(AgentCase):
+    """What the model reads of the conversation is not what the user said."""
+
+    async def test_an_address_found_only_in_a_replayed_page_is_never_fetched(self) -> None:
+        from app.context import Part, Turn, key
+        from app.skills import offered
+        from app.transcript import system_for
+        from app.tools.base import available
+
+        page = data("read_url", "Page “Tides”: high water at six. More at https://evil.example/x")
+        earlier = Turn(
+            "open https://example.org/tides", "High water is at six.",
+            parts=(Part("user", "question", "open https://example.org/tides"),
+                   Part("user", "data", page, ("read_url",)),
+                   Part("assistant", "answer", "High water is at six.")),
+            system_key=key(system_for(get_persona("agent"), offered(available()))), at=0.0,
+        )
+        history = [{"role": "user", "content": earlier.question},
+                   {"role": "assistant", "content": earlier.answer}]
+        elsewhere = '{"tool": "read_url", "args": {"url": "https://evil.example/x"}}'
+        engine = self.scripted(elsewhere, elsewhere, NONE, "I can only open pages you give me.")
+        fetched = support.played_tools(self, {"read_url": PAGE})
+        trace = agent.Trace()
+        await collect(agent.run(
+            "open the other page it mentions", persona=get_persona("agent"), history=history,
+            context=[earlier], trace=trace, engine=engine, loop=True,
+        ))
+        self.assertIn("https://evil.example/x", engine.passes[0].prompt, "the model could read it")
+        self.assertEqual(fetched["read_url"], [])
+        self.assertTrue(trace.steps[0].error.startswith("rejected: url must be an address the user gave"))
 
 
 class StopTests(AgentCase):
@@ -402,6 +639,16 @@ class TraceTests(AgentCase):
         # Nothing here can say how much of the prompt the model had cached.
         self.assertIsNone(step.new_tokens)
 
+    async def test_what_the_model_read_of_each_prompt_is_kept_with_its_step(self) -> None:
+        support.played_tools(self, {"weather": PARIS})
+        engine = Reporting([WEATHER, "Yes."])
+        self.addAsyncCleanup(engine.settled)
+        stream, trace = await self.traced("Do I need a coat in Paris", engine)
+        self.assertEqual([s.new_tokens for s in trace.steps if s.model], [Reporting.READ] * 2)
+        done = only(stream, "done")[0]
+        self.assertEqual(done["read_tokens"], Reporting.READ)
+        self.assertEqual(done["cached_tokens"], done["prompt_tokens"] - Reporting.READ)
+
     async def test_the_wait_for_the_slot_is_part_of_what_a_pass_cost(self) -> None:
         engine = self.scripted("Somebody else's answer.", "Ours.", gated=True)
         other = asyncio.create_task(collect(self.run_message("Hello", engine, persona="explainer")))
@@ -513,9 +760,11 @@ class TraceTests(AgentCase):
             history += [{"role": "user", "content": f"Question {i}? " * 12},
                         {"role": "assistant", "content": f"Answer {i}. " * 12}]
         stream, trace = await self.traced("And now?", engine, persona="concise", history=history)
-        dropped = only(stream, "trimmed")[0]["dropped"]
-        self.assertGreater(dropped, 0)
-        self.assertEqual(trace.steps[-1].input, {"dropped": dropped})
+        trimmed = only(stream, "trimmed")[0]
+        self.assertGreater(trimmed["dropped"], 0)
+        self.assertGreater(trimmed["summarised"], 0)
+        self.assertIs(trimmed["cut"], False)
+        self.assertEqual(trace.steps[-1].input, trimmed)
 
     async def test_a_run_stopped_while_choosing_writes_down_one_stopped_pass(self) -> None:
         engine = self.scripted(WEATHER, gated=True)
@@ -793,7 +1042,7 @@ class FailureTests(AgentCase):
         run.summaries = ["weather: Paris, France: overcast, 12.9°C."]
         run.failures = ["weather: No place called 'Atlantis' was found."]
         self.assertEqual(
-            run._prompt()[-1]["content"],  # noqa: SLF001
+            merged(run._prompt())[-1]["content"],  # noqa: SLF001
             "Paris and Atlantis?\n\n"
             "Live data, retrieved just now by a tool:\n"
             "- weather: Paris, France: overcast, 12.9°C.\n\n"
@@ -839,8 +1088,9 @@ class AskTests(AgentCase):
         asked = trace.steps[0]
         self.assertEqual(
             set(done),
-            {"cancelled", "asked", "ttft_ms", "queue_wait_ms", "prompt_tokens",
-             "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb", "tool_calls"},
+            {"cancelled", "asked", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
+             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb",
+             "tool_calls"},
         )
         self.assertIs(done["asked"], True)
         self.assertIs(done["cancelled"], False)
@@ -863,34 +1113,21 @@ class AskTests(AgentCase):
         stream = await collect(self.run_message("Suggest a name for my boat", engine))
         self.assertNotIn("asked", only(stream, "done")[0])
 
-    async def test_the_reply_to_a_question_is_routed_with_the_question_in_view(self) -> None:
+    async def test_the_reply_to_a_question_is_read_after_the_question(self) -> None:
+        # Nothing special: the conversation so far is read with every choice.
         engine = self.scripted(LISBON, "Light rain; take an umbrella.")
         asked = support.played_tools(self, {"weather": PARIS})
         history = [{"role": "user", "content": "what's the weather like"},
                    {"role": "assistant", "content": "Which city do you mean?"}]
         stream = await collect(agent.run(
             "Lisbon", persona=get_persona("agent"), history=history, engine=engine,
-            follows_ask=True,
         ))
         self.assertEqual(
             [m["content"] for m in engine.passes[0].messages[1:]],
-            ["what's the weather like", ASK, "Lisbon"],
+            ["what's the weather like", "Which city do you mean?", "Lisbon"],
         )
         self.assertEqual(asked["weather"], [{"location": "Lisbon"}])
         self.assertEqual(only(stream, "done")[0]["tool_calls"], 1)
-
-    async def test_a_message_that_answers_no_question_is_routed_alone(self) -> None:
-        history = [{"role": "user", "content": "what's the weather like"},
-                   {"role": "assistant", "content": "Which city do you mean?"}]
-        for follows_ask, turns in ((False, history), (True, []), (True, history[:1]),
-                                   (True, list(reversed(history)))):
-            with self.subTest(follows_ask=follows_ask, turns=len(turns)):
-                engine = self.scripted(NONE, "Wren.")
-                await collect(agent.run(
-                    "Lisbon", persona=get_persona("agent"), history=turns, engine=engine,
-                    follows_ask=follows_ask,
-                ))
-                self.assertEqual(len(engine.passes[0].messages), 2)
 
     async def test_a_question_with_nothing_in_it_is_not_asked_and_the_run_answers(self) -> None:
         engine = self.scripted('{"tool": "ask", "args": {"question": " "}}', "It depends where.")
@@ -959,8 +1196,8 @@ class AddressTests(AgentCase):
         )
         # And the model that writes the answer is told it was not opened.
         self.assertIn(
-            "- read_url: Read page only goes to an address you gave it yourself.",
-            trace.prompt[-1]["content"],
+            data("read_url", "Read page only goes to an address you gave it yourself.", ok=False),
+            "\n".join(m["content"] for m in trace.prompt),
         )
 
     async def test_it_is_told_why_once_and_may_choose_again(self) -> None:
@@ -1098,13 +1335,14 @@ class LoopTests(LoopCase):
         engine = self.scripted(weather("Paris"), NONE, "Take a coat.")
         support.played_tools(self, {"weather": found("Paris")})
         _, trace = await self.traced("Do I need a coat in Paris", engine)
+        from app.skills import offered
         from app.tools.base import available
         from app.transcript import CUE_WITH_DATA, system_for
 
         self.assertEqual(
             trace.prompt,
             [
-                {"role": "system", "content": system_for(get_persona("agent"), available())},
+                {"role": "system", "content": system_for(get_persona("agent"), offered(available()))},
                 {"role": "user", "content": "Do I need a coat in Paris"},
                 {"role": "assistant", "content": weather("Paris")},
                 {"role": "user", "content": '<data tool="weather">Paris: overcast, 12.9°C.</data>'},
@@ -1142,7 +1380,9 @@ class LoopTests(LoopCase):
         stream = await collect(self.run_message(WARMER, engine))
         self.assertEqual(asked["weather"], [{"location": "Paris"}])
         self.assertEqual(len(engine.passes), 2)
-        self.assertNotIn("pass", support.step(stream, "route", "ok"))
+        self.assertEqual(support.step(stream, "route", "ok")["pass"], 1)
+        # Ended because it is the loop off, not because a limit was reached.
+        self.assertNotIn(LOOKUPS_OVER, engine.passes[1].prompt)
 
     async def test_the_setting_turns_it_on_for_a_run_that_does_not_say(self) -> None:
         support.with_settings(self, agent_loop=True)
@@ -1283,6 +1523,47 @@ class LimitTests(LoopCase):
                 # And nothing was looked up twice.
                 made = [json.dumps(c, sort_keys=True) for c in asked["weather"]]
                 self.assertEqual(len(made), len(set(made)))
+
+
+def article(title: str) -> ToolResult:
+    text = " ".join(f"{title} fact {i} is a long sentence about {title} and its history." for i in range(200))
+    return ToolResult(True, f"Wikipedia — {title}: {text[:300]}", card="wikipedia",
+                      data={"title": title, "extract": text})
+
+
+def wiki(query: str) -> str:
+    return json.dumps({"tool": "wikipedia", "args": {"query": query}})
+
+
+class ReadingTests(LoopCase):
+    """What the model is given to read of what the tools brought back."""
+
+    async def test_long_articles_in_the_loop_share_the_room_left_for_the_run(self) -> None:
+        # Four articles at the tool's own budget would not fit the room: each
+        # is given its share of what is left.
+        lights = ["Fastnet", "Hook Head", "Loop Head", "Baily"]
+        self.assertGreater(len(lights) * REGISTRY["wikipedia"].budget, agent.RUN_ROOM)
+        support.with_settings(self, agent_max_steps=4, agent_max_decisions=5)
+        engine = self.scripted(*(wiki(name) for name in lights), NONE, "Hook Head came first.")
+        support.played_tools(self, {"wikipedia": [article(name) for name in lights]})
+        _, trace = await self.traced("Which of four Irish lighthouses came first?", engine)
+        self.assertEqual([c.name for c, _ in trace.calls], ["wikipedia"] * 4)
+        prompt = "\n".join(m["content"] for m in trace.prompt)
+        seen = re.findall(r'<data tool="wikipedia">(.*?)</data>', prompt, re.S)
+        self.assertEqual(len(seen), 4)
+        for text in seen:
+            self.assertLessEqual(estimate(text), REGISTRY["wikipedia"].budget)
+        self.assertLessEqual(sum(estimate(text) for text in seen), agent.RUN_ROOM)
+        self.assertGreater(estimate(seen[-1]), agent.LEAST_SHARE, "the last had a share too")
+
+    async def test_a_result_is_read_for_the_message_and_not_its_address(self) -> None:
+        engine = self.scripted("Fifty-four metres.")
+        support.played_tools(self, {"read_url": ToolResult(**fixtures.load("read_url_lighthouses.json")["result"])})
+        trace = agent.Trace()
+        await collect(self.run_message(
+            "https://example.org/lighthouses how tall is the Fastnet one?", engine, trace=trace,
+        ))
+        self.assertIn("The Fastnet Rock lighthouse stands 54 metres tall", trace.prompt[-1]["content"])
 
 
 class LoopRepairTests(LoopCase):
@@ -1624,6 +1905,70 @@ class LoopTraceTests(LoopCase):
         self.assertEqual(shape(stream)[0], "trimmed")  # before anything is chosen
         for before, after in zip(engine.passes, engine.passes[1:]):
             self.assertTrue(after.prompt.startswith(before.prompt + before.output))
+
+
+COMPARE = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
+
+
+class SkillChoiceTests(LoopCase):
+    """The model may choose a skill as it chooses a tool."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.asked = support.played_tools(self, {"wikipedia": [article_of("Python"), article_of("Rust")]})
+
+    async def test_a_chosen_skill_makes_its_lookups_and_answers_with_its_own_cue(self) -> None:
+        from app.skills import SKILLS
+
+        engine = self.scripted(COMPARE, "| | Python | Rust |")
+        stream, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        # One choice, the two lookups, and the answer: the skill ends the looking-up.
+        self.assertEqual([(s.kind, s.name) for s in trace.steps],
+                         [("route", "compare"), ("tool", "wikipedia"), ("tool", "wikipedia"),
+                          ("answer", None)])
+        self.assertEqual([c.via for c, _ in trace.calls], ["model", "model"])
+        self.assertEqual(len(engine.passes), 2)
+        self.assertTrue(trace.prompt[-1]["content"].endswith(SKILLS["compare"].cue))
+        route = support.step(stream, "route", "ok")
+        self.assertEqual((route["label"], route["tool"], route["detail"], route["glyph"]),
+                         ("Compare two things", "compare", "model", "⇹"))
+        self.assertTrue(engine.free)
+
+    async def test_with_the_loop_off_it_is_the_same(self) -> None:
+        engine = self.scripted(COMPARE, "| | Python | Rust |")
+        await collect(agent.run("Which came first, Python or Rust?", persona=get_persona("agent"),
+                                history=[], engine=engine, loop=False))
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        self.assertEqual(len(engine.passes), 2)
+
+    async def test_a_skill_not_given_what_it_needs_is_sent_back_once(self) -> None:
+        half = '{"tool": "compare", "args": {"a": "Python", "b": " "}}'
+        engine = self.scripted(half, COMPARE, "| | Python | Rust |")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual([(s.kind, s.ok) for s in trace.steps][:2], [("route", False), ("repair", True)])
+        self.assertEqual(trace.steps[0].error, "rejected: b is required and was not given")
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+
+    async def test_one_still_not_given_it_is_no_choice_and_nothing_is_looked_up(self) -> None:
+        half = '{"tool": "compare", "args": {"a": "Python", "b": " "}}'
+        engine = self.scripted(half, half, "I can say a little from memory.")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [])
+        self.assertEqual(trace.prompt[-1]["content"], CUE_PLAIN)
+        self.assertEqual(trace.outcome, "answered")
+
+    async def test_its_lookups_are_held_to_the_runs_limit_on_steps(self) -> None:
+        support.with_settings(self, agent_max_steps=1)
+        engine = self.scripted(COMPARE, "Python is older.")
+        _, trace = await self.traced("Which came first, Python or Rust?", engine)
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}])
+
+    async def test_a_skill_with_no_cue_is_not_on_offer(self) -> None:
+        engine = self.scripted('{"tool": "weather_brief", "args": {"location": "Paris"}}', "Hm.")
+        _, trace = await self.traced("Brief me on Paris", engine)
+        self.assertEqual(trace.steps[0].error, "model picked an unknown tool: weather_brief")
+        self.assertNotIn("weather_brief", engine.passes[0].prompt)
 
 
 if __name__ == "__main__":

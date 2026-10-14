@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS steps (
     output_text      TEXT,
     prompt_tokens    INTEGER,
     -- Prompt tokens the model actually had to read, the rest being already
-    -- in its cache. Nothing measures this yet, and it is never estimated.
+    -- in its cache. Only a model server reports it, and it is never estimated.
     new_tokens       INTEGER,
     output_tokens    INTEGER,
     queue_ms         REAL,
@@ -103,6 +103,23 @@ CREATE TABLE IF NOT EXISTS steps (
 );
 CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id, idx);
 CREATE INDEX IF NOT EXISTS idx_steps_conv ON steps(conversation_id, created_at);
+
+-- What the model was sent for an answered message, from the message to the
+-- answer, as parts that say what each one is. The next message is read with
+-- it as it was. It is part of the conversation: deleted with it, and kept as
+-- long as it is.
+CREATE TABLE IF NOT EXISTS context_turns (
+    id               TEXT PRIMARY KEY,
+    conversation_id  TEXT NOT NULL,
+    run_id           TEXT NOT NULL,
+    question_id      TEXT NOT NULL,
+    answer_id        TEXT NOT NULL,
+    -- The system text it was sent under, by its key.
+    system_key       TEXT NOT NULL,
+    parts_json       TEXT NOT NULL,
+    created_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_conv ON context_turns(conversation_id, created_at);
 """
 
 # How long a step is kept when the settings do not say. A trace is a copy of
@@ -225,6 +242,7 @@ def get_conversation(cid: str) -> dict | None:
 
 
 def delete_conversation(cid: str) -> None:
+    _write("DELETE FROM context_turns WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM steps WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM tool_calls WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM messages WHERE conversation_id = ?", (cid,))
@@ -305,6 +323,47 @@ def conversation_messages(cid: str) -> list[dict]:
     )
 
 
+# ------------------------------------------------------------ what was sent --
+
+
+def add_context_turn(
+    cid: str,
+    run_id: str,
+    *,
+    question_id: str,
+    answer_id: str,
+    system_key: str,
+    parts: list[dict],
+) -> str:
+    """Keep what the model was sent for one answered message."""
+    tid = uuid.uuid4().hex
+    _write(
+        "INSERT INTO context_turns (id, conversation_id, run_id, question_id, answer_id,"
+        " system_key, parts_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (tid, cid, run_id, question_id, answer_id, system_key,
+         json.dumps(parts, ensure_ascii=False), time.time()),
+    )
+    return tid
+
+
+def conversation_record(cid: str) -> tuple[list[dict], list[dict]]:
+    """A conversation as the next message is read with it: its messages,
+    oldest first, and what was kept of what each answer was sent."""
+    messages = _rows(
+        "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ?"
+        " ORDER BY created_at ASC",
+        (cid,),
+    )
+    records = _rows(
+        "SELECT question_id, answer_id, system_key, parts_json, created_at FROM context_turns"
+        " WHERE conversation_id = ? ORDER BY created_at ASC",
+        (cid,),
+    )
+    for record in records:
+        record["parts"] = json.loads(record.pop("parts_json"))
+    return messages, records
+
+
 # -------------------------------------------------------------------- steps --
 
 
@@ -371,31 +430,6 @@ def run_steps(run_id: str) -> list[dict]:
         r["ok"] = bool(r["ok"])
         r["mock"] = bool(r["mock"])
     return rows
-
-
-def last_message_asked(cid: str) -> bool:
-    """Whether the last thing said in a conversation was a question the model
-    chose to put to the user in place of an answer.
-
-    It is read from the steps kept for that message: the pass that decided
-    said "ask". Where steps are not kept, the answer is always no, and a reply
-    to such a question is routed like any other message.
-    """
-    rows = _rows(
-        "SELECT s.output_text FROM steps s"
-        " WHERE s.message_id = (SELECT id FROM messages WHERE conversation_id = ?"
-        "                        ORDER BY created_at DESC LIMIT 1)"
-        "   AND s.kind IN ('route', 'repair')"
-        " ORDER BY s.idx DESC LIMIT 1",
-        (cid,),
-    )
-    if not rows or not rows[0]["output_text"]:
-        return False
-    try:
-        said = json.loads(rows[0]["output_text"])
-    except json.JSONDecodeError:
-        return False
-    return isinstance(said, dict) and said.get("tool") == "ask"
 
 
 def prune_steps(keep_days: float | None = None) -> None:

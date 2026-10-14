@@ -317,6 +317,7 @@ register(Tool(
     run=_clock,
     card="clock",
     example="/clock Asia/Tokyo",
+    fresh_for=10 * 60,
 ))
 
 

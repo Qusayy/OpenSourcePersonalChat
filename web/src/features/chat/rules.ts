@@ -58,10 +58,15 @@ export function queueWording(position: number): { text: string; ahead: string } 
   return { text, ahead: position > 0 ? `${position} ahead` : "next in line" };
 }
 
-export function trimmedWording(dropped: number): string {
-  return dropped > 1
-    ? `The ${dropped} oldest messages were dropped to fit the context window.`
-    : "The oldest message was dropped to fit the context window.";
+export function trimmedWording(dropped: number, cut = false): string {
+  const said: string[] = [];
+  if (dropped > 1) {
+    said.push(`The ${dropped} oldest messages were dropped to fit the context window.`);
+  } else if (dropped === 1) {
+    said.push("The oldest message was dropped to fit the context window.");
+  }
+  if (cut) said.push("Your message was too long to read whole; the model read its first part.");
+  return said.join(" ");
 }
 
 /* ------------------------------------------------------- the route line -- */

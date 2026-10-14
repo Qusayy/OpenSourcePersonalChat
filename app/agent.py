@@ -27,21 +27,28 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable
 
 from .config import settings
+from .context import (
+    RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
+)
+from .excerpt import estimate
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
 from .router import (
+    URL_RE,
     Action,
     ToolCall,
     decision_grammar,
     decision_limit,
-    decision_messages,
+    fill_request,
     free_route,
     parse_action,
-    repair_messages,
 )
-from .skills import SAY_SO, Skill, build_prompt, did_not_work
+from .skills import SAY_SO, Offer, Skill, did_not_work, offered, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import Rejection, ToolResult, available, check, was_given
+from .tools.base import (
+    Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
+    was_given,
+)
 from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
@@ -58,7 +65,7 @@ class Step:
     is the tool's own time. A choice made without the model costs nothing.
     """
 
-    kind: str  # route | decide | repair | tool | answer
+    kind: str  # route | fill | decide | repair | tool | answer
     # Whether this step was a pass through the model.
     model: bool = False
     # The tool or skill, where there is one.
@@ -68,8 +75,8 @@ class Step:
     input: dict | None = None
     output: str | None = None
     prompt_tokens: int | None = None
-    # Prompt tokens the model had to read, the rest being in its cache. No
-    # engine reports this yet, and it is never guessed at.
+    # Prompt tokens the model had to read, the rest being in its cache. Only a
+    # model server reports this, and it is never guessed at.
     new_tokens: int | None = None
     output_tokens: int | None = None
     queue_ms: float | None = None
@@ -103,12 +110,26 @@ class Trace:
     # The prompt that pass was given, as it was sent: after the tool results
     # were folded in and after any trimming. None if no answer was begun.
     prompt: list[dict] | None = None
+    # What this run sent, from the message to the answer, and the system text
+    # it was sent under, by its key: what the next message is read with. Set
+    # once the run has answered, or asked.
+    sent: list[Part] | None = None
+    system_key: str | None = None
     # How it ended: answered | asked | stopped | failed. None while it is
     # running. "asked" is a question put to the user in place of an answer.
     outcome: str | None = None
     # The run's own stopwatch, first stage to last. It is a little more than
     # the steps add up to: the difference is the time between them.
     wall_ms: float | None = None
+
+    def turn(self, question: str, at: float | None = None) -> Turn:
+        """This run as the next message is read with it: what it sent, where
+        it answered or asked, and otherwise only the message and the answer."""
+        kept = self.sent if self.outcome in ("answered", "asked") else None
+        return Turn(
+            question, self.answer or "", parts=tuple(kept or ()), system_key=self.system_key,
+            at=time.time() if at is None else at,
+        )
 
     def totals(self) -> dict:
         """The run in a line: what the page is told when it ends.
@@ -147,11 +168,9 @@ ALREADY_LOOKED_UP = (
     "That lookup had already been made and was not repeated; answer from what is above."
 )
 
-# Tokens kept free, when a looping run's conversation is fitted to the window,
-# for what the run itself will add: its choices and what its tools return.
-# With that room left at the start, the beginning of the prompt does not have
-# to change part-way through the run.
-RUN_ROOM = 600
+# The least a lookup in the loop is given to read, however little room is
+# left: a line.
+LEAST_SHARE = 40
 
 
 def what_happened(result: ToolResult) -> str:
@@ -189,8 +208,8 @@ def run(
     tools_enabled: bool | None = None,
     request_id: str | None = None,
     seed: int | None = None,
-    follows_ask: bool = False,
     loop: bool | None = None,
+    context: list[Turn] | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -204,12 +223,14 @@ def run(
     ``seed`` is given to every pass of the run, so that the same message
     against the same model gives the same run. The site leaves it unset.
 
-    ``follows_ask`` says the last thing in ``history`` is a question the model
-    chose to ask the user. This message is then their answer to it, and is
-    routed with that question in view.
-
     ``loop`` lets a tool the model chose earn it another choice, within the
-    limits in the settings. Left unset, the setting decides.
+    limits in the settings. Without it the model chooses once, and the run
+    answers after that one lookup. Left unset, the setting decides.
+
+    ``context`` is the conversation as it was sent, turn by turn, which is
+    what the model reads of it. ``history`` stays what was said, and only
+    that: it is what decides which addresses the user gave. Without
+    ``context`` the conversation is read from ``history``.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -228,8 +249,8 @@ def run(
         tools_enabled=settings.tools_enabled if tools_enabled is None else tools_enabled,
         request_id=trace.run_id,
         seed=seed,
-        follows_ask=follows_ask,
         loop=settings.agent_loop if loop is None else loop,
+        turns=context,
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -248,18 +269,19 @@ class _Run:
     tools_enabled: bool
     request_id: str
     seed: int | None = None
-    follows_ask: bool = False
     # Whether a tool the model chose earns it another choice, and the limits
     # on that for one message.
-    loop: bool = False
+    loop: bool = True
     max_steps: int = 3
     max_decisions: int = 3
     max_seconds: float = 90.0
     # Set once the tools for this message have been chosen without the model:
     # by a skill, a command or a pattern.
     routed: bool = False
-    # What the last tool call came to; None if it was stopped.
+    # What the last tool call came to; None if it was stopped. And what the
+    # model reads of it, when it worked.
     last: ToolResult | None = None
+    seen: str = ""
     # Time spent waiting for the slot that no pass has yet been charged for.
     slot_wait: float = 0.0
     # A question the model chose to ask in place of an answer, and the pass
@@ -267,11 +289,32 @@ class _Run:
     question: str | None = None
     asked_by: Completion | None = None
     # The calls this message was routed to, and the line each successful one
-    # gave back for the model to read.
+    # gave back for the model to read, with the tool it came from.
     calls: list[ToolCall] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
+    found: list[str] = field(default_factory=list)
     # And what each one that failed is known to have done, for the same reader.
     failures: list[str] = field(default_factory=list)
+    lost: list[str] = field(default_factory=list)
+    # The conversation so far, as turns. Left unset, it is made from
+    # ``history``, which stays what the user and the model said and nothing
+    # else: what the address rule reads.
+    turns: list[Turn] | None = None
+    # The message as the model reads it: cut to fit the window, if it had to
+    # be, and whether it was. And what was cut from the conversation to make
+    # room, as the page is told it.
+    said: str = ""
+    cut: bool = False
+    trim: dict | None = None
+    trim_told: bool = False
+    # Set while the run holds the slot for every pass it makes, outside the
+    # loop: a skill whose inputs the model filled in.
+    holding: bool = False
+    # What was sent to have them filled in, and what the model wrote.
+    filled: list[Part] | None = None
+
+    def __post_init__(self) -> None:
+        self.said = self.said or self.message
     # Set by whoever asks for this run to stop. Looked at before each stage,
     # and waited on while a tool is out.
     stop: Stop = field(default_factory=Stop)
@@ -297,34 +340,97 @@ class _Run:
             yield "run", self.trace.totals()
 
     async def _stages(self) -> AsyncIterator[Event]:
-        # What costs nothing comes first: a skill, a command, a pattern.
-        async for event in self._free():
-            yield event
-        # What is left is the model's to decide, where the persona has tools.
-        tools = available() if (self.persona.tools and not self.routed) else []
-        if tools and self.loop:
-            async with aclosing(self._looping(tools)) as events:
+        if self.turns is None:
+            self.turns = turns_from_history(self.history)
+        self.said, self.cut = self._cap()
+        try:
+            # What costs nothing comes first: a skill, a command, a pattern.
+            async for event in self._free():
+                yield event
+            # What is left is the model's to decide, where the persona has tools.
+            tools = available() if (self.persona.tools and not self.routed) else []
+            if tools:
+                async with aclosing(self._looping(offered(tools))) as events:
+                    async for event in events:
+                        yield event
+                return
+            for index, call in enumerate(self.calls):
+                if self.stop.is_set():
+                    break
+                # A run holding the slot lends it out while a tool is away.
+                acting = self._lookup(index, call) if self.holding else self._act(index, call)
+                async for event in acting:
+                    yield event
+            if self.stop.is_set():
+                yield self._stopped()
+                return
+            system, now = self._system(), self._prompt()
+            window = self._window(system, now, run=False)
+            if self._trimmed(window):
+                yield "trimmed", self.trim
+            self._sending(system, now)
+            async with aclosing(self._answer(window.messages, held=self.holding)) as events:
                 async for event in events:
                     yield event
-            return
-        if tools:
-            async for event in self._choose_once(tools):
-                yield event
-        if self.question is not None and not self.stop.is_set():
-            for event in self._ask():
-                yield event
-            return
-        for index, call in enumerate(self.calls):
-            if self.stop.is_set():
-                break
-            async for event in self._act(index, call):
-                yield event
-        if self.stop.is_set():
-            yield self._stopped()
-            return
-        async with aclosing(self._answer(self._prompt())) as events:
-            async for event in events:
-                yield event
+        finally:
+            if self.holding:
+                self.engine.give_slot(self.request_id)
+
+    # ------------------------------------------------------------ the window --
+
+    def _system(self) -> str:
+        """The system text of every pass of this run. A persona with tools
+        reads the same one whether the model chooses or something else did,
+        so a conversation keeps one system text from message to message."""
+        tools = available() if self.persona.tools and self.tools_enabled else []
+        return system_for(self.persona, offered(tools)) if tools else self.persona.system
+
+    def _room(self, *, run: bool) -> int:
+        """Tokens the prompt may take: the window, less the reply and the
+        headroom above it, and less the room for a run's own additions where
+        ``run`` says there is one."""
+        cfg = self.engine.cfg
+        return cfg.n_ctx - self.persona.max_tokens - cfg.reply_headroom - (RUN_ROOM if run else 0)
+
+    def _cap(self) -> tuple[str, bool]:
+        """The message cut to what the window can give it beside the system
+        text, a summary of older turns and, for a persona with tools, the
+        room for a run, if it is longer. Counted only when it might be: no
+        message has more tokens than bytes."""
+        system = self._system()
+        tools = system != self.persona.system
+        limit = self._room(run=tools) - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        if len(self.message.encode("utf-8")) <= limit:
+            return self.message, False
+        return cap(self.message, max(1, limit), self.engine.count_tokens)
+
+    def _window(self, system: str, now: list[Part], *, run: bool) -> Window:
+        """The prompt for this message under ``system``: the conversation so
+        far, fitted to the room, then ``now``."""
+        return fit(
+            system, self.turns or [], now, room=self._room(run=run),
+            count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
+        )
+
+    def _sending(self, system: str, parts: list[Part]) -> None:
+        """Keep what this run is sending of its own, under ``system``. The
+        answer is added once it is written."""
+        self.trace.sent = list(parts)
+        self.trace.system_key = key(system)
+
+    def _trimmed(self, window: Window) -> bool:
+        """Whether anything had to give for the prompt to fit that the page
+        has not been told of yet. What it was is kept in ``trim`` for the
+        page and the trace."""
+        if not window.summarised and not self.cut:
+            return False
+        dropped = sum(bool(t.question) + bool(t.answer) for t in (self.turns or [])[:window.summarised])
+        self.trim = {
+            "dropped": dropped, "turns": window.turns, "summarised": window.summarised,
+            "cut": self.cut,
+        }
+        told, self.trim_told = self.trim_told, True
+        return not told
 
     def _ask(self) -> list[Event]:
         """How a run ends when the model asked a question instead of choosing.
@@ -342,6 +448,8 @@ class _Run:
             "ttft_ms": said.ttft_ms,
             "queue_wait_ms": said.queue_wait_ms,
             "prompt_tokens": said.prompt_tokens,
+            "read_tokens": said.read_tokens,
+            "cached_tokens": said.cached_tokens,
             "completion_tokens": said.completion_tokens or 0,
             # The pass wrote JSON under a grammar. Its speed is not the speed
             # of an answer, and is not passed off as one.
@@ -369,6 +477,8 @@ class _Run:
             "ttft_ms": None,
             "queue_wait_ms": None,
             "prompt_tokens": None,
+            "read_tokens": None,
+            "cached_tokens": None,
             "completion_tokens": 0,
             "prefill_tps": None,
             "gen_tps": None,
@@ -385,16 +495,42 @@ class _Run:
         made, or if there is no choosing to do at all."""
         if self.skill is not None:
             self.routed = True
-            self.calls = self.skill.prepare(self.message)
-            self.trace.steps.append(Step(
-                "route", name=self.skill.id, via="skill",
-                input={"calls": [{"tool": c.name, "args": c.args} for c in self.calls]},
-            ))
-            yield "step", {
+            values = self.skill.read(self.message)
+            closing = {
                 "id": "route", "kind": "route", "status": "ok",
                 "label": self.skill.name, "detail": "skill",
                 "glyph": self.skill.glyph, "tool": self.skill.id, "ms": 0,
             }
+            if self._fillable(values):
+                # The slot is taken once for the fill, the lookups and the
+                # answer, so the answer is written on from what the fill read.
+                self.holding = True
+                async for event in self._take():
+                    yield event
+                if self.stop.is_set():
+                    return
+                # A pass is about to be made, so one is announced.
+                yield "step", {
+                    "id": "route", "kind": "route", "status": "running",
+                    "label": self.skill.name, "glyph": self.skill.glyph,
+                }
+                window = self._window(self._system(), self._fill_parts(), run=False)
+                if self._trimmed(window):
+                    yield "trimmed", self.trim
+                values, said = await self._fill(window.messages, values)
+                if self.stop.is_set():
+                    yield "step", {**closing, "status": "stopped", "ms": round(said.ms, 1)}
+                    return
+                closing.update(
+                    ms=round(said.ms, 1), tokens_in=said.prompt_tokens,
+                    tokens_out=said.completion_tokens,
+                )
+            self.calls = self.skill.calls(values)
+            self.trace.steps.append(Step(
+                "route", name=self.skill.id, via="skill",
+                input={"calls": [{"tool": c.name, "args": c.args} for c in self.calls]},
+            ))
+            yield "step", closing
             return
         if not self.tools_enabled:
             self.routed = True
@@ -411,37 +547,86 @@ class _Run:
             ))
             yield "step", self._routed(call, tier, ms=0)
 
-    async def _choose_once(self, tools: list) -> AsyncIterator[Event]:
-        """One choice by the model, and that is all: the run then acts on it
-        and answers."""
-        # Only now is a pass about to be made, so only now is one announced.
-        yield "step", {
-            "id": "route", "kind": "route", "status": "running",
-            "label": "Choosing a tool", "glyph": "◇",
-        }
-        action, passes = await self._decide(tools)
-        # The choice is one step on the page however many passes it took, and
-        # says what all of them cost.
-        ms = round(sum(said.ms for said in passes), 1)
-        if self.stop.is_set():
-            # Stopped while the choice was being made. Whatever came back is
-            # not acted on, and the step that was announced is closed.
-            yield "step", {
-                "id": "route", "kind": "route", "status": "stopped",
-                "label": "Choosing a tool", "glyph": "◇", "ms": ms,
-            }
-            return
-        if action.kind == "tool":
-            self.calls = [action.call]
-        elif action.kind == "ask":
-            self.question, self.asked_by = action.question, passes[-1]
-        closing = self._routed(action.call, "model", ms=ms)
-        if action.kind == "ask":
-            closing["label"] = "Asking you first"
-        # The choice cost passes, and a pass is counted in tokens.
-        closing["tokens_in"] = _total(said.prompt_tokens for said in passes)
-        closing["tokens_out"] = _total(said.completion_tokens for said in passes)
-        yield "step", closing
+    def _fillable(self, values: dict[str, str]) -> bool:
+        """Whether to ask the model for the inputs a visitor's skill did not
+        find in their message. Only where the skill has a pattern that missed:
+        the whole message is the one input of a skill without one. Never for
+        an address, which the model may not supply."""
+        missing = self.skill.missing(values)
+        return bool(
+            missing and self.skill.find is not None and self.said.strip()
+            and not all(arg.quoted for arg in missing)
+        )
+
+    def _fill_parts(self) -> list[Part]:
+        """The message, and the request for the skill's inputs after it."""
+        return [
+            Part("user", "question", self.said),
+            Part("user", "instruction", fill_request(self.skill.name, self.skill.inputs)),
+        ]
+
+    async def _fill(
+        self, messages: list[dict], values: dict[str, str]
+    ) -> tuple[dict[str, str], Completion]:
+        """One short pass for the skill's inputs, held to a grammar of them.
+
+        What it says is checked like a call: of the right kind, each one
+        there, and an address only if the user wrote it. If it holds, it is
+        what the skill runs with, and the answer is written on from it; if
+        not, the skill runs with what its pattern found, or the whole
+        message.
+        """
+        inputs = self.skill.inputs
+        said = await self.engine.complete_json(
+            messages, args_to_gbnf(inputs), args_ceiling(inputs),
+            request_id=self.request_id, seed=self.seed, held=True,
+        )
+        clean: dict = {}
+        if said.parsed is None:
+            reasons: tuple[str, ...] = ("the reply was not a complete JSON object",)
+        else:
+            clean, rejection = check_args(self.skill.name, inputs, said.parsed)
+            reasons = rejection.reasons if rejection else ()
+            # Text with nothing in it is not an input given.
+            reasons += tuple(
+                f"{arg.name} is required and was not given"
+                for arg in self.skill.missing({k: str(v).strip() for k, v in clean.items()})
+                if arg.name in clean
+            )
+            theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
+            reasons += tuple(
+                f"{arg.name} must be an address the user gave; got {clean[arg.name]!r}"
+                for arg in inputs
+                if arg.quoted and clean.get(arg.name) and not was_given(clean[arg.name], theirs)
+            )
+        stopped = said.cancelled or self.stop.is_set()
+        error = "stopped" if stopped else (said.error or ("; ".join(reasons) or None))
+        self.trace.steps.append(self._passed(
+            "fill", said, name=self.skill.id, given={"text": self.said}, error=error,
+        ))
+        if error is not None:
+            return values, said
+        self.filled = [*self._fill_parts(), Part("assistant", "action", said.raw)]
+        return {name: str(value) for name, value in clean.items()}, said
+
+    def _passed(
+        self, kind: str, said: Completion, *, name: str | None, given: dict, error: str | None
+    ) -> Step:
+        """A pass through the model as a step, charged with any wait for the
+        slot that no pass has paid for yet."""
+        # A run that holds the slot waited for it before this pass, not in it.
+        # That wait is charged to the pass it was waited for.
+        waited, self.slot_wait = self.slot_wait, 0.0
+        queued = None if said.queue_wait_ms is None and not waited else (said.queue_wait_ms or 0.0) + waited
+        # A pass that never reached the model still took the time it took.
+        cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
+        return Step(
+            kind, model=True, name=name, via="model", input=given, output=said.raw,
+            prompt_tokens=said.prompt_tokens, new_tokens=said.read_tokens,
+            output_tokens=said.completion_tokens,
+            queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
+            ok=error is None, error=error,
+        )
 
     def _routed(self, call: ToolCall | None, tier: str, *, ms: float) -> dict:
         """The step that says what was chosen, and by which tier."""
@@ -454,52 +639,6 @@ class _Run:
             "tool": call.name if call else None,
             "ms": ms,
         }
-
-    async def _decide(self, tools: list) -> tuple[Action, list[Completion]]:
-        """Ask the model which tool, if any. Returns what it chose and every
-        pass that took.
-
-        Usually that is one pass. If the call it chose is one the tool cannot
-        take, it is told why and asked once more, and whatever it says then is
-        what the run goes on with: a call that can be made, no call at all, or
-        a call that still cannot be made. That last one is not argued with a
-        second time, and it is not made: it is shown to the visitor as a call
-        that was refused, with the reason.
-        """
-        messages = decision_messages(self.message, tools, self._asked())
-        action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
-        passes = [said]
-        if action.kind != "tool" or self.stop.is_set():
-            return action, passes
-        rejection = self._refusal(action.call)
-        if rejection is None:
-            return action, passes
-
-        # The step just written down chose a call that was not made.
-        self.trace.steps[-1].ok = False
-        self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
-        action, said = await self._choose(
-            "repair", repair_messages(messages, said.raw, rejection), tools,
-            {"rejected": list(rejection.reasons)},
-        )
-        if action.kind == "tool" and not self.stop.is_set():
-            still = self._refusal(action.call)
-            if still is not None:
-                self.trace.steps[-1].ok = False
-                self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
-                # Carried with the call, so that it is refused and not run.
-                action.call.meta["refusal"] = still
-        return action, [*passes, said]
-
-    def _asked(self) -> tuple[str, str] | None:
-        """The exchange this message answers, if it answers a question the
-        model asked: what the user had sent, and what they were asked back."""
-        if not self.follows_ask or len(self.history) < 2:
-            return None
-        sent, question = self.history[-2], self.history[-1]
-        if sent["role"] != "user" or question["role"] != "assistant":
-            return None
-        return sent["content"], question["content"]
 
     def _refusal(self, call: ToolCall) -> Rejection | None:
         """Why a call the model chose cannot be made as it stands, if it cannot.
@@ -534,24 +673,13 @@ class _Run:
             messages, decision_grammar(tools), decision_limit(tools),
             request_id=self.request_id, seed=self.seed, held=held,
         )
-        action = parse_action(said)
+        action = parse_action(said, {c.name: c.skill for c in tools if isinstance(c, Offer)})
         stopped = said.cancelled or self.stop.is_set()
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
-        # A run that holds the slot waited for it before this pass, not in it.
-        # That wait is charged to the pass it was waited for.
-        waited, self.slot_wait = self.slot_wait, 0.0
-        queued = None if said.queue_wait_ms is None and not waited else (said.queue_wait_ms or 0.0) + waited
-        # A pass that never reached the model still took the time it took.
-        cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
-        self.trace.steps.append(Step(
-            kind, model=True, name=action.call.name if action.call else None, via="model",
-            input=given, output=said.raw,
-            prompt_tokens=said.prompt_tokens, output_tokens=said.completion_tokens,
-            queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
-            ok=error is None, error=error,
-        ))
+        name = action.call.name if action.call else (action.skill.id if action.skill else None)
+        self.trace.steps.append(self._passed(kind, said, name=name, given=given, error=error))
         return action, said
 
     # ------------------------------------------------------------- the loop --
@@ -568,10 +696,17 @@ class _Run:
         how a small model's commonest loop is cut. When something other than
         the model ends the looking-up, the answer pass is told so in a line,
         so that the reply can say what was not found.
+
+        With the loop off it is the same transcript and the same passes, cut
+        short: one choice, sent back once if it cannot be made, at most one
+        lookup, and then the answer.
         """
-        transcript, dropped = self._transcript(tools)
-        if dropped:
-            yield "trimmed", {"dropped": dropped}
+        single = not self.loop
+        own: str | None = None
+        transcript = self._transcript(tools)
+        if self.trim:
+            yield "trimmed", self.trim
+        start = estimate(transcript.rendered())
         made: set[str] = set()
         decisions = steps = 0
         began = time.perf_counter()
@@ -593,7 +728,8 @@ class _Run:
                     "label": "Choosing a tool", "glyph": "◇", "pass": number,
                 }
                 action, passes = await self._decision(
-                    transcript, tools, first=number == 1, room=self.max_decisions - decisions
+                    transcript, tools, first=number == 1,
+                    room=2 if single else self.max_decisions - decisions,
                 )
                 decisions += len(passes)
                 ms = round(sum(said.ms for said in passes), 1)
@@ -609,14 +745,27 @@ class _Run:
                     tokens_in=_total(said.prompt_tokens for said in passes),
                     tokens_out=_total(said.completion_tokens for said in passes),
                 )
+                if action.kind == "skill":
+                    closing.update(
+                        label=action.skill.name, glyph=action.skill.glyph, tool=action.skill.id,
+                    )
                 if action.kind == "ask":
                     closing["label"] = "Asking you first"
                     self.question, self.asked_by = action.question, passes[-1]
                     yield "step", closing
+                    # What the model wrote, the question in it, is the reply.
+                    self._sending(transcript.parts()[0].content, transcript.run_parts())
                     for event in self._ask():
                         yield event
                     return
                 yield "step", closing
+                if action.kind == "skill":
+                    skill: Skill = action.skill
+                    own = skill.cue
+                    async for event in self._skill_lookups(skill, action.values, transcript, made,
+                                                           steps, start, single):
+                        yield event
+                    break  # a skill's lookups are all it looks up
                 if action.kind != "tool":
                     break  # the model has what it needs
                 key = self._key(action.call)
@@ -625,20 +774,27 @@ class _Run:
                     break
                 made.add(key)
                 self.calls.append(action.call)
-                async for event in self._lookup(steps, action.call):
+                # An even share of the room the run has left, so that the
+                # last lookup it may make has as much to read as the first.
+                left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+                share = max(LEAST_SHARE, left // (1 if single else self.max_steps - steps))
+                async for event in self._lookup(steps, action.call, budget=share):
                     yield event
                 steps += 1
                 if self.last is None:
                     break  # stopped while the tool was out
                 transcript.observation(
                     action.call.name,
-                    self.last.summary if self.last.ok else what_happened(self.last),
+                    self.seen if self.last.ok else what_happened(self.last),
                     ok=self.last.ok,
                 )
+                if single:
+                    break  # one lookup, and the answer
             if self.stop.is_set():
                 yield self._stopped()
                 return
-            transcript.answer_cue(note)
+            transcript.answer_cue(note, own)
+            self._sending(transcript.parts()[0].content, transcript.run_parts())
             async with aclosing(self._answer(transcript.messages(), held=True)) as events:
                 async for event in events:
                     yield event
@@ -647,17 +803,42 @@ class _Run:
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
 
-    def _transcript(self, tools: list) -> tuple[Transcript, int]:
+    async def _skill_lookups(
+        self, skill: Skill, values: dict, transcript: Transcript, made: set[str],
+        steps: int, start: int, single: bool,
+    ) -> AsyncIterator[Event]:
+        """The lookups of a skill the model chose, each read into the
+        transcript as a lookup of its own would be. They are steps of the
+        run, held to its limit on steps and never made twice."""
+        for call in skill.calls(values):
+            if self.stop.is_set() or (not single and steps >= self.max_steps):
+                break
+            call = ToolCall(call.name, call.args, via="model")
+            key = self._key(call)
+            if key in made:
+                continue
+            made.add(key)
+            self.calls.append(call)
+            left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+            lookups = len(skill.steps) if single else max(1, self.max_steps - steps)
+            share = max(LEAST_SHARE, left // lookups)
+            async for event in self._lookup(steps, call, budget=share):
+                yield event
+            steps += 1
+            if self.last is None:
+                break  # stopped while the tool was out
+            transcript.observation(
+                call.name, self.seen if self.last.ok else what_happened(self.last), ok=self.last.ok,
+            )
+
+    def _transcript(self, tools: list) -> Transcript:
         """The run's one prompt, with as much of the conversation as leaves
-        room for the run. Returns it and how many old turns did not fit."""
-        system = system_for(self.persona, tools)
-        base = [
-            {"role": "system", "content": system},
-            *({"role": m["role"], "content": m["content"]} for m in self.history),
-            {"role": "user", "content": self.message},
-        ]
-        fitted, _, dropped = self.engine.fit_context(base, self.persona.max_tokens + RUN_ROOM)
-        return Transcript(system, fitted[1:-1], self.message), dropped
+        room for the run. What had to give for it is kept in ``trim``."""
+        window = self._window(
+            system_for(self.persona, tools), [Part("user", "question", self.said)], run=True
+        )
+        self._trimmed(window)
+        return Transcript.fitted(window.parts)
 
     async def _take(self) -> AsyncIterator[Event]:
         """Take the slot for the whole run, passing on the notices of its
@@ -687,17 +868,16 @@ class _Run:
         passes = [said]
         if said.raw:
             transcript.action(said.raw)
-        if action.kind != "tool" or self.stop.is_set():
+        if action.kind not in ("tool", "skill") or self.stop.is_set():
             return action, passes
-        rejection = self._refusal(action.call)
+        rejection = self._refused(action)
         if rejection is None:
             return action, passes
 
         self.trace.steps[-1].ok = False
         self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
         if room < 2:
-            action.call.meta["refusal"] = rejection
-            return action, passes
+            return self._carried(action, rejection), passes
         transcript.rejection(rejection.reasons)
         action, said = await self._choose(
             "repair", transcript.messages(), tools, {"rejected": list(rejection.reasons)}, held=True
@@ -705,13 +885,47 @@ class _Run:
         passes.append(said)
         if said.raw:
             transcript.action(said.raw)
-        if action.kind == "tool" and not self.stop.is_set():
-            still = self._refusal(action.call)
+        if action.kind in ("tool", "skill") and not self.stop.is_set():
+            still = self._refused(action)
             if still is not None:
                 self.trace.steps[-1].ok = False
                 self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
-                action.call.meta["refusal"] = still
+                action = self._carried(action, still)
         return action, passes
+
+    def _refused(self, action: Action) -> Rejection | None:
+        """Why the call or the skill the model chose cannot be made as it
+        stands, if it cannot. A skill's inputs are checked as a call's are,
+        and the inputs it may go on with are kept with it."""
+        if action.kind == "tool":
+            return self._refusal(action.call)
+        skill: Skill = action.skill
+        clean, rejection = check_args(skill.name, skill.inputs, action.values)
+        reasons = list(rejection.reasons) if rejection else []
+        reasons += [
+            f"{arg.name} is required and was not given"
+            for arg in skill.missing({k: str(v).strip() for k, v in clean.items()})
+            if arg.name in clean
+        ]
+        theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
+        reasons += [
+            f"{arg.name} must be an address the user gave; got {clean[arg.name]!r}"
+            for arg in skill.inputs
+            if arg.quoted and clean.get(arg.name) and not was_given(clean[arg.name], theirs)
+        ]
+        if not reasons:
+            action.values = {name: str(value) for name, value in clean.items()}
+            return None
+        said = rejection.summary if rejection else f"{skill.name} was not given what it needs."
+        return Rejection(tuple(reasons), said, "bad input")
+
+    def _carried(self, action: Action, rejection: Rejection) -> Action:
+        """A choice that stays refused. A call is carried on as refused, to
+        be shown failing and never made; a skill is no choice at all."""
+        if action.kind == "tool":
+            action.call.meta["refusal"] = rejection
+            return action
+        return Action("final", raw=action.raw, note="rejected: " + "; ".join(rejection.reasons))
 
     def _key(self, call: ToolCall) -> str:
         """A call as it is compared with the ones already made: the tool, and
@@ -724,7 +938,9 @@ class _Run:
         }
         return call.name + " " + json.dumps(plain, sort_keys=True, ensure_ascii=False)
 
-    async def _lookup(self, index: int, call: ToolCall) -> AsyncIterator[Event]:
+    async def _lookup(
+        self, index: int, call: ToolCall, *, budget: int | None = None
+    ) -> AsyncIterator[Event]:
         """One tool call of a run that is holding the slot.
 
         A tool that works here takes milliseconds, and the slot is kept. One
@@ -740,7 +956,7 @@ class _Run:
         )
         if lend:
             self.engine.give_slot(self.request_id)
-        async for event in self._act(index, call):
+        async for event in self._act(index, call, budget=budget):
             yield event
         if lend and not self.stop.is_set():
             async for event in self._take():
@@ -748,7 +964,12 @@ class _Run:
 
     # ---------------------------------------------------------- one tool --
 
-    async def _act(self, index: int, call: ToolCall) -> AsyncIterator[Event]:
+    async def _act(
+        self, index: int, call: ToolCall, *, budget: int | None = None
+    ) -> AsyncIterator[Event]:
+        """Make one call and say what came of it. What the model reads of a
+        result that worked is kept in ``seen``: within ``budget`` tokens if
+        given, and the tool's own budget in any case."""
         tool = REGISTRY.get(call.name)
         step_id = f"tool-{index}"
         label = tool.label if tool else call.name
@@ -790,7 +1011,11 @@ class _Run:
             "detail": None if result.ok else (result.error or "failed"),
         }
         if result.ok:
-            self.summaries.append(f"{call.name}: {result.summary}")
+            self.seen = (
+                tool.observation(result, self.purpose, budget) if tool else result.summary
+            )
+            self.summaries.append(f"{call.name}: {self.seen}")
+            self.found.append(call.name)
             yield "card", {
                 "step_id": step_id, "card": result.card,
                 "tool": call.name, "data": result.data,
@@ -800,6 +1025,7 @@ class _Run:
             # well: left to think nothing was tried, it answers from memory
             # beside a card that says the lookup failed.
             self.failures.append(f"{call.name}: {what_happened(result)}")
+            self.lost.append(call.name)
             yield "card", {
                 "step_id": step_id, "card": "error", "tool": call.name,
                 "data": {"message": result.summary or result.error},
@@ -825,13 +1051,22 @@ class _Run:
 
     # ---------------------------------------------------------- the prompt --
 
-    def _prompt(self) -> list[dict]:
-        messages = [{"role": "system", "content": self.persona.system}]
-        messages += [{"role": m["role"], "content": m["content"]} for m in self.history]
+    @property
+    def purpose(self) -> str:
+        """What a result is read for: the message, without any address in it.
+        An address says where to look, not what to look for."""
+        return " ".join(URL_RE.sub(" ", self.message).split())
 
+    def _prompt(self) -> list[Part]:
+        """What this message is read as, after the conversation so far: the
+        message, what was looked up for it and how to use that, as parts."""
+        question = Part("user", "question", self.said)
         if self.skill is not None:
-            content = build_prompt(self.skill, self.message, self.summaries, self.failures)
-        elif self.summaries:
+            return [*(self.filled or ()), *prompt_parts(
+                self.skill, self.said, self.summaries, self.failures,
+                tuple(dict.fromkeys(self.found + self.lost)),
+            )]
+        if self.summaries:
             # The tool output goes inside the user turn, not into a second
             # system message. A 1.5B model barely attends to a trailing system
             # message and falls back on its "I don't have real-time data"
@@ -839,40 +1074,45 @@ class _Run:
             # card beside it shows today's temperature. Stated as part of the
             # question, it complies.
             facts = "\n".join(f"- {s}" for s in self.summaries)
-            content = (
-                f"{self.message}\n\n"
-                f"Live data, retrieved just now by a tool:\n{facts}\n\n"
-            )
+            parts = [question, Part(
+                "user", "data", f"Live data, retrieved just now by a tool:\n{facts}",
+                tuple(dict.fromkeys(self.found)),
+            )]
             if self.failures:
-                content += "A lookup was also tried and did not work:\n" + did_not_work(self.failures) + "\n\n"
-            content += (
+                parts.append(Part(
+                    "user", "failed",
+                    "A lookup was also tried and did not work:\n" + did_not_work(self.failures),
+                    tuple(dict.fromkeys(self.lost)),
+                ))
+            instruction = (
                 "Answer the question using only the data above. It is "
                 "current and correct. Do not say you lack real-time "
                 "access, and do not recalculate any figure."
             )
             if self.failures:
-                content += " " + SAY_SO
-        elif self.failures:
-            content = (
-                f"{self.message}\n\n"
-                "A lookup was tried for this and did not work:\n"
-                + did_not_work(self.failures) + "\n\n" + SAY_SO
-            )
-        else:
-            content = self.message
-        messages.append({"role": "user", "content": content})
-        return messages
+                instruction += " " + SAY_SO
+            return [*parts, Part("user", "instruction", instruction)]
+        if self.failures:
+            return [question, Part(
+                "user", "failed",
+                "A lookup was tried for this and did not work:\n" + did_not_work(self.failures),
+                tuple(dict.fromkeys(self.lost)),
+            ), Part("user", "instruction", SAY_SO)]
+        return [question]
 
     # ---------------------------------------------------------- the answer --
 
     async def _answer(self, messages: list[dict], *, held: bool = False) -> AsyncIterator[Event]:
         sampling = self.persona.sampling()
+        # Fitted to the window already. The engine's own fitting is kept as
+        # the last guard: a run that added more than the room it was given.
         fitted, _, dropped = self.engine.fit_context(messages, sampling["max_tokens"])
-        # Kept with the step: a prompt that lost its oldest turns is not the
-        # prompt the conversation suggests.
-        trimmed = {"dropped": dropped} if dropped else None
         if dropped:
+            self.trim = {**(self.trim or {"cut": self.cut}), "dropped": dropped}
             yield "trimmed", {"dropped": dropped}
+        # Kept with the step: a prompt that lost its oldest turns, or the end
+        # of its message, is not the prompt the conversation suggests.
+        trimmed = self.trim
 
         yield "step", {
             "id": "answer", "kind": "model", "status": "running",
@@ -899,6 +1139,7 @@ class _Run:
                 self.trace.steps.append(Step(
                     "answer", model=True, input=trimmed,
                     prompt_tokens=data.get("prompt_tokens"),
+                    new_tokens=data.get("read_tokens"),
                     output_tokens=data.get("completion_tokens"),
                     queue_ms=queued if queued is None and not waited else (queued or 0.0) + waited,
                     first_token_ms=data.get("ttft_ms"),
@@ -907,6 +1148,8 @@ class _Run:
                 ))
                 self.trace.outcome = "stopped" if stopped else "answered"
                 self.trace.answer = data.pop("text", "")
+                if self.trace.sent is not None:
+                    self.trace.sent.append(Part("assistant", "answer", self.trace.answer))
                 data["tool_calls"] = len(self.calls)
                 self.trace.usage = data
                 yield "step", {

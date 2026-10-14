@@ -17,12 +17,17 @@ when the reader goes away; that is how Stop reaches it.
 
 Every failure is a ``ServerError`` whose message can be shown to a visitor: it
 says what went wrong and never where the server is.
+
+The last piece of a completed answer says what the server did with the prompt:
+how much of it it read and how much it took from its cache. That is kept, as
+far as the server reports it, and nothing is guessed where it does not.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 import httpx
@@ -38,6 +43,55 @@ HEALTH_TIMEOUT = 2.0
 
 class ServerError(RuntimeError):
     """The model server failed or could not be reached."""
+
+
+@dataclass
+class Reading:
+    """What the server did with one prompt, as it reported it at the end of
+    the answer. A figure it did not report stays None; so does every figure of
+    an answer that was stopped before its end."""
+
+    # The whole prompt, as the server's own template and tokenizer made it.
+    prompt: int | None = None
+    # The part it had to read; the rest it took from its cache.
+    read: int | None = None
+    cached: int | None = None
+
+    def take(self, chunk: dict) -> None:
+        """Keep what one piece of the answer says about the prompt.
+
+        llama-server puts ``timings`` on its last piece (``prompt_n`` read,
+        ``cache_n`` taken from the cache) and, depending on its version,
+        ``usage`` there or on a piece of its own.
+        """
+        timings = chunk.get("timings")
+        if isinstance(timings, dict):
+            self.read = _count(timings.get("prompt_n"), self.read)
+            self.cached = _count(timings.get("cache_n"), self.cached)
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            self.prompt = _count(usage.get("prompt_tokens"), self.prompt)
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                self.cached = _count(details.get("cached_tokens"), self.cached)
+
+    def settle(self) -> None:
+        """Fill in the one figure the other two give, once the answer is over:
+        the prompt is what was read and what was cached, together."""
+        if self.read is None:
+            return
+        if self.cached is None and self.prompt is not None and self.prompt >= self.read:
+            self.cached = self.prompt - self.read
+        elif self.prompt is None and self.cached is not None:
+            self.prompt = self.read + self.cached
+
+
+def _count(value: Any, current: int | None) -> int | None:
+    """A token count the server sent, or what was known before if it is not
+    one. llama-server reports -1 for a figure it does not have."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return current
 
 
 class LlamaServer:
@@ -77,12 +131,13 @@ class LlamaServer:
         except (ValueError, KeyError, TypeError) as exc:
             raise ServerError("the model server sent a token count it could not be read from") from exc
 
-    def stream(self, body: dict) -> Iterator[str]:
+    def stream(self, body: dict, reading: Reading | None = None) -> Iterator[str]:
         """One chat completion, as the pieces of text it is written in.
 
         ``body`` is the request: the messages and the sampling settings. The
         prompt is always offered to the server's cache, so a conversation's
-        next turn reads only what is new.
+        next turn reads only what is new. ``reading``, if given, is filled in
+        with what the server says it read, once the answer has ended.
         """
         payload = {**body, "stream": True, "cache_prompt": True}
         try:
@@ -94,13 +149,15 @@ class LlamaServer:
                         continue
                     data = line[len("data:"):].strip()
                     if data == "[DONE]":
-                        return
+                        break
                     try:
                         chunk = json.loads(data)
                     except ValueError as exc:
                         raise ServerError("the model server sent something that is not JSON") from exc
                     if chunk.get("error"):
                         raise ServerError("the model server failed while writing")
+                    if reading is not None:
+                        reading.take(chunk)
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -109,3 +166,5 @@ class LlamaServer:
                         yield text
         except httpx.HTTPError as exc:
             raise ServerError("the model server is not answering") from exc
+        if reading is not None:
+            reading.settle()

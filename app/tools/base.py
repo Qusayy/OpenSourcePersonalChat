@@ -6,6 +6,10 @@ Two things a tool returns, and the difference matters:
 * ``summary`` — one plain line handed back to the model. Deliberately terse,
   because a 1.5B model given a page of JSON will start reciting it instead of
   answering.
+
+What the model reads of a result is its ``observation``: never more than the
+tool's ``budget`` in tokens, and for a tool that brings back pages of text,
+the part of it that bears on the question.
 """
 
 from __future__ import annotations
@@ -16,9 +20,10 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable, Protocol
 
 from ..config import settings
+from ..excerpt import clip
 
 
 @dataclass(frozen=True)
@@ -77,9 +82,27 @@ class Tool:
     card: str
     network: bool = False
     example: str = ""
+    # The most tokens of a result the model is given to read, counted as a
+    # byte in three. A one-line result is well inside it.
+    budget: int = 80
+    # How a result is read for a purpose within a budget, for a tool whose
+    # results are longer than a line. Without it, the summary is read.
+    observe: Callable[[ToolResult, str, int], str] | None = None
+    # How long a result stays true, in seconds. Replayed later than that in a
+    # conversation, it is replaced by a line saying it is out of date. None
+    # for a result that does not go out of date.
+    fresh_for: float | None = None
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
+
+    def observation(self, result: ToolResult, purpose: str = "", budget: int | None = None) -> str:
+        """What the model reads of a successful ``result``: chosen for
+        ``purpose``, the question it was looked up for, and never longer than
+        ``budget`` or the tool's own budget, whichever is less."""
+        room = self.budget if budget is None else max(0, min(budget, self.budget))
+        said = self.observe(result, purpose, room) if self.observe is not None else result.summary
+        return clip(said or "", room)
 
     def as_dict(self) -> dict:
         return {
@@ -96,6 +119,16 @@ class Tool:
                 for a in self.args
             ],
         }
+
+
+class Choice(Protocol):
+    """Anything the model may choose: a tool, or a skill offered beside the
+    tools. The menu, the grammar and its ceiling are written from these three
+    alone, so a skill is chosen exactly as a tool is."""
+
+    name: str
+    args: tuple[Arg, ...]
+    description: str
 
 
 # Argument names are internal; a person being told what is missing should get
@@ -125,6 +158,13 @@ _net_semaphore = asyncio.Semaphore(2)
 def register(tool: Tool) -> Tool:
     REGISTRY[tool.name] = tool
     return tool
+
+
+def fresh_for(name: str) -> float | None:
+    """How long a result of the tool called ``name`` stays true; None for
+    one that does not go out of date, or a tool there is no longer."""
+    tool = REGISTRY.get(name)
+    return tool.fresh_for if tool is not None else None
 
 
 def available() -> list[Tool]:
@@ -251,6 +291,14 @@ def was_given(address: str, texts: Iterable[str]) -> bool:
 
 
 def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:
+    """Turn what a call was given into what the tool can be run with: see
+    ``check_args``."""
+    return check_args(tool.label, tool.args, args)
+
+
+def check_args(
+    label: str, spec: tuple[Arg, ...], args: dict | None
+) -> tuple[dict, Rejection | None]:
     """Turn what a call was given into what the tool can be run with.
 
     Returns the arguments to run with and nothing, or a ``Rejection`` saying
@@ -264,7 +312,7 @@ def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:
     * an argument left out, or given as nothing, takes its default;
     * a required one still missing after that is refused.
     """
-    declared = {a.name: a for a in tool.args}
+    declared = {a.name: a for a in spec}
     clean: dict[str, Any] = {}
     refused: set[str] = set()
     reasons: list[str] = []
@@ -282,25 +330,25 @@ def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:
         reasons.append(f"{name} {complaint}")
         hint = MISSING_HINT.get(name, name)
         if arg.type == "number":
-            said.append(f"{tool.label} could not use {value!r} as {hint}: it is not a number.")
+            said.append(f"{label} could not use {value!r} as {hint}: it is not a number.")
         elif isinstance(value, str):
-            said.append(f"{tool.label} does not know {value!r} as {hint}.")
+            said.append(f"{label} does not know {value!r} as {hint}.")
         else:
-            said.append(f"{tool.label} could not use that as {hint}: it is not text.")
+            said.append(f"{label} could not use that as {hint}: it is not text.")
 
     # A default stands in for an argument that was left out. It does not paper
     # over one that was given and refused.
-    for arg in tool.args:
+    for arg in spec:
         if arg.name not in clean and arg.name not in refused and arg.default is not None:
             clean[arg.name] = arg.default
 
     missing = [
-        a.name for a in tool.required_args() if a.name not in clean and a.name not in refused
+        a.name for a in spec if a.required and a.name not in clean and a.name not in refused
     ]
     if missing:
         reasons += [f"{name} is required and was not given" for name in missing]
         said.append(
-            f"{tool.label} needs {' and '.join(MISSING_HINT.get(m, m) for m in missing)}."
+            f"{label} needs {' and '.join(MISSING_HINT.get(m, m) for m in missing)}."
         )
 
     if not reasons:
@@ -396,7 +444,56 @@ def _spelt(choice: str) -> str:
 ASK = Arg("question", "string", True, "one short question for the user")
 
 
-def tools_to_gbnf(tools: list[Tool] | None = None, *, ask: bool = True) -> str:
+class _Builder:
+    """The pieces a grammar of JSON arguments is made of: a rule for each
+    ceiling on text and each set of allowed spellings, made once each."""
+
+    def __init__(self) -> None:
+        self.texts: dict[int, str] = {}                 # ceiling -> rule name
+        self.values: dict[tuple[str, ...], str] = {}    # allowed spellings -> rule name
+
+    def value_rule(self, arg: Arg) -> str:
+        if arg.type != "string":
+            return "number"
+        if arg.choices is not None:
+            if arg.choices not in self.values:
+                self.values[arg.choices] = f"choice-{len(self.values) + 1}"
+            return self.values[arg.choices]
+        ceiling = arg.max_len or DEFAULT_MAX_LEN
+        return self.texts.setdefault(ceiling, f"text-{ceiling}")
+
+    def pair(self, arg: Arg, sep: str) -> str:
+        return f'{_literal(f"""{sep}"{arg.name}": """)} {self.value_rule(arg)}'
+
+    def fields(self, args: tuple[Arg, ...]) -> list[str]:
+        """What goes between an object's braces: every required argument,
+        and each optional one or not."""
+        required = [a for a in args if a.required]
+        optional = [a for a in args if not a.required]
+        parts = [self.pair(a, "" if i == 0 else ", ") for i, a in enumerate(required)]
+        if optional and required:
+            # Each may follow what is already there, in declaration order.
+            parts += [f"({self.pair(a, ', ')})?" for a in optional]
+        elif optional:
+            # With nothing required, any one of them may come first, and only
+            # those declared after it may follow. Written out, so that a comma
+            # can never open the list or end it.
+            starts = []
+            for i, first in enumerate(optional):
+                rest = [f"({self.pair(a, ', ')})?" for a in optional[i + 1:]]
+                starts.append(" ".join([self.pair(first, ""), *rest]))
+            parts.append("(" + " | ".join(starts) + ")?")
+        return parts
+
+    def rules(self) -> list[str]:
+        lines = [f"{rule} ::= " + " | ".join(_literal(_spelt(s)) for s in spellings)
+                 for spellings, rule in self.values.items()]
+        lines += [f'{rule} ::= "\\"" char{{1,{ceiling}}} "\\""'
+                  for ceiling, rule in sorted(self.texts.items())]
+        return lines
+
+
+def tools_to_gbnf(tools: list[Choice] | None = None, *, ask: bool = True) -> str:
     """Build a grammar that can only produce a valid action.
 
     This is what makes routing viable on a 1.5B model. Asked politely for JSON
@@ -414,42 +511,12 @@ def tools_to_gbnf(tools: list[Tool] | None = None, *, ask: bool = True) -> str:
       The model cannot invent a currency.
     """
     tools = tools if tools is not None else available()
+    build = _Builder()
     lines: list[str] = []
     alts: list[str] = []
-    texts: dict[int, str] = {}                 # ceiling -> rule name
-    values: dict[tuple[str, ...], str] = {}    # allowed spellings -> rule name
-
-    def value_rule(arg: Arg) -> str:
-        if arg.type != "string":
-            return "number"
-        if arg.choices is not None:
-            if arg.choices not in values:
-                values[arg.choices] = f"choice-{len(values) + 1}"
-            return values[arg.choices]
-        ceiling = arg.max_len or DEFAULT_MAX_LEN
-        return texts.setdefault(ceiling, f"text-{ceiling}")
-
-    def pair(arg: Arg, sep: str) -> str:
-        return f'{_literal(f"""{sep}"{arg.name}": """)} {value_rule(arg)}'
 
     def call(name: str, args: tuple[Arg, ...]) -> str:
-        required = [a for a in args if a.required]
-        optional = [a for a in args if not a.required]
-        parts = [_literal(f'{{"tool": "{name}", "args": {{')]
-        parts += [pair(a, "" if i == 0 else ", ") for i, a in enumerate(required)]
-        if optional and required:
-            # Each may follow what is already there, in declaration order.
-            parts += [f"({pair(a, ', ')})?" for a in optional]
-        elif optional:
-            # With nothing required, any one of them may come first, and only
-            # those declared after it may follow. Written out, so that a comma
-            # can never open the list or end it.
-            starts = []
-            for i, first in enumerate(optional):
-                rest = [f"({pair(a, ', ')})?" for a in optional[i + 1:]]
-                starts.append(" ".join([pair(first, ""), *rest]))
-            parts.append("(" + " | ".join(starts) + ")?")
-        parts.append(_literal("}}"))
+        parts = [_literal(f'{{"tool": "{name}", "args": {{'), *build.fields(args), _literal("}}")]
         return " ".join(parts)
 
     for tool in tools:
@@ -463,16 +530,41 @@ def tools_to_gbnf(tools: list[Tool] | None = None, *, ask: bool = True) -> str:
     alts.append("t-none")
     lines.append(f"t-none ::= {_literal(NONE_ACTION)}")
 
-    for spellings, rule in values.items():
-        lines.append(f"{rule} ::= " + " | ".join(_literal(_spelt(s)) for s in spellings))
-    for ceiling, rule in sorted(texts.items()):
-        lines.append(f'{rule} ::= "\\"" char{{1,{ceiling}}} "\\""')
-
     root = "root ::= " + " | ".join(alts)
-    return "\n".join([root, *lines, _GBNF_PRIMITIVES])
+    return "\n".join([root, *lines, *build.rules(), _GBNF_PRIMITIVES])
 
 
-def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> int:
+def args_to_gbnf(args: tuple[Arg, ...]) -> str:
+    """A grammar for one JSON object of ``args`` and nothing else: what a
+    pass that fills them in may write."""
+    build = _Builder()
+    root = "root ::= " + " ".join([_literal("{"), *build.fields(args), _literal("}")])
+    return "\n".join([root, *build.rules(), _GBNF_PRIMITIVES])
+
+
+def _widest(arg: Arg) -> int:
+    """The most bytes a value of ``arg`` can take as the grammar writes it."""
+    if arg.type != "string":
+        return _NUMBER_BYTES
+    if arg.choices is not None:
+        return max(len(_spelt(c).encode("utf-8")) for c in arg.choices)
+    return 2 + _CHAR_BYTES * (arg.max_len or DEFAULT_MAX_LEN)
+
+
+def _fields_size(args: tuple[Arg, ...]) -> int:
+    """Every argument present, each as long as it can be, a comma and a
+    space between each pair."""
+    size = sum(len(f'"{a.name}": '.encode("utf-8")) + _widest(a) for a in args)
+    return size + 2 * max(len(args) - 1, 0)
+
+
+def args_ceiling(args: tuple[Arg, ...]) -> int:
+    """The longest object ``args_to_gbnf`` allows, in bytes, and so enough
+    tokens for a pass to finish it."""
+    return len(b"{}") + _fields_size(args)
+
+
+def decision_ceiling(tools: list[Choice] | None = None, *, ask: bool = True) -> int:
     """The longest reply the grammar allows, in bytes.
 
     A token is at least one byte, so a pass given this many tokens can always
@@ -482,19 +574,8 @@ def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> in
     """
     tools = tools if tools is not None else available()
 
-    def widest(arg: Arg) -> int:
-        if arg.type != "string":
-            return _NUMBER_BYTES
-        if arg.choices is not None:
-            return max(len(_spelt(c).encode("utf-8")) for c in arg.choices)
-        return 2 + _CHAR_BYTES * (arg.max_len or DEFAULT_MAX_LEN)
-
     def longest(name: str, args: tuple[Arg, ...]) -> int:
-        # Every argument present, each as long as it can be, a comma and a
-        # space between each pair.
-        size = len(f'{{"tool": "{name}", "args": {{}}}}'.encode("utf-8"))
-        size += sum(len(f'"{a.name}": '.encode("utf-8")) + widest(a) for a in args)
-        return size + 2 * max(len(args) - 1, 0)
+        return len(f'{{"tool": "{name}", "args": {{}}}}'.encode("utf-8")) + _fields_size(args)
 
     sizes = [longest(t.name, t.args) for t in tools]
     if ask:
@@ -502,7 +583,7 @@ def decision_ceiling(tools: list[Tool] | None = None, *, ask: bool = True) -> in
     return max([len(NONE_ACTION), *sizes])
 
 
-def tool_menu(tools: list[Tool] | None = None) -> str:
+def tool_menu(tools: list[Choice] | None = None) -> str:
     """The compact description block shown to the model during routing.
 
     An argument that may be left out is marked with a question mark.

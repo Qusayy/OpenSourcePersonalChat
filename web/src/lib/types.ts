@@ -119,6 +119,7 @@ export type CardKind =
   | "convert"
   | "clock"
   | "textstats"
+  | "note"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats

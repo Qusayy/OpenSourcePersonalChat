@@ -47,8 +47,9 @@ from .skills import SAY_SO, Offer, Skill, did_not_work, offered, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
 from .tools.base import (
     Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
-    was_given,
+    untrusted, was_given,
 )
+from .tools.memory import SCOPE
 from .verify import caption, note, scalars
 from .verify import check as check_figures
 from .transcript import Transcript, system_for
@@ -218,6 +219,7 @@ def run(
     seed: int | None = None,
     loop: bool | None = None,
     context: list[Turn] | None = None,
+    scope: str | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -240,6 +242,9 @@ def run(
     that: it is what decides which addresses the user gave. Without
     ``context`` the conversation is read from ``history``.
 
+    ``scope`` is the conversation the run belongs to: the one whose notes a
+    note tool keeps and reads.
+
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
     """
@@ -259,6 +264,7 @@ def run(
         seed=seed,
         loop=settings.agent_loop if loop is None else loop,
         turns=context,
+        scope=scope,
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -318,6 +324,12 @@ class _Run:
     # Set while the run holds the slot for every pass it makes, outside the
     # loop: a skill whose inputs the model filled in.
     holding: bool = False
+    # The conversation the run belongs to, whose notes it may keep and read.
+    scope: str | None = None
+    # Set once the run has read text somebody other than the user wrote: a
+    # page, an article, notes others kept. From then on it writes nothing the
+    # model chose to write.
+    tainted: bool = False
     # What was sent to have them filled in, and what the model wrote.
     filled: list[Part] | None = None
 
@@ -350,6 +362,11 @@ class _Run:
     async def _stages(self) -> AsyncIterator[Event]:
         if self.turns is None:
             self.turns = turns_from_history(self.history)
+        self.tainted = any(
+            untrusted(REGISTRY[tool])
+            for turn in self.turns for part in turn.parts
+            if part.kind in ("data", "observation") for tool in part.tools if tool in REGISTRY
+        )
         self.said, self.cut = self._cap()
         try:
             # What costs nothing comes first: a skill, a command, a pattern.
@@ -664,6 +681,14 @@ class _Run:
         clean, rejection = check(tool, call.args)
         if rejection is not None:
             return rejection
+        if tool.writes and self.tainted:
+            # A page that says "remember that…" must not be able to.
+            return Rejection(
+                (f"{tool.name} only follows the user's own message, not text read in this "
+                 "conversation from elsewhere",),
+                f"{tool.label} only keeps what you ask it to yourself.",
+                "not allowed",
+            )
         theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
         for arg in tool.args:
             value = clean.get(arg.name)
@@ -1011,6 +1036,8 @@ class _Run:
             }
             return
         self.trace.calls.append((call, result))
+        if result.ok and tool is not None and untrusted(tool):
+            self.tainted = True
         self.trace.steps.append(Step(
             "tool", name=call.name, via=call.via, input=call.args, output=result.summary,
             total_ms=result.ms, ok=result.ok,
@@ -1043,13 +1070,19 @@ class _Run:
                 "data": {"message": result.summary or result.error},
             }
 
+    async def _scoped(self, call: ToolCall) -> ToolResult:
+        """The call, made in this run's conversation. Set inside the call's
+        own task, so that it reaches the tool and goes no further."""
+        SCOPE.set(self.scope)
+        return await self.call_tool(call.name, call.args)
+
     async def _call(self, call: ToolCall) -> ToolResult | None:
         """Run one tool, unless Stop comes first. None means it did.
 
         A tool that goes out can take ten seconds. Whoever pressed Stop should
         not have to wait for a page they no longer want.
         """
-        tool = asyncio.ensure_future(self.call_tool(call.name, call.args))
+        tool = asyncio.ensure_future(self._scoped(call))
         asked = asyncio.ensure_future(self.stop.wait())
         try:
             await asyncio.wait({tool, asked}, return_when=asyncio.FIRST_COMPLETED)

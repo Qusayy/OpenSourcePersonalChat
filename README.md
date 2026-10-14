@@ -467,6 +467,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
 | `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
+| `AURORA_NOTES` | `conversation` | notes the Agent keeps when asked to remember something. `conversation`: read back only in the conversation they were made in, and deleted with it. `site`: shared by every conversation, for a private deployment only. `off`: none. See *Notes* |
 | `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
 | `AURORA_GATE` | `on` | `off`, exactly, serves the site to everyone. Anything else keeps it behind the cover; see [The gate](#the-gate) |
@@ -600,6 +601,25 @@ What was sent is kept with the conversation and deleted with it. It holds
 fetched pages, so it decides nothing: which addresses the reader may open is
 decided by the visitor's own messages alone, and an address the model read in
 a page is not one of them.
+
+### Notes
+
+Asked to remember something ("keep in mind that my locker is 418", or
+`/remember …`), the Agent keeps a note, and finds it again when a later
+message needs it (`/recall …`). A note is a line in the user's own words, in
+the site's own database, searched with SQLite's full-text search where the
+build has it.
+
+Whose notes they are is the deployment's choice. By default a note belongs to
+the conversation it was made in: it is read back only there and deleted with
+it, because this site has no accounts, and a note shared across conversations
+would be shared with every visitor. `AURORA_NOTES=site` shares them, which only
+suits a private deployment; `off` removes both tools.
+
+A note is only ever kept on the user's word. Once a run has read text somebody
+else wrote (a page, an article, notes shared across the site), the model may
+not keep one: a page that says "remember that…" is refused like an address the
+user never gave. A `/remember` typed by the user is always kept.
 
 ### Safety
 

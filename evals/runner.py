@@ -23,11 +23,13 @@ cache, is in a row only where the model server reported it for every pass.
 from __future__ import annotations
 
 import statistics
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
-from app import agent
+from app import agent, db
 from app.config import settings
 from app.context import Turn as Sent
 from app.llm import Engine
@@ -128,6 +130,7 @@ async def run_task(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
                     loop=True if task.loop else loop, context=list(sent),
+                    scope=f"task:{task.id}",
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
@@ -173,7 +176,10 @@ async def run_suite(
         raise ValueError("a real run needs a loaded engine")
     wanted = set(categories) if categories else None
 
-    with applied(wording):
+    # What a task keeps (a note) goes to a file that lasts for this run, never
+    # to the site's own database.
+    with applied(wording), tempfile.TemporaryDirectory() as scratch, \
+            db.elsewhere(Path(scratch) / "evals.db"):
         outcomes: list[Outcome] = []
         for task in tasks:
             if wanted is not None and task.category not in wanted:

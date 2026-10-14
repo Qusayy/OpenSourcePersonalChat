@@ -95,6 +95,11 @@ class Tool:
     # Its results are text from the open web, written by anybody: never
     # quoted in the harness's own voice, and never a reason to act.
     untrusted: bool = False
+    # It keeps or reads notes, and is there only while notes are on.
+    notes: bool = False
+    # It writes: a note. Only ever on the user's own word, never after the
+    # run has read text somebody else wrote.
+    writes: bool = False
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -170,14 +175,29 @@ def fresh_for(name: str) -> float | None:
     return tool.fresh_for if tool is not None else None
 
 
+def notes_scope() -> str:
+    """Whose notes there are: the conversation's, the site's, or none."""
+    scope = getattr(settings, "notes", "conversation")
+    return scope if scope in ("site", "off") else "conversation"
+
+
+def enabled(tool: Tool) -> bool:
+    """Whether the configuration lets this tool run at all."""
+    if tool.network and not settings.allow_outbound:
+        return False
+    return not (tool.notes and notes_scope() == "off")
+
+
+def untrusted(tool: Tool) -> bool:
+    """Whether what this tool returns was written by somebody other than the
+    user: a page, an article, or, where every conversation shares them,
+    notes."""
+    return tool.untrusted or (tool.notes and not tool.writes and notes_scope() == "site")
+
+
 def available() -> list[Tool]:
     """Tools the current configuration actually permits."""
-    out = []
-    for t in REGISTRY.values():
-        if t.network and not settings.allow_outbound:
-            continue
-        out.append(t)
-    return out
+    return [t for t in REGISTRY.values() if enabled(t)]
 
 
 # ---------------------------------------------------------------- checking ---
@@ -374,6 +394,8 @@ async def call_tool(name: str, args: dict) -> ToolResult:
             "weather, currency and page reading are unavailable.",
             error="offline mode",
         )
+    if not enabled(tool):
+        return ToolResult(False, "Notes are switched off on this server.", error="notes off")
 
     clean, rejection = check(tool, args)
     if rejection is not None:

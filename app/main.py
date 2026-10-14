@@ -224,7 +224,7 @@ async def api_chat(payload: ChatRequest):
             keeper = _Keeper(cid, persona.id, trace, question_id)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
-                engine=engine, request_id=run_id, context=context,
+                engine=engine, request_id=run_id, context=context, scope=cid,
             )
             try:
                 # Closed with this response, not whenever it is collected: a

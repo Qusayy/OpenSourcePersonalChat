@@ -146,7 +146,7 @@ class OfferTests(unittest.TestCase):
         tools = available()
         choices = offered(tools)
         self.assertEqual(choices[:len(tools)], tools)
-        self.assertEqual([c.name for c in choices[len(tools):]], ["fact_check", "compare"])
+        self.assertEqual([c.name for c in choices[len(tools):]], ["compare"])
         self.assertTrue(all(isinstance(c, Offer) for c in choices[len(tools):]))
 
     def test_a_skill_whose_lookups_cannot_be_made_is_not_offered(self) -> None:
@@ -157,13 +157,13 @@ class OfferTests(unittest.TestCase):
         choices = offered(available())
         menu = tool_menu(choices)
         self.assertIn("- compare(a, b): Compare two things side by side, from Wikipedia.", menu)
-        self.assertIn("- fact_check(claim): Check whether a claim is true against Wikipedia.", menu)
+        self.assertNotIn("fact_check", menu)
         grammar = Grammar(tools_to_gbnf(choices))
         reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
         self.assertTrue(grammar.accepts(reply))
         self.assertFalse(grammar.accepts('{"tool": "compare", "args": {"a": "Python"}}'))
         self.assertFalse(grammar.accepts('{"tool": "weather_brief", "args": {"location": "Paris"}}'))
-        longest = '{"tool": "fact_check", "args": {"claim": "' + "é" * 200 + '"}}'
+        longest = '{"tool": "compare", "args": {"a": "' + "é" * 80 + '", "b": "' + "é" * 80 + '"}}'
         self.assertTrue(grammar.accepts(longest))
         self.assertGreaterEqual(decision_ceiling(choices), len(longest.encode("utf-8")))
 

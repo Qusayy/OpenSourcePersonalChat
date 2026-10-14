@@ -14,6 +14,10 @@ from app.skills import SKILLS
 
 from .tasks import Task, Turn
 
+# What a call that never reached its tool fails with: a call refused before it
+# was made, by the run or by the dispatcher.
+REFUSED = frozenset({"not allowed", "bad input", "missing input"})
+
 
 def _plain(value: Any) -> Any:
     """A value as it is compared: text without regard to case or spacing,
@@ -106,7 +110,9 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
     if skill_match(task, turn) is False:
         failed.append(f"skill: ran {skill_of(turn)!r}, expected {expect['skill']!r}")
 
-    called = [s.name for s in trace.steps if s.kind == "tool"]
+    # The calls that were made. One the run refused, or the dispatcher did,
+    # never reached its tool; the refusal is on the step that chose it.
+    called = [s.name for s in trace.steps if s.kind == "tool" and s.error not in REFUSED]
     if "calls" in expect and called != expect["calls"]:
         failed.append(f"calls: {called}, expected {expect['calls']}")
     if "max_steps" in expect and len(called) > expect["max_steps"]:

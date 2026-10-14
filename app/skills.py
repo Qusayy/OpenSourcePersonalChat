@@ -162,11 +162,8 @@ SKILLS: dict[str, Skill] = {
             inputs=(Arg("claim", "string", True, "the claim to check", max_len=200),),
             steps=(look("wikipedia", query="claim"),),
             whole="claim",
-            cue=(
-                "Say whether the claim is supported, contradicted or unclear by the data "
-                "above, in one short paragraph, quoting it where it decides the matter. "
-                "If it does not cover the claim, say so plainly."
-            ),
+            # Not offered to the model. Measured with LFM2.5, it chose this for
+            # opinions, explanations and names: any message could be a claim.
             description="Check whether a claim is true against Wikipedia.",
             placeholder="Type a claim to check…",
         ),

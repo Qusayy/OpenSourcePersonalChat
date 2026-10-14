@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app import agent
+from app.config import settings
 from app.llm import Engine
 from app.personas import get_persona
 from app.skills import get_skill
@@ -99,11 +100,13 @@ class Outcome:
 
 
 async def run_task(
-    task: Task, *, engine: Engine, seed: int | None = None, loop: bool = False
+    task: Task, *, engine: Engine, seed: int | None = None, loop: bool | None = None
 ) -> Outcome:
     """Play one task's messages through a run each, then score the last.
 
-    ``loop`` turns the loop on for a task that does not ask for it itself.
+    ``loop`` is whether a tool the model chose earns it another choice, for a
+    task that does not ask for the loop itself; left unset, the setting
+    decides, as on the site.
     """
     began = time.perf_counter()
     persona = get_persona(get_skill(task.skill).persona if get_skill(task.skill) else task.persona)
@@ -112,14 +115,12 @@ async def run_task(
     with fixtures.recorded(task.tools):
         for text in task.turns:
             trace = agent.Trace()
-            # As the site works it out from what it stored of the last message.
-            follows_ask = bool(turns) and turns[-1].trace.outcome == "asked"
             events = [
                 event
                 async for event in agent.run(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
-                    follows_ask=follows_ask, loop=task.loop or loop,
+                    loop=True if task.loop else loop,
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
@@ -144,14 +145,15 @@ async def run_suite(
     engine: Engine | None = None,
     seed: int | None = 0,
     categories: Iterable[str] | None = None,
-    loop: bool = False,
+    loop: bool | None = None,
 ) -> dict:
     """Run every task this engine can run, and return the report.
 
     ``engine`` is the loaded model for ``engine_kind="real"``. A scripted run
-    makes an engine per task from the task's own script. ``loop`` runs every
-    task with the loop on, where only some ask for it: the way to see what
-    the loop does to the tasks that were written without it.
+    makes an engine per task from the task's own script. ``loop`` is what the
+    site's setting would be: unset, it is the setting; False makes every
+    task that does not ask for the loop choose once, the way to see what the
+    loop is worth. Scripts are written for the loop on.
     """
     if engine_kind not in ("scripted", "real"):
         raise ValueError(f"unknown engine {engine_kind!r}")
@@ -180,8 +182,8 @@ async def run_suite(
     return {
         "engine": engine_kind,
         "seed": seed,
-        # Whether the loop was on for every task, or only for those that ask.
-        "loop": loop,
+        # Whether the loop was on for the tasks that do not ask for it.
+        "loop": settings.agent_loop if loop is None else loop,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "model": _model(engine) if timed else None,
         # Without a tokenizer a token is counted as four characters.

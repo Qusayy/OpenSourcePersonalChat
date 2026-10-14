@@ -37,10 +37,8 @@ from .router import (
     ToolCall,
     decision_grammar,
     decision_limit,
-    decision_messages,
     free_route,
     parse_action,
-    repair_messages,
 )
 from .skills import SAY_SO, Skill, did_not_work, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
@@ -190,7 +188,6 @@ def run(
     tools_enabled: bool | None = None,
     request_id: str | None = None,
     seed: int | None = None,
-    follows_ask: bool = False,
     loop: bool | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
@@ -205,12 +202,9 @@ def run(
     ``seed`` is given to every pass of the run, so that the same message
     against the same model gives the same run. The site leaves it unset.
 
-    ``follows_ask`` says the last thing in ``history`` is a question the model
-    chose to ask the user. This message is then their answer to it, and is
-    routed with that question in view.
-
     ``loop`` lets a tool the model chose earn it another choice, within the
-    limits in the settings. Left unset, the setting decides.
+    limits in the settings. Without it the model chooses once, and the run
+    answers after that one lookup. Left unset, the setting decides.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -229,7 +223,6 @@ def run(
         tools_enabled=settings.tools_enabled if tools_enabled is None else tools_enabled,
         request_id=trace.run_id,
         seed=seed,
-        follows_ask=follows_ask,
         loop=settings.agent_loop if loop is None else loop,
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
@@ -249,10 +242,9 @@ class _Run:
     tools_enabled: bool
     request_id: str
     seed: int | None = None
-    follows_ask: bool = False
     # Whether a tool the model chose earns it another choice, and the limits
     # on that for one message.
-    loop: bool = False
+    loop: bool = True
     max_steps: int = 3
     max_decisions: int = 3
     max_seconds: float = 90.0
@@ -323,17 +315,10 @@ class _Run:
             yield event
         # What is left is the model's to decide, where the persona has tools.
         tools = available() if (self.persona.tools and not self.routed) else []
-        if tools and self.loop:
+        if tools:
             async with aclosing(self._looping(tools)) as events:
                 async for event in events:
                     yield event
-            return
-        if tools:
-            async for event in self._choose_once(tools):
-                yield event
-        if self.question is not None and not self.stop.is_set():
-            for event in self._ask():
-                yield event
             return
         for index, call in enumerate(self.calls):
             if self.stop.is_set():
@@ -343,7 +328,7 @@ class _Run:
         if self.stop.is_set():
             yield self._stopped()
             return
-        window = self._window(self.persona.system, self._prompt(), run=False)
+        window = self._window(self._system(), self._prompt(), run=False)
         if self._trimmed(window):
             yield "trimmed", self.trim
         async with aclosing(self._answer(window.messages)) as events:
@@ -351,6 +336,13 @@ class _Run:
                 yield event
 
     # ------------------------------------------------------------ the window --
+
+    def _system(self) -> str:
+        """The system text of every pass of this run. A persona with tools
+        reads the same one whether the model chooses or something else did,
+        so a conversation keeps one system text from message to message."""
+        tools = available() if self.persona.tools and self.tools_enabled else []
+        return system_for(self.persona, tools) if tools else self.persona.system
 
     def _room(self, *, run: bool) -> int:
         """Tokens the prompt may take: the window, less the reply and the
@@ -364,9 +356,9 @@ class _Run:
         text, a summary of older turns and, for a persona with tools, the
         room for a run, if it is longer. Counted only when it might be: no
         message has more tokens than bytes."""
-        tools = available() if self.persona.tools and self.tools_enabled else []
-        system = system_for(self.persona, tools) if tools else self.persona.system
-        limit = self._room(run=bool(tools)) - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        system = self._system()
+        tools = system != self.persona.system
+        limit = self._room(run=tools) - self.engine.count_tokens(system) - SUMMARY_TOKENS
         if len(self.message.encode("utf-8")) <= limit:
             return self.message, False
         return cap(self.message, max(1, limit), self.engine.count_tokens)
@@ -480,38 +472,6 @@ class _Run:
             ))
             yield "step", self._routed(call, tier, ms=0)
 
-    async def _choose_once(self, tools: list) -> AsyncIterator[Event]:
-        """One choice by the model, and that is all: the run then acts on it
-        and answers."""
-        # Only now is a pass about to be made, so only now is one announced.
-        yield "step", {
-            "id": "route", "kind": "route", "status": "running",
-            "label": "Choosing a tool", "glyph": "◇",
-        }
-        action, passes = await self._decide(tools)
-        # The choice is one step on the page however many passes it took, and
-        # says what all of them cost.
-        ms = round(sum(said.ms for said in passes), 1)
-        if self.stop.is_set():
-            # Stopped while the choice was being made. Whatever came back is
-            # not acted on, and the step that was announced is closed.
-            yield "step", {
-                "id": "route", "kind": "route", "status": "stopped",
-                "label": "Choosing a tool", "glyph": "◇", "ms": ms,
-            }
-            return
-        if action.kind == "tool":
-            self.calls = [action.call]
-        elif action.kind == "ask":
-            self.question, self.asked_by = action.question, passes[-1]
-        closing = self._routed(action.call, "model", ms=ms)
-        if action.kind == "ask":
-            closing["label"] = "Asking you first"
-        # The choice cost passes, and a pass is counted in tokens.
-        closing["tokens_in"] = _total(said.prompt_tokens for said in passes)
-        closing["tokens_out"] = _total(said.completion_tokens for said in passes)
-        yield "step", closing
-
     def _routed(self, call: ToolCall | None, tier: str, *, ms: float) -> dict:
         """The step that says what was chosen, and by which tier."""
         tool = REGISTRY[call.name] if call else None
@@ -523,52 +483,6 @@ class _Run:
             "tool": call.name if call else None,
             "ms": ms,
         }
-
-    async def _decide(self, tools: list) -> tuple[Action, list[Completion]]:
-        """Ask the model which tool, if any. Returns what it chose and every
-        pass that took.
-
-        Usually that is one pass. If the call it chose is one the tool cannot
-        take, it is told why and asked once more, and whatever it says then is
-        what the run goes on with: a call that can be made, no call at all, or
-        a call that still cannot be made. That last one is not argued with a
-        second time, and it is not made: it is shown to the visitor as a call
-        that was refused, with the reason.
-        """
-        messages = decision_messages(self.said, tools, self._asked())
-        action, said = await self._choose("route", messages, tools, {"text": messages[-1]["content"]})
-        passes = [said]
-        if action.kind != "tool" or self.stop.is_set():
-            return action, passes
-        rejection = self._refusal(action.call)
-        if rejection is None:
-            return action, passes
-
-        # The step just written down chose a call that was not made.
-        self.trace.steps[-1].ok = False
-        self.trace.steps[-1].error = "rejected: " + "; ".join(rejection.reasons)
-        action, said = await self._choose(
-            "repair", repair_messages(messages, said.raw, rejection), tools,
-            {"rejected": list(rejection.reasons)},
-        )
-        if action.kind == "tool" and not self.stop.is_set():
-            still = self._refusal(action.call)
-            if still is not None:
-                self.trace.steps[-1].ok = False
-                self.trace.steps[-1].error = "rejected: " + "; ".join(still.reasons)
-                # Carried with the call, so that it is refused and not run.
-                action.call.meta["refusal"] = still
-        return action, [*passes, said]
-
-    def _asked(self) -> tuple[str, str] | None:
-        """The exchange this message answers, if it answers a question the
-        model asked: what the user had sent, and what they were asked back."""
-        if not self.follows_ask or len(self.history) < 2:
-            return None
-        sent, question = self.history[-2], self.history[-1]
-        if sent["role"] != "user" or question["role"] != "assistant":
-            return None
-        return sent["content"], question["content"]
 
     def _refusal(self, call: ToolCall) -> Rejection | None:
         """Why a call the model chose cannot be made as it stands, if it cannot.
@@ -638,7 +552,12 @@ class _Run:
         how a small model's commonest loop is cut. When something other than
         the model ends the looking-up, the answer pass is told so in a line,
         so that the reply can say what was not found.
+
+        With the loop off it is the same transcript and the same passes, cut
+        short: one choice, sent back once if it cannot be made, at most one
+        lookup, and then the answer.
         """
+        single = not self.loop
         transcript = self._transcript(tools)
         if self.trim:
             yield "trimmed", self.trim
@@ -664,7 +583,8 @@ class _Run:
                     "label": "Choosing a tool", "glyph": "◇", "pass": number,
                 }
                 action, passes = await self._decision(
-                    transcript, tools, first=number == 1, room=self.max_decisions - decisions
+                    transcript, tools, first=number == 1,
+                    room=2 if single else self.max_decisions - decisions,
                 )
                 decisions += len(passes)
                 ms = round(sum(said.ms for said in passes), 1)
@@ -699,7 +619,7 @@ class _Run:
                 # An even share of the room the run has left, so that the
                 # last lookup it may make has as much to read as the first.
                 left = RUN_ROOM - (estimate(transcript.rendered()) - start)
-                share = max(LEAST_SHARE, left // (self.max_steps - steps))
+                share = max(LEAST_SHARE, left // (1 if single else self.max_steps - steps))
                 async for event in self._lookup(steps, action.call, budget=share):
                     yield event
                 steps += 1
@@ -710,6 +630,8 @@ class _Run:
                     self.seen if self.last.ok else what_happened(self.last),
                     ok=self.last.ok,
                 )
+                if single:
+                    break  # one lookup, and the answer
             if self.stop.is_set():
                 yield self._stopped()
                 return

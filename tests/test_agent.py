@@ -17,6 +17,7 @@ import unittest
 try:
     from app import agent
     from app.context import SUMMARY_HEADING, merged
+    from app.transcript import data
     from app.excerpt import estimate
     from app.personas import get_persona
     from app.tools import REGISTRY
@@ -49,9 +50,12 @@ class Reporting(ScriptedEngine):
 
 
 class AgentCase(unittest.IsolatedAsyncioTestCase):
+    """A run with the loop off unless a test says otherwise: one choice, on
+    the same transcript the loop reads, then the answer."""
+
     def setUp(self) -> None:
         support.no_network(self)
-        support.with_settings(self, tools_enabled=True, allow_outbound=True)
+        support.with_settings(self, tools_enabled=True, allow_outbound=True, agent_loop=False)
 
     def scripted(self, *script, **options) -> ScriptedEngine:
         engine = ScriptedEngine(script, **options)
@@ -99,8 +103,10 @@ class RunTests(AgentCase):
         self.assertEqual(engine.most_at_once, 1)
         self.assertIsNotNone(engine.passes[0].grammar)
         self.assertIsNone(engine.passes[1].grammar)
-        self.assertIn("weather: Paris, France: overcast, 17.9°C.",
-                      engine.passes[1].messages[-1]["content"])
+        self.assertIn('<data tool="weather">Paris, France: overcast, 17.9°C.</data>',
+                      engine.passes[1].prompt)
+        # The answer reads on from where the choice left off.
+        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt + WEATHER))
         self.assertEqual([call.name for call, _ in trace.calls], ["weather"])
         self.assertEqual(trace.calls[0][0].via, "model")
         self.assertTrue(engine.free)
@@ -965,34 +971,21 @@ class AskTests(AgentCase):
         stream = await collect(self.run_message("Suggest a name for my boat", engine))
         self.assertNotIn("asked", only(stream, "done")[0])
 
-    async def test_the_reply_to_a_question_is_routed_with_the_question_in_view(self) -> None:
+    async def test_the_reply_to_a_question_is_read_after_the_question(self) -> None:
+        # Nothing special: the conversation so far is read with every choice.
         engine = self.scripted(LISBON, "Light rain; take an umbrella.")
         asked = support.played_tools(self, {"weather": PARIS})
         history = [{"role": "user", "content": "what's the weather like"},
                    {"role": "assistant", "content": "Which city do you mean?"}]
         stream = await collect(agent.run(
             "Lisbon", persona=get_persona("agent"), history=history, engine=engine,
-            follows_ask=True,
         ))
         self.assertEqual(
             [m["content"] for m in engine.passes[0].messages[1:]],
-            ["what's the weather like", ASK, "Lisbon"],
+            ["what's the weather like", "Which city do you mean?", "Lisbon"],
         )
         self.assertEqual(asked["weather"], [{"location": "Lisbon"}])
         self.assertEqual(only(stream, "done")[0]["tool_calls"], 1)
-
-    async def test_a_message_that_answers_no_question_is_routed_alone(self) -> None:
-        history = [{"role": "user", "content": "what's the weather like"},
-                   {"role": "assistant", "content": "Which city do you mean?"}]
-        for follows_ask, turns in ((False, history), (True, []), (True, history[:1]),
-                                   (True, list(reversed(history)))):
-            with self.subTest(follows_ask=follows_ask, turns=len(turns)):
-                engine = self.scripted(NONE, "Wren.")
-                await collect(agent.run(
-                    "Lisbon", persona=get_persona("agent"), history=turns, engine=engine,
-                    follows_ask=follows_ask,
-                ))
-                self.assertEqual(len(engine.passes[0].messages), 2)
 
     async def test_a_question_with_nothing_in_it_is_not_asked_and_the_run_answers(self) -> None:
         engine = self.scripted('{"tool": "ask", "args": {"question": " "}}', "It depends where.")
@@ -1061,8 +1054,8 @@ class AddressTests(AgentCase):
         )
         # And the model that writes the answer is told it was not opened.
         self.assertIn(
-            "- read_url: Read page only goes to an address you gave it yourself.",
-            trace.prompt[-1]["content"],
+            data("read_url", "Read page only goes to an address you gave it yourself.", ok=False),
+            "\n".join(m["content"] for m in trace.prompt),
         )
 
     async def test_it_is_told_why_once_and_may_choose_again(self) -> None:
@@ -1244,7 +1237,9 @@ class LoopTests(LoopCase):
         stream = await collect(self.run_message(WARMER, engine))
         self.assertEqual(asked["weather"], [{"location": "Paris"}])
         self.assertEqual(len(engine.passes), 2)
-        self.assertNotIn("pass", support.step(stream, "route", "ok"))
+        self.assertEqual(support.step(stream, "route", "ok")["pass"], 1)
+        # Ended because it is the loop off, not because a limit was reached.
+        self.assertNotIn(LOOKUPS_OVER, engine.passes[1].prompt)
 
     async def test_the_setting_turns_it_on_for_a_run_that_does_not_say(self) -> None:
         support.with_settings(self, agent_loop=True)

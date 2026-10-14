@@ -38,8 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import agent  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.personas import get_persona  # noqa: E402
-from app.router import decision_grammar, decision_limit, decision_messages  # noqa: E402
+from app.router import decision_grammar, decision_limit  # noqa: E402
 from app.tools.base import available  # noqa: E402
+from app.transcript import Transcript, system_for  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
 from evals.tasks import TASKS, load_tasks  # noqa: E402
@@ -59,7 +60,7 @@ def load_engine():
 
 
 async def probe_routing(engine, seed: int | None) -> dict:
-    """The same routing pass twice, back to back.
+    """The same first choice twice, back to back.
 
     The first reads its whole prompt. The second finds that prompt already in
     the model's cache, so the difference in time to the first token is what
@@ -67,7 +68,8 @@ async def probe_routing(engine, seed: int | None) -> dict:
     """
     with fixtures.recorded({}):
         tools = available()
-        messages = decision_messages("Do I need a coat in Paris today?", tools)
+        system = system_for(get_persona("agent"), tools)
+        messages = Transcript(system, [], "Do I need a coat in Paris today?").messages()
         grammar, limit = decision_grammar(tools), decision_limit(tools)
     out = {}
     for name in ("cold", "warm"):
@@ -170,7 +172,7 @@ def show(report: dict, file=None) -> None:
     def pct(value) -> str:
         return "n/a" if value is None else f"{value:.0%}"
 
-    loop = ", loop on for every task" if report.get("loop") else ""
+    loop = "" if report.get("loop", True) else ", one choice where a task does not ask for more"
     print(f"\n{report['engine']} engine, seed {report['seed']}{loop}", file=file)
     print(
         f"  {s['passed']} passed, {s['failed']} failed, {s['pending']} known gaps, "
@@ -220,8 +222,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write the report here as JSON")
     parser.add_argument("--compare", type=Path, help="an earlier report to set this one beside")
     parser.add_argument(
-        "--loop", action="store_true",
-        help="run every task with the loop on, not only the tasks that ask for it",
+        "--single", action="store_true",
+        help="let the model choose once in every task that does not ask for the loop, "
+             "whatever the setting says (scripts are written for the loop on)",
     )
     parser.add_argument(
         "--probe-routing", action="store_true",
@@ -252,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = load_engine() if args.engine == "real" else None
     report = asyncio.run(run_suite(
         tasks, engine_kind=args.engine, engine=engine, seed=args.seed, categories=args.category,
-        loop=args.loop,
+        loop=False if args.single else None,
     ))
     if args.compare:
         report["compared"] = compare(report, json.loads(args.compare.read_text(encoding="utf-8")))

@@ -192,8 +192,6 @@ async def api_chat(payload: ChatRequest):
         created = True
 
     history = db.conversation_messages(cid)
-    # Whether this message answers a question the model put to the visitor.
-    follows_ask = db.last_message_asked(cid)
     db.add_message(cid, "user", user_text)
     db.touch_conversation(cid, persona.id)
 
@@ -221,7 +219,7 @@ async def api_chat(payload: ChatRequest):
             keeper = _Keeper(cid, persona.id, trace)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
-                engine=engine, request_id=run_id, follows_ask=follows_ask,
+                engine=engine, request_id=run_id,
             )
             try:
                 # Closed with this response, not whenever it is collected: a

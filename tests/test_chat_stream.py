@@ -14,9 +14,9 @@ from unittest import mock
 try:
     from app import db
     from app.personas import get_persona
-    from app.router import ROUTE_SYSTEM
+    from app.transcript import CUE_PLAIN, CUE_WITH_DATA, data, system_for
     from app.tools import base as tool_base
-    from app.tools.base import ToolResult, tool_menu
+    from app.tools.base import ToolResult, available
     from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import ChatCase, PlayedEngine, only, shape, step
@@ -43,6 +43,11 @@ WEATHER = ToolResult(
     card="weather",
     data={"place": "Paris", "country": "France", "temperature": 17.9},
 )
+
+
+def agent_system() -> str:
+    """What every pass of the Agent reads first, with the tools on offer now."""
+    return system_for(get_persona("agent"), available())
 
 
 def with_data(question: str, *facts: str) -> str:
@@ -324,6 +329,8 @@ class AgentRoutingTests(ChatCase):
             self.engine.answer_prompts[0][-1]["content"],
             with_data("15% of 200", "calculator: 15/100*200 = 30"),
         )
+        # The Agent reads one system text, whoever chose the tool.
+        self.assertEqual(self.engine.answer_prompts[0][0]["content"], agent_system())
         self.assertEqual(self.conversation(stream)["messages"][1]["tool_calls"][0]["via"], "heuristic")
 
     def test_with_no_pattern_the_model_is_asked_and_may_say_none(self) -> None:
@@ -335,45 +342,49 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(
             step(stream, "route", "running"),
             {"id": "route", "kind": "route", "status": "running", "label": "Choosing a tool",
-             "glyph": "◇"},
+             "glyph": "◇", "pass": 1},
         )
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "No tool needed",
-             "detail": "model", "glyph": "◇", "tool": None, "ms": support.ROUTE_MS,
+             "detail": "model", "glyph": "◇", "tool": None, "ms": support.ROUTE_MS, "pass": 1,
              "tokens_in": self.engine.prompt_tokens(self.engine.route_prompts[0]),
              "tokens_out": support.ROUTE_TOKENS},
         )
+        # The answer is written on from where the choice left off.
         self.assertEqual(
             self.engine.answer_prompts[0],
             [
-                {"role": "system", "content": get_persona("agent").system},
+                {"role": "system", "content": agent_system()},
                 {"role": "user", "content": "Suggest a name for my boat"},
+                {"role": "assistant", "content": '{"tool": "none"}'},
+                {"role": "user", "content": CUE_PLAIN},
             ],
         )
 
-    def test_the_routing_pass_reads_a_menu_and_the_message_and_nothing_else(self) -> None:
+    def test_the_choice_reads_the_system_text_with_its_menu_and_the_message(self) -> None:
         self.chat("Suggest a name for my boat", persona="agent")
         self.assertEqual(
             self.engine.route_prompts,
             [[
-                {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu())},
+                {"role": "system", "content": agent_system()},
                 {"role": "user", "content": "Suggest a name for my boat"},
             ]],
         )
 
-    def test_the_routing_pass_reads_no_more_than_600_characters(self) -> None:
+    def test_a_long_message_is_read_whole_where_it_fits(self) -> None:
         long = "Suggest a name for my boat. " * 30
         self.chat(long, persona="agent")
-        self.assertEqual(self.engine.route_prompts[0][1]["content"], long.strip()[:600])
+        self.assertEqual(self.engine.route_prompts[0][-1]["content"], long.strip())
 
-    def test_the_routing_pass_does_not_see_earlier_turns(self) -> None:
+    def test_the_choice_reads_the_conversation_so_far(self) -> None:
         first = self.chat("Suggest a name for my boat", persona="agent")
         cid = only(first, "conversation")[0]["id"]
         self.chat("Something shorter", persona="agent", conversation_id=cid)
-        self.assertEqual(len(self.engine.route_prompts[1]), 2)
-        self.assertEqual(self.engine.route_prompts[1][1]["content"], "Something shorter")
-        self.assertEqual(len(self.engine.answer_prompts[1]), 4)
+        self.assertEqual(
+            [m["content"] for m in self.engine.route_prompts[1][1:]],
+            ["Suggest a name for my boat", "A short answer.", "Something shorter"],
+        )
 
     def test_the_model_can_choose_a_tool_and_its_result_reaches_the_answer(self) -> None:
         self.use_engine(PlayedEngine(decision={"tool": "weather", "args": {"location": "Paris"}}))
@@ -382,20 +393,18 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(
             shape(stream),
             ["conversation", "step:route:running", "step:route:ok", "step:tool-0:running",
-             "step:tool-0:ok", "card", *ANSWER],
+             "step:tool-0:ok", "card", "step:route-2:running", "step:route-2:ok", *ANSWER],
         )
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "Weather",
              "detail": "model", "glyph": "☁", "tool": "weather", "ms": support.ROUTE_MS,
-             "tokens_in": self.engine.prompt_tokens(self.engine.route_prompts[0]),
+             "pass": 1, "tokens_in": self.engine.prompt_tokens(self.engine.route_prompts[0]),
              "tokens_out": support.ROUTE_TOKENS},
         )
         self.assertEqual(asked["weather"], [{"location": "Paris"}])
-        self.assertEqual(
-            self.engine.answer_prompts[0][-1]["content"],
-            with_data("Do I need a coat in Paris", f"weather: {WEATHER.summary}"),
-        )
+        told = [m["content"] for m in self.engine.answer_prompts[0]]
+        self.assertEqual(told[-3:], [data("weather", WEATHER.summary), '{"tool": "none"}', CUE_WITH_DATA])
         call = self.conversation(stream)["messages"][1]["tool_calls"][0]
         self.assertEqual(call["via"], "model")
         self.assertEqual(call["data"], WEATHER.data)
@@ -447,20 +456,22 @@ class RoutingThroughTheSlotTests(ChatCase):
     queued, run on a worker thread, and timed."""
 
     def test_the_choice_and_the_answer_are_two_passes_through_one_slot(self) -> None:
-        engine = ScriptedEngine(['{"tool": "weather", "args": {"location": "Paris"}}', "Take a coat."])
+        engine = ScriptedEngine([
+            '{"tool": "weather", "args": {"location": "Paris"}}', '{"tool": "none"}', "Take a coat.",
+        ])
         self.use_engine(engine)
         support.played_tools(self, {"weather": WEATHER})
         stream = self.chat("Do I need a coat in Paris", persona="agent")
         self.assertEqual(
             shape(stream),
             ["conversation", "step:route:running", "step:route:ok", "step:tool-0:running",
-             "step:tool-0:ok", "card", *ANSWER],
+             "step:tool-0:ok", "card", "step:route-2:running", "step:route-2:ok", *ANSWER],
         )
         routed = step(stream, "route", "ok")
         self.assertEqual((routed["label"], routed["detail"], routed["tool"]),
                          ("Weather", "model", "weather"))
         self.assertGreater(routed["ms"], 0)
-        self.assertEqual(len(engine.passes), 2)
+        self.assertEqual(len(engine.passes), 3)
         self.assertEqual(engine.most_at_once, 1)
         self.assertTrue(engine.free)
         self.assertEqual(self.conversation(stream)["messages"][1]["content"], "Take a coat.")
@@ -501,7 +512,7 @@ class SkillTests(ChatCase):
         self.assertEqual(
             self.engine.answer_prompts[0],
             [
-                {"role": "system", "content": get_persona("agent").system},
+                {"role": "system", "content": agent_system()},
                 {"role": "user", "content": (
                     "The exact result is below. Restate it, then explain the working in "
                     "two or three short steps. Do not recalculate — the figure given is "
@@ -591,8 +602,8 @@ class FailedToolTests(ChatCase):
             error="no such place",
         )})
         stream = self.chat("Do I need a coat in Atlantis", persona="agent")
-        told = self.engine.answer_prompts[0][-1]["content"]
-        self.assertIn("- weather: No place called 'Atlantis' was found.\n", told)
+        told = "\n".join(m["content"] for m in self.engine.answer_prompts[0])
+        self.assertIn(data("weather", "No place called 'Atlantis' was found.", ok=False), told)
         self.assertNotIn("Try adding", told)
         self.assertNotIn("Live data", told)
         # The person still gets the whole sentence.
@@ -696,8 +707,9 @@ class StoredTraceTests(ChatCase):
             ("the model declining", "Suggest a name for my boat", {"persona": "agent"},
              ['{"tool": "none"}', "Wren."], ["route", "answer"]),
             ("the model's choice", "Do I need a coat in Paris", {"persona": "agent"},
-             ['{"tool": "weather", "args": {"location": "Paris"}}', "Take a coat."],
-             ["route", "tool", "answer"]),
+             ['{"tool": "weather", "args": {"location": "Paris"}}', '{"tool": "none"}',
+              "Take a coat."],
+             ["route", "tool", "decide", "answer"]),
             ("a skill", "2+2", {"skill": "do_maths"}, None, ["route", "tool", "answer"]),
             ("a failed tool", "/calc 1/0", {"persona": "explainer"}, None,
              ["route", "tool", "answer"]),
@@ -811,7 +823,7 @@ class AskTests(ChatCase):
         self.assertEqual(db.recent_runs("chat"), [])
         self.assertEqual(db.chat_stats()["n"], 0)
 
-    def test_the_visitors_reply_is_routed_with_the_question_they_were_asked(self) -> None:
+    def test_the_visitors_reply_is_read_after_the_question_they_were_asked(self) -> None:
         self.use_engine(PlayedEngine(decision=self.QUESTION))
         first = self.chat("what's the weather like", persona="agent")
         cid = only(first, "conversation")[0]["id"]
@@ -821,27 +833,9 @@ class AskTests(ChatCase):
         self.chat("Lisbon", persona="agent", conversation_id=cid)
         self.assertEqual(
             [m["content"] for m in self.engine.route_prompts[0][1:]],
-            ["what's the weather like",
-             '{"tool": "ask", "args": {"question": "Which city do you mean?"}}',
-             "Lisbon"],
+            ["what's the weather like", "Which city do you mean?", "Lisbon"],
         )
         self.assertEqual(looked_up["weather"], [{"location": "Lisbon"}])
-
-    def test_a_message_after_an_ordinary_answer_is_routed_alone(self) -> None:
-        first = self.chat("Suggest a name for my boat", persona="agent")
-        cid = only(first, "conversation")[0]["id"]
-        self.chat("Something shorter", persona="agent", conversation_id=cid)
-        self.assertEqual(len(self.engine.route_prompts[1]), 2)
-
-    def test_only_the_message_straight_after_the_question_is_read_with_it(self) -> None:
-        self.use_engine(PlayedEngine(decision=self.QUESTION))
-        first = self.chat("what's the weather like", persona="agent")
-        cid = only(first, "conversation")[0]["id"]
-        self.use_engine(PlayedEngine())
-        self.chat("Lisbon", persona="agent", conversation_id=cid)
-        self.chat("And tomorrow", persona="agent", conversation_id=cid)
-        self.assertEqual(len(self.engine.route_prompts[0]), 4)
-        self.assertEqual(len(self.engine.route_prompts[1]), 2)
 
 
 class LoopOverHttpTests(ChatCase):

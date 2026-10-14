@@ -14,18 +14,15 @@ import unittest
 try:
     from app.llm import Completion
     from app.router import (
-        ROUTE_SYSTEM,
         ask_reply,
         decision_grammar,
         decision_limit,
-        decision_messages,
         free_route,
         heuristic,
         parse_action,
         parse_slash,
-        repair_messages,
     )
-    from app.tools.base import Rejection, available, decision_ceiling, tool_menu
+    from app.tools.base import available, decision_ceiling
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
@@ -138,25 +135,12 @@ class FreeRouteTests(unittest.TestCase):
                 self.assertEqual(free_route(text, tools_enabled=True), (None, None))
 
 
-class DecisionPromptTests(unittest.TestCase):
-    """What the model is given when it is asked to choose."""
+class DecisionTests(unittest.TestCase):
+    """What a choice is held to. What the model reads when it chooses is the
+    run's transcript, tested with it."""
 
     def setUp(self) -> None:
         support.with_settings(self, allow_outbound=True)
-
-    def test_it_reads_a_menu_and_the_message_and_nothing_else(self) -> None:
-        tools = available()
-        self.assertEqual(
-            decision_messages("Suggest a name for my boat", tools),
-            [
-                {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
-                {"role": "user", "content": "Suggest a name for my boat"},
-            ],
-        )
-
-    def test_a_long_message_is_read_only_at_its_start(self) -> None:
-        long = "Suggest a name for my boat. " * 30
-        self.assertEqual(decision_messages(long, available())[1]["content"], long[:600])
 
     def test_it_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
         tools = available()
@@ -170,38 +154,12 @@ class DecisionPromptTests(unittest.TestCase):
 
     def test_with_outgoing_requests_off_only_local_tools_are_offered(self) -> None:
         support.with_settings(self, allow_outbound=False)
-        tools = available()
-        menu = decision_messages("hi", tools)[0]["content"]
-        self.assertIn("- calculator(", menu)
-        self.assertNotIn("- weather(", menu)
-        self.assertNotIn("t-weather", decision_grammar(tools))
+        grammar = decision_grammar(available())
+        self.assertIn("t-calculator", grammar)
+        self.assertNotIn("t-weather", grammar)
 
-    def test_asking_the_user_is_on_offer_and_the_prompt_says_when(self) -> None:
+    def test_asking_the_user_is_on_offer(self) -> None:
         self.assertIn("t-ask", decision_grammar(available()))
-        self.assertEqual(
-            ROUTE_SYSTEM,
-            "You choose a tool for the user's message. Reply with one JSON object only.\n"
-            "Tools:\n{menu}\n"
-            'If no tool is needed, reply {{"tool": "none"}}.\n'
-            "If a tool is needed and the message leaves out something it must be given, "
-            'reply {{"tool": "ask", "args": {{"question": "..."}}}} with one short question.',
-        )
-
-    def test_a_reply_to_a_question_is_read_with_the_exchange_it_answers(self) -> None:
-        tools = available()
-        messages = decision_messages(
-            "Lisbon", tools, asked=("what's the weather like", "Which city do you mean?")
-        )
-        self.assertEqual(
-            messages,
-            [
-                {"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))},
-                {"role": "user", "content": "what's the weather like"},
-                {"role": "assistant",
-                 "content": '{"tool": "ask", "args": {"question": "Which city do you mean?"}}'},
-                {"role": "user", "content": "Lisbon"},
-            ],
-        )
 
     def test_the_question_is_written_back_as_the_grammar_has_the_model_write_it(self) -> None:
         from tests.gbnf import Grammar
@@ -211,30 +169,6 @@ class DecisionPromptTests(unittest.TestCase):
             with self.subTest(question=question):
                 self.assertTrue(grammar.accepts(ask_reply(question)))
 
-    def test_the_earlier_exchange_is_cut_like_any_message(self) -> None:
-        messages = decision_messages("Lisbon", available(), asked=("x" * 900, "Which city?"))
-        self.assertEqual(len(messages[1]["content"]), 600)
-
-
-class RepairPromptTests(unittest.TestCase):
-    def test_a_second_try_is_the_first_prompt_the_reply_and_what_was_wrong(self) -> None:
-        first = [{"role": "system", "content": "menu"}, {"role": "user", "content": "question"}]
-        refused = Rejection(("a must be a number; got 'x'", "b is required and was not given"),
-                            "for a person", "bad input")
-        self.assertEqual(
-            repair_messages(first, '{"tool": "t"}', refused),
-            [
-                {"role": "system", "content": "menu"},
-                {"role": "user", "content": "question"},
-                {"role": "assistant", "content": '{"tool": "t"}'},
-                {"role": "user", "content": (
-                    "That call was not made: a must be a number; got 'x'; "
-                    "b is required and was not given. Reply with one JSON object only."
-                )},
-            ],
-        )
-        # The first prompt is not touched: it is what the model has already read.
-        self.assertEqual(len(first), 2)
 
 
 def said(raw: str = "", **more) -> Completion:

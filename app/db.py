@@ -373,31 +373,6 @@ def run_steps(run_id: str) -> list[dict]:
     return rows
 
 
-def last_message_asked(cid: str) -> bool:
-    """Whether the last thing said in a conversation was a question the model
-    chose to put to the user in place of an answer.
-
-    It is read from the steps kept for that message: the pass that decided
-    said "ask". Where steps are not kept, the answer is always no, and a reply
-    to such a question is routed like any other message.
-    """
-    rows = _rows(
-        "SELECT s.output_text FROM steps s"
-        " WHERE s.message_id = (SELECT id FROM messages WHERE conversation_id = ?"
-        "                        ORDER BY created_at DESC LIMIT 1)"
-        "   AND s.kind IN ('route', 'repair')"
-        " ORDER BY s.idx DESC LIMIT 1",
-        (cid,),
-    )
-    if not rows or not rows[0]["output_text"]:
-        return False
-    try:
-        said = json.loads(rows[0]["output_text"])
-    except json.JSONDecodeError:
-        return False
-    return isinstance(said, dict) and said.get("tool") == "ask"
-
-
 def prune_steps(keep_days: float | None = None) -> None:
     """Forget steps older than the retention period."""
     global _pruned_at

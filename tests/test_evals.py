@@ -587,20 +587,25 @@ class LoopTaskTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_same_script_without_the_loop_makes_one_lookup_and_fails_the_task(self) -> None:
         task_ = next(t for t in load_tasks() if t.id == "loop-two-lookups-for-one-question")
-        report = await run_suite([dataclasses.replace(task_, loop=False)], engine_kind="scripted")
+        report = await run_suite(
+            [dataclasses.replace(task_, loop=False)], engine_kind="scripted", loop=False
+        )
         self.assertEqual(report["tasks"][0]["status"], FAILED)
         self.assertIn("calls: ['weather'], expected ['weather', 'weather']", report["tasks"][0]["failures"])
 
-    async def test_the_loop_can_be_turned_on_for_every_task(self) -> None:
-        report = await run_suite(load_tasks(), engine_kind="scripted", loop=True)
-        self.assertIs(report["loop"], True)
-        # A scripted task written for one choice and an answer has no line for
-        # a second choice, so with the loop on those that used a tool run out
-        # of script. What this shows is that the switch reaches every task.
-        by_id = {r["id"]: r for r in report["tasks"]}
-        self.assertEqual(by_id["slash-calc"]["status"], PASSED)      # a command never loops
-        self.assertEqual(by_id["skill-compare"]["status"], PASSED)   # nor does a skill
-        self.assertEqual(by_id["model-chooses-a-tool"]["status"], FAILED)
+    async def test_the_loop_is_the_settings_unless_one_choice_is_asked_for(self) -> None:
+        support.with_settings(self, agent_loop=True)
+        looping = await run_suite(load_tasks(), engine_kind="scripted")
+        single = await run_suite(load_tasks(), engine_kind="scripted", loop=False)
+        self.assertEqual((looping["loop"], single["loop"]), (True, False))
+        ran = {r["id"]: r for r in looping["tasks"]}
+        once = {r["id"]: r for r in single["tasks"]}
+        # One choice, its lookup and the answer: the choice after the lookup
+        # is not made.
+        self.assertEqual((ran["model-chooses-a-tool"]["passes"], once["model-chooses-a-tool"]["passes"]),
+                         (3, 2))
+        # A task that asks for the loop has it either way.
+        self.assertEqual(once["loop-two-lookups-for-one-question"]["steps"], 2)
 
     async def test_a_page_with_an_instruction_in_it_gets_nothing_fetched_for_it(self) -> None:
         from evals.runner import run_task

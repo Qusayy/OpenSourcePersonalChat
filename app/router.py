@@ -8,8 +8,8 @@ Ordered cheapest-first, because a routing pass on 2 vCPU costs seconds:
    model's judgement.
 3. **Grammar pass** — only when the persona enables tools and nothing above
    fired. Constrained by GBNF so the output cannot be malformed. The pass
-   itself is made by whoever is running the message; what is here is what it
-   reads, what it is held to, and how its reply is read.
+   itself is made by whoever is running the message, from the run's own
+   transcript; what is here is what it is held to and how its reply is read.
 
 Anything the heuristics catch is a model call that never happens, which on this
 hardware is the difference between an instant answer and a five-second wait.
@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 from .config import settings
 from .tools import REGISTRY, tools_to_gbnf
-from .tools.base import decision_ceiling, tool_menu
+from .tools.base import decision_ceiling
 from .tools.offline import TEMPS, UNITS, _canon
 from .tools.web import CURRENCY_CODES
 
@@ -219,18 +219,6 @@ def heuristic(text: str) -> ToolCall | None:
 
 # ----------------------------------------------------------- model routing ---
 
-ROUTE_SYSTEM = (
-    "You choose a tool for the user's message. Reply with one JSON object only.\n"
-    "Tools:\n{menu}\n"
-    'If no tool is needed, reply {{"tool": "none"}}.\n'
-    "If a tool is needed and the message leaves out something it must be given, "
-    'reply {{"tool": "ask", "args": {{"question": "..."}}}} with one short question.'
-)
-
-# How much of a message the routing pass reads. A choice of tool is made from
-# the first lines; a pasted document after them only costs seconds to read.
-ROUTE_TEXT = 600
-
 # Whether the model is offered the choice of asking the user a question.
 ASK = True
 
@@ -274,30 +262,6 @@ def free_route(text: str, *, tools_enabled: bool) -> tuple[ToolCall | None, str 
     return None, None
 
 
-def decision_messages(
-    text: str, tools: list, asked: tuple[str, str] | None = None
-) -> list[dict]:
-    """What the model reads when it is asked to choose: the menu and the
-    start of the message, and nothing of the conversation before it.
-
-    With one exception. ``asked`` is ``(what the user had sent, the question
-    they were asked back)``, given when the last thing said to them was a
-    question the model itself chose to ask. This message is then the answer to
-    that question and means nothing alone: "Lisbon" is a place to look the
-    weather up for only beside "what's the weather like". So that one exchange
-    is read first, with the question as the model's own earlier reply.
-    """
-    messages = [{"role": "system", "content": ROUTE_SYSTEM.format(menu=tool_menu(tools))}]
-    if asked is not None:
-        earlier, question = asked
-        messages += [
-            {"role": "user", "content": earlier[:ROUTE_TEXT]},
-            {"role": "assistant", "content": ask_reply(question)},
-        ]
-    messages.append({"role": "user", "content": text[:ROUTE_TEXT]})
-    return messages
-
-
 def decision_grammar(tools: list) -> str:
     """The grammar a choice is held to."""
     return tools_to_gbnf(tools, ask=ASK)
@@ -308,24 +272,6 @@ def decision_limit(tools: list) -> int:
     so a reply is never cut off before it closes. The grammar ends it long
     before that; a setting above it is honoured, one below it is not."""
     return max(settings.route_max_tokens, decision_ceiling(tools, ask=ASK))
-
-
-def repair_messages(messages: list[dict], raw: str, rejection) -> list[dict]:
-    """What the model reads when a call it chose could not be made.
-
-    The first prompt, then its own reply, then what was wrong with it. The
-    start is the first prompt to the letter, so the model has already read it
-    and only the last two turns are new. What was wrong is stated as fact, one
-    reason per problem; the only instruction is the one the first prompt gave.
-    """
-    return [
-        *messages,
-        {"role": "assistant", "content": raw},
-        {"role": "user", "content": (
-            "That call was not made: " + "; ".join(rejection.reasons) + ". "
-            "Reply with one JSON object only."
-        )},
-    ]
 
 
 def parse_action(said) -> Action:

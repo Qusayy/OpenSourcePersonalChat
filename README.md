@@ -935,6 +935,7 @@ python scripts/eval_agent.py --engine real --compare evals/reports/before.json
 python scripts/eval_agent.py --engine real --single            # one choice where a task does not ask for more
 python scripts/eval_agent.py --engine real --probe-routing     # one first choice, cold then warm
 python scripts/eval_agent.py --engine real --probe-cache       # what each pass of three turns read
+python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt   # another wording, this run only
 ```
 
 **Scripted**, each task brings what the model says, so the run measures the
@@ -958,6 +959,12 @@ ways and compare: the report says how many runs made a second lookup, how many
 were ended by a limit and how many by asking for the same thing twice, beside
 task success and seconds per task. That comparison is what decides whether the
 loop stays on. Scripted tasks are written for the loop on.
+
+A wording file (`--rules`) puts other texts in front of the model for one
+run: the loop's rules, and the persona, a tool's or a skill's line on the menu.
+It is how a rewording is measured before it is made the default, since with a
+model this small a reworded line can move routing either way. The report names
+the file and its digest.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

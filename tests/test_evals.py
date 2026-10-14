@@ -389,7 +389,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         report = await run_suite(load_tasks(), engine_kind="scripted")
         self.assertEqual(
             set(report),
-            {"engine", "seed", "loop", "created", "model", "tokens_are_estimates", "summary",
+            {"engine", "seed", "loop", "rules", "created", "model", "tokens_are_estimates", "summary",
              "by_category", "tasks"},
         )
         summary = report["summary"]

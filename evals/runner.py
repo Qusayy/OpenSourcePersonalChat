@@ -38,6 +38,7 @@ from . import fixtures
 from .score import route_match, score, skill_match
 from .scripted import ScriptedEngine
 from .tasks import Task, Turn
+from .wording import Wording, applied
 
 # How a task can end.
 PASSED = "passed"
@@ -151,6 +152,7 @@ async def run_suite(
     seed: int | None = 0,
     categories: Iterable[str] | None = None,
     loop: bool | None = None,
+    wording: Wording | None = None,
 ) -> dict:
     """Run every task this engine can run, and return the report.
 
@@ -158,7 +160,8 @@ async def run_suite(
     makes an engine per task from the task's own script. ``loop`` is what the
     site's setting would be: unset, it is the setting; False makes every
     task that does not ask for the loop choose once, the way to see what the
-    loop is worth. Scripts are written for the loop on.
+    loop is worth. Scripts are written for the loop on. ``wording`` puts other
+    texts in front of the model for this run only: see ``evals.wording``.
     """
     if engine_kind not in ("scripted", "real"):
         raise ValueError(f"unknown engine {engine_kind!r}")
@@ -166,22 +169,23 @@ async def run_suite(
         raise ValueError("a real run needs a loaded engine")
     wanted = set(categories) if categories else None
 
-    outcomes: list[Outcome] = []
-    for task in tasks:
-        if wanted is not None and task.category not in wanted:
-            continue
-        if not task.runs_with(engine_kind):
-            outcomes.append(Outcome(task, SKIPPED, [], []))
-            continue
-        if engine_kind == "real":
-            outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
-            continue
-        scripted = ScriptedEngine(task.script or ())
-        try:
-            outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
-        finally:
-            # No worker thread may outlive the loop it reports to.
-            await scripted.settled()
+    with applied(wording):
+        outcomes: list[Outcome] = []
+        for task in tasks:
+            if wanted is not None and task.category not in wanted:
+                continue
+            if not task.runs_with(engine_kind):
+                outcomes.append(Outcome(task, SKIPPED, [], []))
+                continue
+            if engine_kind == "real":
+                outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
+                continue
+            scripted = ScriptedEngine(task.script or ())
+            try:
+                outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
+            finally:
+                # No worker thread may outlive the loop it reports to.
+                await scripted.settled()
 
     timed = engine_kind == "real"
     return {
@@ -189,6 +193,8 @@ async def run_suite(
         "seed": seed,
         # Whether the loop was on for the tasks that do not ask for it.
         "loop": settings.agent_loop if loop is None else loop,
+        # Other texts the model was given in place of its own, if any were.
+        "rules": wording.describe() if wording else None,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "model": _model(engine) if timed else None,
         # Without a tokenizer a token is counted as four characters.

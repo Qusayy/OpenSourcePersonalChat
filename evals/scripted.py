@@ -28,6 +28,7 @@ from typing import Iterator, Sequence
 
 from app.config import Settings, settings as default_settings
 from app.llm import Engine, render_chatml
+from app.llm_server import Reading
 
 # A piece is a word with the space after it, so the pieces of an output put
 # back together are the output, to the character.
@@ -110,7 +111,9 @@ class ScriptedEngine(Engine):
         grammar: str | None = None,
         seed: int | None = None,
         stop: list[str] | None = None,
+        reading: Reading | None = None,
     ) -> Iterator[str]:
+        # A script reads nothing, so it reports nothing of what it read.
         with self._guard:
             index = len(self.passes)
             if index >= len(self.script):

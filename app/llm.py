@@ -32,13 +32,14 @@ import platform
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
 from .config import Settings, settings as default_settings
+from .llm_server import LlamaServer, Reading
 from .telemetry import describe, follow_server, process_rss_mb, usable_cpu_count
 
 log = logging.getLogger("aurora.llm")
@@ -118,6 +119,10 @@ class Completion:
     error: str | None = None
     cancelled: bool = False
     prompt_tokens: int | None = None
+    # Of the prompt, what the model read and what it took from its cache, as a
+    # model server reports them. None where nothing reported them.
+    read_tokens: int | None = None
+    cached_tokens: int | None = None
     completion_tokens: int | None = None
     queue_wait_ms: float | None = None
     ttft_ms: float | None = None
@@ -164,6 +169,9 @@ class Engine:
         # The model server, once it has answered. None while the model is in
         # this process, and while the server is still being waited for.
         self._server: Any = None
+        # What the server said each recent text came to: every count is a
+        # request to it, and a run counts the same prompt more than once.
+        self._counted: OrderedDict[str, int] = OrderedDict()
         self._lock = asyncio.Lock()
         self._waiting: deque[str] = deque()
         self._cancels: dict[str, Stop] = {}
@@ -246,8 +254,6 @@ class Engine:
             )
 
     def _connect(self, url: str):
-        from .llm_server import LlamaServer
-
         return LlamaServer(url)
 
     def _wait_for_server(self, url: str, keep_waiting: bool) -> None:
@@ -302,9 +308,20 @@ class Engine:
 
     # -- token accounting ---------------------------------------------------
 
+    # How many counts the server is not asked for again.
+    COUNTS_KEPT = 256
+
     def count_tokens(self, text: str) -> int:
         if self._server is not None:
-            return self._server.tokenize(text)
+            known = self._counted.get(text)
+            if known is None:
+                known = self._server.tokenize(text)
+                self._counted[text] = known
+                if len(self._counted) > self.COUNTS_KEPT:
+                    self._counted.popitem(last=False)
+            else:
+                self._counted.move_to_end(text)
+            return known
         if self._llm is None:
             return max(1, len(text) // 4)  # mock-mode estimate
         return len(self._llm.tokenize(text.encode("utf-8"), add_bos=False, special=True))
@@ -403,9 +420,12 @@ class Engine:
         grammar: str | None = None,
         seed: int | None = None,
         stop: list[str] | None = None,
+        reading: Reading | None = None,
     ) -> Iterator[str]:
         """Yield text deltas from the model, wherever it is, or from the mock
-        generator."""
+        generator. A model server also fills in ``reading``: how much of the
+        prompt it read and how much it had in its cache. Nothing else reports
+        that, and it is left empty."""
         if self.cfg.mock:
             if grammar is not None:
                 # A pass held to a grammar is a decision, and without a model
@@ -429,7 +449,7 @@ class Engine:
                 body["seed"] = seed
             if stop:
                 body["stop"] = stop
-            yield from self._server.stream(body)
+            yield from self._server.stream(body, reading)
             return
 
         # Only what the caller named is passed on. A pass that sets two of
@@ -517,6 +537,8 @@ class Engine:
                             raw=raw,
                             cancelled=data["cancelled"],
                             prompt_tokens=data["prompt_tokens"],
+                            read_tokens=data["read_tokens"],
+                            cached_tokens=data["cached_tokens"],
                             completion_tokens=data["completion_tokens"],
                             queue_wait_ms=data["queue_wait_ms"],
                             ttft_ms=data["ttft_ms"],
@@ -623,6 +645,8 @@ class Engine:
                         "ttft_ms": None,
                         "queue_wait_ms": queue_wait_ms,
                         "prompt_tokens": None,
+                        "read_tokens": None,
+                        "cached_tokens": None,
                         "completion_tokens": 0,
                         "prefill_tps": None,
                         "gen_tps": None,
@@ -645,9 +669,11 @@ class Engine:
                     t_first: float | None = None
                     produced = 0
                     pieces: list[str] = []
+                    reading = Reading()
                     try:
                         for text in self._iter_chunks(
-                            messages, sampling, grammar=grammar, seed=seed, stop=stop
+                            messages, sampling, grammar=grammar, seed=seed, stop=stop,
+                            reading=reading,
                         ):
                             if stopped.is_set() or gone.is_set():
                                 break
@@ -675,6 +701,10 @@ class Engine:
                                     "ttft_ms": ttft_ms,
                                     "queue_wait_ms": queue_wait_ms,
                                     "prompt_tokens": prompt_tok,
+                                    # What the model read of it: all of it, or
+                                    # only what its cache did not have.
+                                    "read_tokens": reading.read,
+                                    "cached_tokens": reading.cached,
                                     "completion_tokens": produced,
                                     # prefill covers the prompt plus the first token
                                     "prefill_tps": round(prompt_tok / max(ttft_ms / 1000, 1e-6), 1),

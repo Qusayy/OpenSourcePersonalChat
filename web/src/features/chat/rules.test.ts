@@ -82,6 +82,13 @@ describe("trimmedWording", () => {
     expect(trimmedWording(1)).toBe("The oldest message was dropped to fit the context window.");
     expect(trimmedWording(4)).toBe("The 4 oldest messages were dropped to fit the context window.");
   });
+  it("says when the message itself was cut, alone or after what was dropped", () => {
+    const cut = "Your message was too long to read whole; the model read its first part.";
+    expect(trimmedWording(0, true)).toBe(cut);
+    expect(trimmedWording(2, true)).toBe(
+      `The 2 oldest messages were dropped to fit the context window. ${cut}`,
+    );
+  });
 });
 
 describe("applyStep", () => {

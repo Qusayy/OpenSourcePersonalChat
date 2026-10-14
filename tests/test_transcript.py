@@ -12,6 +12,7 @@ import random
 import unittest
 
 try:
+    from app.context import merged
     from app.personas import get_persona
     from app.tools.base import available, tool_menu
     from app.transcript import (
@@ -174,6 +175,43 @@ class GrowingTests(unittest.TestCase):
                 + " No more lookups were possible; say what is still unknown."
             )},
         )
+
+
+class PartTests(unittest.TestCase):
+    """What the run added, kept as parts that say what each one is."""
+
+    def test_each_thing_added_is_a_part_of_its_kind(self) -> None:
+        t = Transcript("Rules.", [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
+                       "Coat?")
+        t.action(CALL)
+        t.observation("weather", "Paris: overcast.")
+        t.action('{"tool": "weather", "args": {"location": "Atlantis"}}')
+        t.observation("weather", "No such place.", ok=False)
+        t.rejection(("location is required",))
+        t.answer_cue()
+        self.assertEqual(
+            [(p.role, p.kind, p.tools) for p in t.parts()],
+            [("system", "instruction", ()), ("user", "question", ()), ("assistant", "answer", ()),
+             ("user", "question", ()), ("assistant", "action", ()), ("user", "observation", ("weather",)),
+             ("assistant", "action", ()), ("user", "failed", ("weather",)), ("user", "rejection", ()),
+             ("user", "cue", ())],
+        )
+
+    def test_what_the_run_added_begins_with_its_message(self) -> None:
+        t = Transcript("Rules.", [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}],
+                       "Coat?")
+        t.action(CALL)
+        t.observation("weather", "Paris: overcast.")
+        t.answer_cue()
+        self.assertEqual([p.kind for p in t.run_parts()], ["question", "action", "observation", "cue"])
+        self.assertEqual(t.run_parts()[0].content, "Coat?")
+
+    def test_joined_the_parts_are_the_messages(self) -> None:
+        t = Transcript("Rules.", [], "Coat?")
+        t.action(CALL)
+        t.observation("weather", "Paris: overcast.")
+        t.answer_cue()
+        self.assertEqual(merged(t.parts()), t.messages())
 
 
 class DataTests(unittest.TestCase):

@@ -239,6 +239,10 @@ export interface DoneEvent {
   ttft_ms: number | null;
   queue_wait_ms: number | null;
   prompt_tokens: number | null;
+  /** Of the prompt, what the model read and what it had in its cache, as a
+   *  model server reports them. Null where nothing reported them. */
+  read_tokens?: number | null;
+  cached_tokens?: number | null;
   completion_tokens: number;
   prefill_tps: number | null;
   gen_tps: number | null;
@@ -265,7 +269,16 @@ export type ChatEvents = {
   };
   step: StepEvent;
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
-  trimmed: { dropped: number };
+  /** Something had to give for the prompt to fit the window: the oldest
+   *  messages, given to the model only in short, or the end of this one. */
+  trimmed: {
+    dropped: number;
+    /** Earlier turns read whole, and earlier turns given only in short. */
+    turns?: number;
+    summarised?: number;
+    /** This message was too long, and the model read its first part. */
+    cut?: boolean;
+  };
   /** Waiting for the one engine. `position` is how many are ahead. */
   queue: { position: number; first: boolean };
   /** The pass that writes the answer has the engine. `request_id` is the

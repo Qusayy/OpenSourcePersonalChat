@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # choice is a pass through the model and costs seconds, so the loop is
     # bounded three ways, and a tool the visitor named themselves (a command,
     # a pattern, a skill) never starts it.
-    agent_loop: bool = False
+    agent_loop: bool = True
     agent_max_steps: int = 3        # tool calls for one message
     agent_max_decisions: int = 3    # passes that choose, for one message
     agent_max_seconds: float = 90.0  # for everything before the answer

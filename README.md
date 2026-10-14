@@ -463,7 +463,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
-| `AURORA_AGENT_LOOP` | `false` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; see *Looking something up twice* |
+| `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
 | `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
@@ -493,7 +493,21 @@ Eight tools, no API keys anywhere:
 
 **Skills** are one-click workflows on top of them — *Summarise a link*,
 *Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
-*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path.
+*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path:
+the inputs it needs, the lookups it makes with them, and the prompt the answer
+is written from. A skill reads its inputs out of the message with a pattern of
+its own; *Compare* knows "A vs B", "the difference between A and B", "how does
+A differ from B" and the like. Where the pattern misses ("is Python faster than
+Rust?"), one short pass, held to a grammar of exactly those inputs, fills them
+in, and the answer is written on from it. A link is never filled in that way:
+the model may not supply an address.
+
+Two of them the Agent may also choose itself, as it chooses a tool: *Compare*
+and *Fact-check* are on its menu beside the tools, held to the same grammar.
+A skill it chooses makes its lookups, which count against the run's limits like
+any other, and the answer is asked for in the skill's own words. A skill is
+offered to the model only where it says how its answer is to be asked for;
+the rest stay buttons.
 
 ### How a 1.5B model is made to route reliably
 
@@ -506,16 +520,18 @@ prose preambles and invented keys. Five layers, cheapest first:
    `what time is it in Tokyo`. Regex, free, and better than the model's
    judgement. These handle most real traffic with no model call at all.
 3. **Grammar-constrained routing** — only for the *Agent* persona, and only
-   when the first two miss. A short pass runs under a GBNF grammar generated
+   when the first two miss. The model chooses under a GBNF grammar generated
    from the tool registry, so malformed output is not unlikely, it is
-   unrepresentable. The grammar holds what goes into a call as well as its
+   unrepresentable. It reads the prompt the answer is later written from:
+   the system text with the tool menu, the conversation so far, the message. The grammar holds what goes into a call as well as its
    shape. Text has a ceiling, so a reply always closes instead of being cut
    off mid-string by the token limit. An argument with a known set of values
    can only be given one of them: the model cannot invent a currency, and a
    unit is its own name or a word for it. An optional argument may be given
    or left out. And where the message leaves out something a tool must have,
    the pass may reply with one short question for the user instead of
-   guessing; their reply is then routed with that question in view.
+   guessing; their reply is then read after that question, like any message
+   after the one before it.
 4. **One second try** — a call the tool still cannot take is sent back to the
    model once, with what was wrong, stated as fact. After that it is not
    argued with.
@@ -534,10 +550,10 @@ emits and says what a grammar accepts and what it refuses.
 
 ### Looking something up twice
 
-As it ships, a message that reaches the model makes one choice of tool and
-then answers. It cannot look something up, read what came back, and decide to
-look up something else. `AURORA_AGENT_LOOP=true` lets it: a tool the model
-chose earns it another choice.
+A message that reaches the model can look something up, read what came back,
+and decide to look up something else: a tool the model chose earns it another
+choice. `AURORA_AGENT_LOOP=false` turns that off. The model then chooses once,
+from the same prompt, and the answer follows that one lookup.
 
 The model is not trusted to know when to stop. A small one stops too early, or
 asks for the same thing again. So the code that runs the loop holds the limits:
@@ -558,10 +574,31 @@ keeps it, so nobody else's prompt replaces it in the model's cache part-way
 through; if a tool goes out to the network while somebody is waiting, the slot
 is lent to them for that time.
 
-It is off by default because the one thing that decides its worth cannot be
-known without measuring it on the model: whether a second choice by a 1.5B
-model is good enough to be worth its seconds. `scripts/eval_agent.py --loop`
-is how to find out.
+Whether a second choice by a small model is worth its seconds is a question
+for the model, not the code: `scripts/eval_agent.py --engine real --single`
+makes every task choose once, to set beside a run with the loop.
+
+### What the next message reads
+
+Each answered message keeps what the model was sent for it, from the message
+to the answer: what was looked up, as it was read, and the choices the model
+made on the way. The next message is read with that, as it was. A follow-up
+can then use an earlier result ("and is that warm for October?" after the
+weather was looked up), and a model server that keeps its cache reads little
+more than the new message, since the prompt begins with the last one and its
+answer.
+
+A result that goes out of date is replaced, once it has, by a line saying so:
+the weather after three hours, a rate after a day, the time after ten minutes.
+A conversation that outgrows the window loses its oldest turns in blocks, and
+they are summed up in a few lines at the top. A message too long for the
+window is cut, and the page says so. A conversation from before any of this
+was kept is read as its messages.
+
+What was sent is kept with the conversation and deleted with it. It holds
+fetched pages, so it decides nothing: which addresses the reader may open is
+decided by the visitor's own messages alone, and an address the model read in
+a page is not one of them.
 
 ### Safety
 
@@ -894,8 +931,9 @@ database.
 python scripts/eval_agent.py                                   # scripted: no model needed
 python scripts/eval_agent.py --engine real --out evals/reports/today.json
 python scripts/eval_agent.py --engine real --compare evals/reports/before.json
-python scripts/eval_agent.py --engine real --loop              # every task with the loop on
-python scripts/eval_agent.py --engine real --probe-routing     # one routing pass, cold then warm
+python scripts/eval_agent.py --engine real --single            # one choice where a task does not ask for more
+python scripts/eval_agent.py --engine real --probe-routing     # one first choice, cold then warm
+python scripts/eval_agent.py --engine real --probe-cache       # what each pass of three turns read
 ```
 
 **Scripted**, each task brings what the model says, so the run measures the
@@ -912,12 +950,13 @@ as the benchmark would. With the model in a llama-server, stop `aurora` and
 leave `aurora-llm` running: the run then uses that server, and two apps sharing
 its one slot would each keep a queue the other cannot see.
 
-A task that is about the loop asks for it itself, so it runs with the loop on
-whatever the settings say. `--loop` turns it on for all the others too. Run the
-suite both ways and compare: the report says how many runs made a second
-lookup, how many were ended by a limit and how many by asking for the same
-thing twice, beside task success and seconds per task. That comparison is what
-decides whether the loop stays on.
+The loop is on or off for a run of the suite as the settings say. A task that
+is about the loop asks for it itself, so it runs with the loop on whatever the
+settings say; `--single` makes all the others choose once. Run the suite both
+ways and compare: the report says how many runs made a second lookup, how many
+were ended by a limit and how many by asking for the same thing twice, beside
+task success and seconds per task. That comparison is what decides whether the
+loop stays on. Scripted tasks are written for the loop on.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

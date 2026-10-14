@@ -5,6 +5,7 @@
     python scripts/eval_agent.py --engine real --out report.json
     python scripts/eval_agent.py --engine real --compare previous.json
     python scripts/eval_agent.py --engine real --probe-routing
+    python scripts/eval_agent.py --engine real --probe-cache
 
 With ``--engine scripted`` each task brings what the model says, so the run
 measures the code around the model. It needs no weights and takes a second.
@@ -29,13 +30,18 @@ import argparse
 import asyncio
 import json
 import sys
+from contextlib import aclosing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import agent  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.router import decision_grammar, decision_limit, decision_messages  # noqa: E402
+from app.context import Turn  # noqa: E402
+from app.personas import get_persona  # noqa: E402
+from app.router import decision_grammar, decision_limit  # noqa: E402
 from app.tools.base import available  # noqa: E402
+from app.transcript import Transcript, system_for  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
 from evals.tasks import TASKS, load_tasks  # noqa: E402
@@ -55,7 +61,7 @@ def load_engine():
 
 
 async def probe_routing(engine, seed: int | None) -> dict:
-    """The same routing pass twice, back to back.
+    """The same first choice twice, back to back.
 
     The first reads its whole prompt. The second finds that prompt already in
     the model's cache, so the difference in time to the first token is what
@@ -63,7 +69,8 @@ async def probe_routing(engine, seed: int | None) -> dict:
     """
     with fixtures.recorded({}):
         tools = available()
-        messages = decision_messages("Do I need a coat in Paris today?", tools)
+        system = system_for(get_persona("agent"), tools)
+        messages = Transcript(system, [], "Do I need a coat in Paris today?").messages()
         grammar, limit = decision_grammar(tools), decision_limit(tools)
     out = {}
     for name in ("cold", "warm"):
@@ -79,6 +86,92 @@ async def probe_routing(engine, seed: int | None) -> dict:
     return out
 
 
+# A conversation of three turns that no pattern answers, so every turn is the
+# model's, played once with a persona that never looks anything up and once
+# with the one that can.
+PROBE_TURNS = (
+    "Give me one fact about octopuses, in a sentence.",
+    "And one about their eyes?",
+    "Which of those two surprised scientists more?",
+)
+PROBE_PERSONAS = ("explainer", "agent")
+
+
+async def probe_cache(engine, seed: int | None) -> list[dict]:
+    """Three turns of one conversation, and what each pass of each turn read.
+
+    Each pass is a row: the prompt as this app counts it, as the server
+    counted it (what it read and what it took from its cache, together), what
+    it read, and the time to its first token. The first figure against the
+    second is how far the app's prompt renderer is from the model's own
+    template. The third, on the second and third turns, is whether the
+    server's cache is used at all: a turn that extends the one before should
+    read little more than the new message.
+    """
+    rows: list[dict] = []
+    current: dict = {}
+    original = engine.stream_chat
+
+    async def recording(messages, sampling, *args, **kwargs):
+        async with aclosing(original(messages, sampling, *args, **kwargs)) as stream:
+            async for event, data in stream:
+                if event == "done":
+                    read, cached = data.get("read_tokens"), data.get("cached_tokens")
+                    ttft = data.get("ttft_ms")
+                    rows.append({
+                        **current,
+                        "pass": "choice" if kwargs.get("grammar") else "answer",
+                        "counted": data.get("prompt_tokens"),
+                        "server": None if read is None or cached is None else read + cached,
+                        "read": read,
+                        "cached": cached,
+                        "first_token_s": None if ttft is None else round(ttft / 1000, 2),
+                    })
+                yield event, data
+
+    engine.stream_chat = recording
+    try:
+        with fixtures.recorded({}):
+            for persona in PROBE_PERSONAS:
+                history: list[dict] = []
+                sent: list[Turn] = []
+                for turn, text in enumerate(PROBE_TURNS, start=1):
+                    current.update(persona=persona, turn=turn)
+                    trace = agent.Trace()
+                    async for _ in agent.run(
+                        text, persona=get_persona(persona), history=list(history), trace=trace,
+                        engine=engine, tools_enabled=True, seed=seed, context=list(sent),
+                    ):
+                        pass
+                    # Each turn is read with the ones before it, as the site
+                    # reads a conversation: as it was sent.
+                    history.append({"role": "user", "content": text})
+                    if trace.answer and trace.answer.strip():
+                        history.append({"role": "assistant", "content": trace.answer})
+                        sent.append(trace.turn(text))
+                    else:
+                        sent.append(Turn(text, ""))
+    finally:
+        del engine.stream_chat
+    return rows
+
+
+def show_probe(rows: list[dict], file=None) -> None:
+    file = file or sys.stderr
+
+    def cell(value) -> str:
+        return "-" if value is None else str(value)
+
+    print(f"\n{'persona':<10} {'turn':>4} {'pass':<7} {'counted':>8} {'server':>7} "
+          f"{'read':>6} {'cached':>7} {'first token s':>14}", file=file)
+    for r in rows:
+        print(f"{r['persona']:<10} {r['turn']:>4} {r['pass']:<7} {cell(r['counted']):>8} "
+              f"{cell(r['server']):>7} {cell(r['read']):>6} {cell(r['cached']):>7} "
+              f"{cell(r['first_token_s']):>14}", file=file)
+    if all(r["read"] is None for r in rows):
+        print("\n  the server reported nothing of what it read", file=file)
+
+
 def show(report: dict, file=None) -> None:
     file = file or sys.stderr  # looked up when called: a caller may have redirected it
     s = report["summary"]
@@ -86,7 +179,7 @@ def show(report: dict, file=None) -> None:
     def pct(value) -> str:
         return "n/a" if value is None else f"{value:.0%}"
 
-    loop = ", loop on for every task" if report.get("loop") else ""
+    loop = "" if report.get("loop", True) else ", one choice where a task does not ask for more"
     print(f"\n{report['engine']} engine, seed {report['seed']}{loop}", file=file)
     print(
         f"  {s['passed']} passed, {s['failed']} failed, {s['pending']} known gaps, "
@@ -95,12 +188,16 @@ def show(report: dict, file=None) -> None:
     )
     print(
         f"  task success {pct(s['task_success'])}   routing {pct(s['routing_accuracy'])}   "
-        f"arguments {pct(s['argument_match'])}   invalid decisions {pct(s['invalid_output_rate'])}",
+        f"skills {pct(s.get('skill_selection'))}   arguments {pct(s['argument_match'])}   "
+        f"invalid decisions {pct(s['invalid_output_rate'])}",
         file=file,
     )
     if s.get("seconds") and s["seconds"]["total"]:
         t = s["seconds"]["total"]
         print(f"  seconds per task: median {t['median']}, 95% within {t['p95']}", file=file)
+    if s.get("read_tokens"):
+        r = s["read_tokens"]
+        print(f"  prompt tokens the model read per task: median {r['median']}, most {r['max']}", file=file)
     if report["tokens_are_estimates"]:
         print("  token counts are estimates (four characters a token); no timings", file=file)
     for row in report["tasks"]:
@@ -133,14 +230,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="write the report here as JSON")
     parser.add_argument("--compare", type=Path, help="an earlier report to set this one beside")
     parser.add_argument(
-        "--loop", action="store_true",
-        help="run every task with the loop on, not only the tasks that ask for it",
+        "--single", action="store_true",
+        help="let the model choose once in every task that does not ask for the loop, "
+             "whatever the setting says (scripts are written for the loop on)",
     )
     parser.add_argument(
         "--probe-routing", action="store_true",
         help="time one routing pass cold and warm instead of running the tasks (real engine only)",
     )
+    parser.add_argument(
+        "--probe-cache", action="store_true",
+        help="play a three-turn conversation and show what each pass read (real engine only)",
+    )
     args = parser.parse_args(argv)
+
+    if args.probe_cache:
+        if args.engine != "real":
+            parser.error("--probe-cache reads what the model server reports, so it needs --engine real")
+        rows = asyncio.run(probe_cache(load_engine(), args.seed))
+        show_probe(rows)
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return 0
 
     if args.probe_routing:
         if args.engine != "real":
@@ -153,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = load_engine() if args.engine == "real" else None
     report = asyncio.run(run_suite(
         tasks, engine_kind=args.engine, engine=engine, seed=args.seed, categories=args.category,
-        loop=args.loop,
+        loop=False if args.single else None,
     ))
     if args.compare:
         report["compared"] = compare(report, json.loads(args.compare.read_text(encoding="utf-8")))

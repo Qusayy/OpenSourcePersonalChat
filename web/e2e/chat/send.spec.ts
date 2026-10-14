@@ -254,6 +254,16 @@ test.describe("against a stream the test controls", () => {
     await expect(notice(page)).toHaveCount(1);
   });
 
+  test("a message cut to fit is said in the thread", async ({ page }) => {
+    await ask(page, "hello");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "trimmed", { dropped: 0, turns: 0, summarised: 0, cut: true });
+    await expect(notice(page)).toHaveText(
+      "Your message was too long to read whole; the model read its first part.",
+    );
+    await answer(page, "Fine.");
+  });
+
   test("the route line shows a step while it runs and keeps only the decision", async ({
     page,
   }) => {

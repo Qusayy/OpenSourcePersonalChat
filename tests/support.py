@@ -93,6 +93,14 @@ async def collect(stream) -> list[tuple[str, Any]]:
     return [item async for item in stream]
 
 
+async def listen(stream, heard: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    """Everything an async stream yields, kept in ``heard`` as it arrives, so
+    that a test can wait for something part-way through before going on."""
+    async for item in stream:
+        heard.append(item)
+    return heard
+
+
 async def until(done, timeout: float = 5.0) -> None:
     """Wait for something another task or thread is about to make true."""
     deadline = time.monotonic() + timeout

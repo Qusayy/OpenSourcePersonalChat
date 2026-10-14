@@ -15,8 +15,8 @@ from unittest import mock
 try:
     from app.tools import base
     from app.tools.base import (
-        Arg, Tool, ToolResult, call_tool, check, decision_ceiling, tool_menu, tools_to_gbnf,
-        was_given,
+        Arg, Tool, ToolResult, args_ceiling, args_to_gbnf, call_tool, check, check_args,
+        decision_ceiling, tool_menu, tools_to_gbnf, was_given,
     )
     from app.excerpt import estimate
     from evals import fixtures
@@ -568,6 +568,45 @@ class GrammarTests(unittest.TestCase):
             rows[1],
             "- clock(timezone_name?): Current date and time, optionally in a named timezone.",
         )
+
+
+class ArgsGrammarTests(unittest.TestCase):
+    """The grammar a pass is held to when it fills in a set of arguments."""
+
+    PAIR = (Arg("a", "string", True, "the first", max_len=10),
+            Arg("b", "string", True, "the second", max_len=10))
+
+    def test_it_is_one_object_of_those_arguments_and_nothing_else(self) -> None:
+        grammar = Grammar(args_to_gbnf(self.PAIR))
+        self.assertTrue(grammar.accepts('{"a": "Python", "b": "Rust"}'))
+        for text in ('{"a": "Python"}', '{"b": "Rust", "a": "Python"}', '{"a": "Python", "b": "Rust", "c": "C"}',
+                     '{"tool": "none"}', '{"a": "Python", "b": "far too long for it"}',
+                     'Sure! {"a": "Python", "b": "Rust"}'):
+            with self.subTest(text=text):
+                self.assertFalse(grammar.accepts(text))
+
+    def test_it_holds_each_argument_to_its_kind(self) -> None:
+        spec = (Arg("n", "number", True, "how many"),
+                Arg("unit", "string", True, "which", choices=("km", "mi")),
+                Arg("note", "string", False, "anything", max_len=5))
+        grammar = Grammar(args_to_gbnf(spec))
+        self.assertTrue(grammar.accepts('{"n": 3, "unit": "km"}'))
+        self.assertTrue(grammar.accepts('{"n": 3, "unit": "mi", "note": "hi"}'))
+        self.assertFalse(grammar.accepts('{"n": "three", "unit": "km"}'))
+        self.assertFalse(grammar.accepts('{"n": 3, "unit": "miles"}'))
+
+    def test_enough_tokens_are_given_for_the_longest_object_it_allows(self) -> None:
+        longest = '{"a": "' + "é" * 10 + '", "b": "' + "é" * 10 + '"}'
+        self.assertTrue(Grammar(args_to_gbnf(self.PAIR)).accepts(longest))
+        self.assertGreaterEqual(args_ceiling(self.PAIR), len(longest.encode("utf-8")))
+
+    def test_a_set_of_arguments_is_checked_as_a_tools_are(self) -> None:
+        clean, rejection = check_args("Compare", self.PAIR, {"a": "Python", "c": "x"})
+        self.assertEqual(clean, {"a": "Python"})
+        self.assertEqual(rejection.reasons, ("b is required and was not given",))
+        self.assertEqual(rejection.summary, "Compare needs b.")
+        self.assertEqual(check_args("Compare", self.PAIR, {"a": "Python", "b": 3}),
+                         ({"a": "Python", "b": "3"}, None))
 
 
 class GrammarReaderTests(unittest.TestCase):

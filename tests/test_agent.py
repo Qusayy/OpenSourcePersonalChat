@@ -17,6 +17,8 @@ import unittest
 try:
     from app import agent
     from app.context import SUMMARY_HEADING, merged
+    from app.router import fill_request
+    from app.tools.base import args_to_gbnf
     from app.transcript import data
     from app.excerpt import estimate
     from app.personas import get_persona
@@ -212,6 +214,97 @@ class WindowTests(AgentCase):
         self.assertEqual(trimmed["dropped"], 2 * trimmed["summarised"])
         self.assertTrue(trace.prompt[1]["content"].startswith(SUMMARY_HEADING))
         self.assertEqual(trace.prompt[-1]["content"], "And now?")
+
+
+def fill(a: str, b: str) -> str:
+    return json.dumps({"a": a, "b": b})
+
+
+def article_of(title: str) -> ToolResult:
+    return ToolResult(True, f"Wikipedia — {title}: {title} is a language.", card="wikipedia",
+                      data={"title": title, "extract": f"{title} is a language."})
+
+
+class FillTests(AgentCase):
+    """A skill the visitor chose, whose pattern did not find all it needs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.asked = support.played_tools(self, {"wikipedia": [article_of("Python"), article_of("Rust")]})
+
+    async def compare(self, message: str, *script, **options):
+        engine = self.scripted(*script, **options)
+        trace = agent.Trace()
+        stream = await collect(agent.run(
+            message, persona=get_persona("agent"), skill=get_skill("compare"), history=[],
+            trace=trace, engine=engine, request_id="run",
+        ))
+        return engine, trace, stream
+
+    async def test_a_pattern_that_finds_both_makes_no_pass_to_fill_them(self) -> None:
+        engine, trace, stream = await self.compare("Python vs Rust", "| | Python | Rust |")
+        self.assertEqual(len(engine.passes), 1)
+        self.assertEqual([s.kind for s in trace.steps], ["route", "tool", "tool", "answer"])
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+
+    async def test_what_the_pattern_missed_is_filled_in_by_one_short_pass(self) -> None:
+        engine, trace, stream = await self.compare(
+            "Is Python faster than Rust?", fill("Python", "Rust"), "| | Python | Rust |",
+        )
+        self.assertEqual(self.asked["wikipedia"], [{"query": "Python"}, {"query": "Rust"}])
+        self.assertEqual([s.kind for s in trace.steps], ["fill", "route", "tool", "tool", "answer"])
+        filled = trace.steps[0]
+        self.assertEqual((filled.model, filled.name, filled.ok), (True, "compare", True))
+        # It is held to a grammar of the skill's inputs, and given enough
+        # tokens to finish it.
+        self.assertEqual(engine.passes[0].grammar, args_to_gbnf(get_skill("compare").inputs))
+        self.assertIn(fill_request("Compare two things", get_skill("compare").inputs),
+                      engine.passes[0].prompt)
+        # It is the skill's own step on the page, which says what the pass cost.
+        self.assertEqual(shape(stream)[:2], ["step:route:running", "step:route:ok"])
+        route = support.step(stream, "route", "ok")
+        self.assertEqual((route["label"], route["detail"]), ("Compare two things", "skill"))
+        self.assertEqual(route["tokens_in"], filled.prompt_tokens)
+        # And the answer is written on from what the fill read and wrote.
+        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt + engine.passes[0].output))
+        self.assertEqual(engine.most_at_once, 1)
+        self.assertTrue(engine.free)
+
+    async def test_a_fill_that_cannot_be_used_leaves_the_whole_message_as_the_first(self) -> None:
+        for reply in ('{"a": "Python"}', "not json", '{"a": "Python", "b": ""}'):
+            with self.subTest(reply=reply):
+                self.asked["wikipedia"].clear()
+                engine, trace, _ = await self.compare("Is Python faster than Rust?", reply, "Python.")
+                self.assertEqual(self.asked["wikipedia"], [{"query": "Is Python faster than Rust?"}])
+                self.assertIs(trace.steps[0].ok, False)
+                # The answer is not written on from a fill that was not used.
+                self.assertNotIn(reply, engine.passes[1].prompt)
+                self.assertTrue(engine.free)
+
+    async def test_a_skill_with_no_pattern_or_only_an_address_to_find_never_fills(self) -> None:
+        for skill, message in (("weather_brief", "somewhere warm"), ("summarise_link", "that page")):
+            with self.subTest(skill):
+                engine = self.scripted("An answer.")
+                await collect(agent.run(message, persona=get_persona("agent"), skill=get_skill(skill),
+                                        history=[], engine=engine))
+                self.assertEqual(len(engine.passes), 1)
+
+    async def test_stopped_while_filling_nothing_is_looked_up(self) -> None:
+        engine = self.scripted(fill("Python", "Rust"), gated=True)
+        trace = agent.Trace()
+        reading = asyncio.create_task(collect(agent.run(
+            "Is Python faster than Rust?", persona=get_persona("agent"), skill=get_skill("compare"),
+            history=[], trace=trace, engine=engine, request_id="run",
+        )))
+        await engine.entered(1)
+        engine.cancel("run")
+        engine.release()
+        stream = await reading
+        self.assertEqual(shape(stream), ["step:route:running", "step:route:stopped", "done", "run"])
+        self.assertEqual(self.asked["wikipedia"], [])
+        self.assertIs(only(stream, "done")[0]["cancelled"], True)
+        await engine.settled()
+        self.assertTrue(engine.free)
 
 
 class KeptTests(unittest.TestCase):

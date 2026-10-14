@@ -39,12 +39,16 @@ from .router import (
     ToolCall,
     decision_grammar,
     decision_limit,
+    fill_request,
     free_route,
     parse_action,
 )
 from .skills import SAY_SO, Skill, did_not_work, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
-from .tools.base import Rejection, ToolResult, available, check, fresh_for, was_given
+from .tools.base import (
+    Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
+    was_given,
+)
 from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
@@ -61,7 +65,7 @@ class Step:
     is the tool's own time. A choice made without the model costs nothing.
     """
 
-    kind: str  # route | decide | repair | tool | answer
+    kind: str  # route | fill | decide | repair | tool | answer
     # Whether this step was a pass through the model.
     model: bool = False
     # The tool or skill, where there is one.
@@ -302,6 +306,12 @@ class _Run:
     said: str = ""
     cut: bool = False
     trim: dict | None = None
+    trim_told: bool = False
+    # Set while the run holds the slot for every pass it makes, outside the
+    # loop: a skill whose inputs the model filled in.
+    holding: bool = False
+    # What was sent to have them filled in, and what the model wrote.
+    filled: list[Part] | None = None
 
     def __post_init__(self) -> None:
         self.said = self.said or self.message
@@ -333,32 +343,38 @@ class _Run:
         if self.turns is None:
             self.turns = turns_from_history(self.history)
         self.said, self.cut = self._cap()
-        # What costs nothing comes first: a skill, a command, a pattern.
-        async for event in self._free():
-            yield event
-        # What is left is the model's to decide, where the persona has tools.
-        tools = available() if (self.persona.tools and not self.routed) else []
-        if tools:
-            async with aclosing(self._looping(tools)) as events:
+        try:
+            # What costs nothing comes first: a skill, a command, a pattern.
+            async for event in self._free():
+                yield event
+            # What is left is the model's to decide, where the persona has tools.
+            tools = available() if (self.persona.tools and not self.routed) else []
+            if tools:
+                async with aclosing(self._looping(tools)) as events:
+                    async for event in events:
+                        yield event
+                return
+            for index, call in enumerate(self.calls):
+                if self.stop.is_set():
+                    break
+                # A run holding the slot lends it out while a tool is away.
+                acting = self._lookup(index, call) if self.holding else self._act(index, call)
+                async for event in acting:
+                    yield event
+            if self.stop.is_set():
+                yield self._stopped()
+                return
+            system, now = self._system(), self._prompt()
+            window = self._window(system, now, run=False)
+            if self._trimmed(window):
+                yield "trimmed", self.trim
+            self._sending(system, now)
+            async with aclosing(self._answer(window.messages, held=self.holding)) as events:
                 async for event in events:
                     yield event
-            return
-        for index, call in enumerate(self.calls):
-            if self.stop.is_set():
-                break
-            async for event in self._act(index, call):
-                yield event
-        if self.stop.is_set():
-            yield self._stopped()
-            return
-        system, now = self._system(), self._prompt()
-        window = self._window(system, now, run=False)
-        if self._trimmed(window):
-            yield "trimmed", self.trim
-        self._sending(system, now)
-        async with aclosing(self._answer(window.messages)) as events:
-            async for event in events:
-                yield event
+        finally:
+            if self.holding:
+                self.engine.give_slot(self.request_id)
 
     # ------------------------------------------------------------ the window --
 
@@ -403,8 +419,9 @@ class _Run:
         self.trace.system_key = key(system)
 
     def _trimmed(self, window: Window) -> bool:
-        """Whether anything had to give for the prompt to fit, and if so what,
-        kept in ``trim`` for the page and the trace."""
+        """Whether anything had to give for the prompt to fit that the page
+        has not been told of yet. What it was is kept in ``trim`` for the
+        page and the trace."""
         if not window.summarised and not self.cut:
             return False
         dropped = sum(bool(t.question) + bool(t.answer) for t in (self.turns or [])[:window.summarised])
@@ -412,7 +429,8 @@ class _Run:
             "dropped": dropped, "turns": window.turns, "summarised": window.summarised,
             "cut": self.cut,
         }
-        return True
+        told, self.trim_told = self.trim_told, True
+        return not told
 
     def _ask(self) -> list[Event]:
         """How a run ends when the model asked a question instead of choosing.
@@ -477,16 +495,42 @@ class _Run:
         made, or if there is no choosing to do at all."""
         if self.skill is not None:
             self.routed = True
-            self.calls = self.skill.prepare(self.message)
-            self.trace.steps.append(Step(
-                "route", name=self.skill.id, via="skill",
-                input={"calls": [{"tool": c.name, "args": c.args} for c in self.calls]},
-            ))
-            yield "step", {
+            values = self.skill.read(self.message)
+            closing = {
                 "id": "route", "kind": "route", "status": "ok",
                 "label": self.skill.name, "detail": "skill",
                 "glyph": self.skill.glyph, "tool": self.skill.id, "ms": 0,
             }
+            if self._fillable(values):
+                # The slot is taken once for the fill, the lookups and the
+                # answer, so the answer is written on from what the fill read.
+                self.holding = True
+                async for event in self._take():
+                    yield event
+                if self.stop.is_set():
+                    return
+                # A pass is about to be made, so one is announced.
+                yield "step", {
+                    "id": "route", "kind": "route", "status": "running",
+                    "label": self.skill.name, "glyph": self.skill.glyph,
+                }
+                window = self._window(self._system(), self._fill_parts(), run=False)
+                if self._trimmed(window):
+                    yield "trimmed", self.trim
+                values, said = await self._fill(window.messages, values)
+                if self.stop.is_set():
+                    yield "step", {**closing, "status": "stopped", "ms": round(said.ms, 1)}
+                    return
+                closing.update(
+                    ms=round(said.ms, 1), tokens_in=said.prompt_tokens,
+                    tokens_out=said.completion_tokens,
+                )
+            self.calls = self.skill.calls(values)
+            self.trace.steps.append(Step(
+                "route", name=self.skill.id, via="skill",
+                input={"calls": [{"tool": c.name, "args": c.args} for c in self.calls]},
+            ))
+            yield "step", closing
             return
         if not self.tools_enabled:
             self.routed = True
@@ -502,6 +546,87 @@ class _Run:
                 "route", name=call.name, via=tier, input=call.args, output=call.note,
             ))
             yield "step", self._routed(call, tier, ms=0)
+
+    def _fillable(self, values: dict[str, str]) -> bool:
+        """Whether to ask the model for the inputs a visitor's skill did not
+        find in their message. Only where the skill has a pattern that missed:
+        the whole message is the one input of a skill without one. Never for
+        an address, which the model may not supply."""
+        missing = self.skill.missing(values)
+        return bool(
+            missing and self.skill.find is not None and self.said.strip()
+            and not all(arg.quoted for arg in missing)
+        )
+
+    def _fill_parts(self) -> list[Part]:
+        """The message, and the request for the skill's inputs after it."""
+        return [
+            Part("user", "question", self.said),
+            Part("user", "instruction", fill_request(self.skill.name, self.skill.inputs)),
+        ]
+
+    async def _fill(
+        self, messages: list[dict], values: dict[str, str]
+    ) -> tuple[dict[str, str], Completion]:
+        """One short pass for the skill's inputs, held to a grammar of them.
+
+        What it says is checked like a call: of the right kind, each one
+        there, and an address only if the user wrote it. If it holds, it is
+        what the skill runs with, and the answer is written on from it; if
+        not, the skill runs with what its pattern found, or the whole
+        message.
+        """
+        inputs = self.skill.inputs
+        said = await self.engine.complete_json(
+            messages, args_to_gbnf(inputs), args_ceiling(inputs),
+            request_id=self.request_id, seed=self.seed, held=True,
+        )
+        clean: dict = {}
+        if said.parsed is None:
+            reasons: tuple[str, ...] = ("the reply was not a complete JSON object",)
+        else:
+            clean, rejection = check_args(self.skill.name, inputs, said.parsed)
+            reasons = rejection.reasons if rejection else ()
+            # Text with nothing in it is not an input given.
+            reasons += tuple(
+                f"{arg.name} is required and was not given"
+                for arg in self.skill.missing({k: str(v).strip() for k, v in clean.items()})
+                if arg.name in clean
+            )
+            theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
+            reasons += tuple(
+                f"{arg.name} must be an address the user gave; got {clean[arg.name]!r}"
+                for arg in inputs
+                if arg.quoted and clean.get(arg.name) and not was_given(clean[arg.name], theirs)
+            )
+        stopped = said.cancelled or self.stop.is_set()
+        error = "stopped" if stopped else (said.error or ("; ".join(reasons) or None))
+        self.trace.steps.append(self._passed(
+            "fill", said, name=self.skill.id, given={"text": self.said}, error=error,
+        ))
+        if error is not None:
+            return values, said
+        self.filled = [*self._fill_parts(), Part("assistant", "action", said.raw)]
+        return {name: str(value) for name, value in clean.items()}, said
+
+    def _passed(
+        self, kind: str, said: Completion, *, name: str | None, given: dict, error: str | None
+    ) -> Step:
+        """A pass through the model as a step, charged with any wait for the
+        slot that no pass has paid for yet."""
+        # A run that holds the slot waited for it before this pass, not in it.
+        # That wait is charged to the pass it was waited for.
+        waited, self.slot_wait = self.slot_wait, 0.0
+        queued = None if said.queue_wait_ms is None and not waited else (said.queue_wait_ms or 0.0) + waited
+        # A pass that never reached the model still took the time it took.
+        cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
+        return Step(
+            kind, model=True, name=name, via="model", input=given, output=said.raw,
+            prompt_tokens=said.prompt_tokens, new_tokens=said.read_tokens,
+            output_tokens=said.completion_tokens,
+            queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
+            ok=error is None, error=error,
+        )
 
     def _routed(self, call: ToolCall | None, tier: str, *, ms: float) -> dict:
         """The step that says what was chosen, and by which tier."""
@@ -553,19 +678,8 @@ class _Run:
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
-        # A run that holds the slot waited for it before this pass, not in it.
-        # That wait is charged to the pass it was waited for.
-        waited, self.slot_wait = self.slot_wait, 0.0
-        queued = None if said.queue_wait_ms is None and not waited else (said.queue_wait_ms or 0.0) + waited
-        # A pass that never reached the model still took the time it took.
-        cost = said.ms if said.total_ms is None else _pass_ms(said.queue_wait_ms, said.total_ms)
-        self.trace.steps.append(Step(
-            kind, model=True, name=action.call.name if action.call else None, via="model",
-            input=given, output=said.raw,
-            prompt_tokens=said.prompt_tokens, new_tokens=said.read_tokens,
-            output_tokens=said.completion_tokens,
-            queue_ms=queued, first_token_ms=said.ttft_ms, total_ms=cost + waited,
-            ok=error is None, error=error,
+        self.trace.steps.append(self._passed(
+            kind, said, name=action.call.name if action.call else None, given=given, error=error,
         ))
         return action, said
 
@@ -876,10 +990,10 @@ class _Run:
         message, what was looked up for it and how to use that, as parts."""
         question = Part("user", "question", self.said)
         if self.skill is not None:
-            return prompt_parts(
+            return [*(self.filled or ()), *prompt_parts(
                 self.skill, self.said, self.summaries, self.failures,
                 tuple(dict.fromkeys(self.found + self.lost)),
-            )
+            )]
         if self.summaries:
             # The tool output goes inside the user turn, not into a second
             # system message. A 1.5B model barely attends to a trailing system

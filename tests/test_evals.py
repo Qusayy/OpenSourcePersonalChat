@@ -414,7 +414,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_only_the_categories_asked_for_are_run(self) -> None:
         report = await run_suite(load_tasks(), engine_kind="scripted", categories=["skill"])
         self.assertEqual({row["category"] for row in report["tasks"]}, {"skill"})
-        self.assertEqual(report["summary"]["tasks"], 11)
+        self.assertEqual(report["summary"]["tasks"], 12)
 
     async def test_the_seed_reaches_every_pass(self) -> None:
         from evals.runner import run_task

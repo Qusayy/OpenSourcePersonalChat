@@ -222,6 +222,19 @@ def heuristic(text: str) -> ToolCall | None:
 # Whether the model is offered the choice of asking the user a question.
 ASK = True
 
+# What a pass that fills in a skill's inputs is asked, after the message.
+FILL = (
+    "The user chose “{name}” for the message above. Before the answer, reply with "
+    "one JSON object and nothing else, giving what it needs from that message:\n{fields}"
+)
+
+
+def fill_request(name: str, inputs) -> str:
+    """The line that asks for a skill's inputs: what the skill is called, and
+    each input with what it is."""
+    fields = "\n".join(f"- {arg.name}: {arg.description}" for arg in inputs)
+    return FILL.format(name=name, fields=fields)
+
 
 @dataclass
 class Action:

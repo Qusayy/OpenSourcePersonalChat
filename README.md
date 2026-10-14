@@ -493,7 +493,14 @@ Eight tools, no API keys anywhere:
 
 **Skills** are one-click workflows on top of them — *Summarise a link*,
 *Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
-*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path.
+*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path:
+the inputs it needs, the lookups it makes with them, and the prompt the answer
+is written from. A skill reads its inputs out of the message with a pattern of
+its own; *Compare* knows "A vs B", "the difference between A and B", "how does
+A differ from B" and the like. Where the pattern misses ("is Python faster than
+Rust?"), one short pass, held to a grammar of exactly those inputs, fills them
+in, and the answer is written on from it. A link is never filled in that way:
+the model may not supply an address.
 
 ### How a 1.5B model is made to route reliably
 

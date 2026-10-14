@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>Aurora: set the pattern</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23161d17'/%3E%3Ccircle cx='8.5' cy='22.5' r='3' fill='%2349de78'/%3E%3Crect x='14' y='21' width='12' height='3' rx='1.5' fill='%23f8fbf9'/%3E%3C/svg%3E">
+</head>
+<body>
+<!-- Setting the pattern that opens the site. This page is served by the
+     development server only (npm run dev, then /setup.html): it is not one of
+     the build's pages, so no server ever sends it. It is the cover's sky with
+     a panel over it; what is drawn here goes nowhere but into a hash, in this
+     browser. -->
+<canvas id="sky" aria-hidden="true"></canvas>
+<section id="setup">
+  <h1>Set the pattern</h1>
+  <p id="say" aria-live="polite"></p>
+  <p id="line" hidden></p>
+  <p id="then" hidden>Put that in the server's own <code>.env</code>, as one line, and restart the
+  server. It is as good as the pattern itself: anyone who has it can work the pattern out. Keep it
+  out of the repository, out of chat and out of screenshots.</p>
+  <div id="actions">
+    <button type="button" id="copy" hidden>Copy the line</button>
+    <button type="button" id="again">Start over</button>
+  </div>
+</section>
+<script type="module" src="/src/setup/main.ts"></script>
+</body>
+</html>

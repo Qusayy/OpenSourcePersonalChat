@@ -264,9 +264,11 @@ cached for models with recurrent layers, which llama-cpp-python has to re-read
 on every turn. The app keeps everything that decides who runs when (the one
 slot, the queue, Stop) and sends each pass over loopback.
 
+As your own admin user, not as `aurora`, which has no sudo:
+
 ```bash
 cd /srv/aurora
-deploy/build-llama-server.sh       # 30–45 min on four cores; the site stays up
+bash deploy/build-llama-server.sh  # 30–45 min on four cores; the site stays up
 sudo cp deploy/aurora-llm.service deploy/aurora.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now aurora-llm
 echo 'AURORA_LLM_URL=http://127.0.0.1:8081' | sudo tee -a .env
@@ -275,7 +277,8 @@ sudo systemctl restart aurora
 
 The build script fetches ik_llama.cpp at the commit that was measured (the fork
 publishes no releases) and installs one binary, built for this CPU, at
-`/opt/aurora-llm/bin/llama-server`. The server reads the model path, threads
+`/opt/aurora-llm/bin/llama-server`. It keeps the build under `/var/tmp`, so if
+the install step fails, running it again only installs. The server reads the model path, threads
 and context from the same `.env` as the app, so the two cannot disagree. Until
 it has loaded, the page says the model is warming; past a minute without an
 answer it says the server is not answering, and comes back by itself when it

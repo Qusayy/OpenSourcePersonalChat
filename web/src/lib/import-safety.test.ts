@@ -21,6 +21,7 @@ describe("importing a lib module where there is no DOM", () => {
     ["trace", () => import("./trace")],
     ["prose-stream", () => import("./prose-stream")],
     ["icons", () => import("./icons")],
+    ["gate", () => import("./gate")],
   ])("%s loads", async (_name, load) => {
     await expect(load()).resolves.toBeTypeOf("object");
   });

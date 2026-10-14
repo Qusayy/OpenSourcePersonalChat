@@ -5,6 +5,8 @@
  * "event: <name>\ndata: <json>\n\n".
  */
 
+import { relock } from "./gate";
+
 /** What a stream can send: each event's name, and the shape of its data. */
 export type SseEventMap = Record<string, unknown>;
 
@@ -74,6 +76,7 @@ export async function sseFetch<M extends SseEventMap = SseEventMap>(
     signal,
   });
 
+  if (res.status === 401) relock();
   if (!res.ok || !res.body) {
     // FastAPI puts validation problems in the body; a bare status code tells
     // the user nothing they can act on.

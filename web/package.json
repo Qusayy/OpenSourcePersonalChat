@@ -11,7 +11,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test && playwright test -c e2e/gate/playwright.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.2",

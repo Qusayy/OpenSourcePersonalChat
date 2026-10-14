@@ -156,8 +156,6 @@ export function mountFlatSky(canvas: HTMLCanvasElement): Sky | null {
     view,
     overlay,
     stats,
-    // One sky here, whatever is asked for.
-    scene: 0,
     onStep: null,
     release() {
       off();

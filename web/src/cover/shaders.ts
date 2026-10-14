@@ -12,7 +12,8 @@
  *            that keeps a dark gradient from banding.
  *   star     the star field, as points, at the screen's own resolution.
  *   line     the links drawn between stars.
- *   ground   whatever stands in front of the sky.
+ *   ground   a fjord in front of the sky: far mountains, near headlands,
+ *            and still water that gives the sky back.
  *
  * The aurora is drawn the way it exists: thin curtains standing on a wavy
  * line along the ground, lit by altitude. A view ray is cut by a stack of
@@ -504,15 +505,10 @@ uniform vec2 u_size;       // the canvas, in pixels
 uniform vec2 u_half;
 uniform float u_horizon;   // units
 uniform float u_time;
-uniform int u_scene;       // 0 fjord, 1 treeline
 out vec4 o;               // premultiplied
 
 float ridged(float n) {
   return 1.0 - abs(n * 2.0 - 1.0);
-}
-
-float seedOf(float n) {
-  return fract(sin(n * 91.7 + 1.3) * 43758.5453);
 }
 
 // A skyline, 0 to 1: broad massifs sharpened into peaks, with crags along
@@ -589,70 +585,9 @@ vec4 fjord(vec2 p, float aa) {
   return vec4(c, 1.0);
 }
 
-// One row of spruce. Each tree has its own height and place; some places are
-// empty. A tree is tiers of boughs that droop and end raggedly, narrowing to
-// a thin top.
-float spruce(vec2 p, float base, float size, float seed, float aa) {
-  float id = floor(p.x / size);
-  float mask = 0.0;
-  for (int k = -1; k <= 1; k++) {
-    float j = id + float(k);
-    float r1 = seedOf(j + seed);
-    float r2 = seedOf(j * 1.7 + seed);
-    float r3 = seedOf(j * 2.3 + seed);
-    if (r3 < 0.16) continue;
-    float tall = size * (1.7 + 4.1 * r1 * r1);
-    float x0 = (j + 0.5 + (r2 - 0.5) * 0.9) * size;
-    float y = (p.y - base) / tall;
-    if (y > 1.0) continue;
-    float tier = fract(y * (6.0 + 7.0 * r3) + r2);
-    // Not the same on both sides: no tree is its own mirror image.
-    float ragged = texture(u_noise, vec2(step(x0, p.x) * 0.37 + r1, y * 0.9 + r2)).b;
-    float taper = pow(1.0 - clamp(y, 0.0, 1.0), 1.2);
-    float halfWidth = taper * (0.26 + 0.36 * (1.0 - tier)) * (0.55 + 0.95 * ragged) * (0.7 + 0.5 * r2) * size;
-    halfWidth += 0.02 * size * step(y, 0.97);
-    mask = max(mask, smoothstep(halfWidth + aa, halfWidth - aa, abs(p.x - x0)));
-  }
-  return mask;
-}
-
-vec4 treeline(vec2 p, float aa) {
-  // The ground rolls a little, and the rows of trees stand on it.
-  float roll = (texture(u_noise, vec2(p.x * 0.06, 0.83)).a - 0.5) * 0.030;
-  float ground = u_horizon + roll;
-  float hills = ground + 0.018 + 0.040 * skyline(p.x * 0.7 + 3.0, 0.33);
-  float mHills = smoothstep(hills + aa, hills - aa, p.y);
-  float far = spruce(p, ground + 0.012, 0.0085, 4.0, aa);
-  float mid = spruce(p, ground + 0.002, 0.016, 11.0, aa);
-  float near = spruce(p, ground - 0.034, 0.033, 19.0, aa);
-  float snow = smoothstep(ground + 0.006 + aa, ground + 0.006 - aa, p.y);
-
-  vec3 lift = skyAt(vec2(p.x, u_horizon + 0.25));
-  vec3 hillCol = vec3(0.038, 0.060, 0.072) + lift * 0.04;
-  vec3 farCol = vec3(0.026, 0.042, 0.050);
-  vec3 midCol = vec3(0.014, 0.023, 0.027);
-  vec3 nearCol = vec3(0.005, 0.008, 0.010);
-  // Snow takes its colour from the sky over it, and darkens toward the viewer.
-  float drift = texture(u_noise, vec2(p.x * 0.8, p.y * 3.1)).a;
-  vec3 snowCol = (vec3(0.040, 0.054, 0.066) + lift * 0.20) * (0.72 + 0.5 * drift)
-               * mix(1.0, 0.40, smoothstep(0.0, 0.14, ground - p.y));
-
-  vec3 c = hillCol;
-  float a = mHills;
-  c = mix(c, farCol, far);
-  a = max(a, far);
-  c = mix(c, snowCol, snow);
-  a = max(a, snow);
-  c = mix(c, midCol, mid);
-  a = max(a, mid);
-  c = mix(c, nearCol, near);
-  a = max(a, near);
-  return vec4(c * a, a);
-}
-
 void main() {
   vec2 uv = gl_FragCoord.xy / u_size;
   vec2 p = (uv * 2.0 - 1.0) * u_half;
   float aa = 1.2 * u_half.y / u_size.y;
-  o = u_scene == 0 ? fjord(p, aa) : treeline(p, aa);
+  o = fjord(p, aa);
 }`;

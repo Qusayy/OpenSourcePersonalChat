@@ -17,11 +17,14 @@ function watchUnlock(page: Page): Request[] {
   return seen;
 }
 
-/** Whatever the page writes to the console as an error, and any it throws. */
+/** Whatever the page writes to the console as an error, and any it throws.
+ *  A shader that fails only warns, because the page carries on with a plain
+ *  sky; here that counts as an error too. */
 function watchErrors(page: Page): string[] {
   const seen: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") seen.push(message.text());
+    const sky = message.type() === "warning" && message.text().startsWith("[sky]");
+    if (message.type() === "error" || sky) seen.push(message.text());
   });
   page.on("pageerror", (error) => seen.push(error.message));
   return seen;

@@ -32,9 +32,6 @@ import {
 } from "./shaders";
 import { buildStars, STAR_STRIDE } from "./stars";
 
-/** What stands in front of the sky. The last has nothing: the view looks up. */
-export const SCENES = ["fjord", "treeline", "open"] as const;
-
 /** The most links that can be on screen at once. */
 export const MAX_SEGMENTS = 64;
 
@@ -70,7 +67,6 @@ export interface Sky {
   readonly view: View;
   readonly overlay: Overlay;
   readonly stats: SkyStats;
-  scene: number;
   /** Called at the top of every frame, before anything is drawn. */
   onStep: ((now: number, dt: number) => void) | null;
   release(): void;
@@ -151,7 +147,7 @@ const SKY_UNIFORMS = [
 const BLIT_UNIFORMS = ["sky", "size", "half", "frame"] as const;
 const STAR_UNIFORMS = ["scale", "dpr", "time", "horizon", "density", "maxPoint"] as const;
 const LINE_UNIFORMS = ["scale", "unit"] as const;
-const GROUND_UNIFORMS = ["sky", "noise", "size", "half", "horizon", "time", "scene"] as const;
+const GROUND_UNIFORMS = ["sky", "noise", "size", "half", "horizon", "time"] as const;
 
 interface Programs {
   sky: WebGLProgram;
@@ -226,10 +222,8 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
   let bufferW = 0;
   let bufferH = 0;
   let level = 0;
-  let scene = 0;
   let shown = false;
   let wasActive = false;
-  let repaint = false; // a still sky has been asked to draw once more
   const still = reduced();
   const started = performance.now();
 
@@ -541,12 +535,15 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
     // A tall view is given a longer lens, or its top edge would look past
     // the zenith and stretch everything there.
     const focal = Math.max(0.72, 0.92 * halfH);
-    const open = scene === 2;
-    const tall = view.height > view.width;
-    const share = scene === 1 ? 0.085 : tall ? 0.15 : 0.18;
-    const horizon = open ? -10 : halfH * (2 * share - 1);
-    const pitch = open ? 1.36 : Math.atan(-horizon / focal);
-    const yaw = scene === 0 ? 0.55 : scene === 1 ? -0.4 : 0.2;
+    // The water's edge sits this share of the way up the view; the view is
+    // tipped up until it does. Lower on a phone held upright, where there is
+    // more sky to fill.
+    const share = view.height > view.width ? 0.15 : 0.18;
+    const horizon = halfH * (2 * share - 1);
+    const pitch = Math.atan(-horizon / focal);
+    // The arcs run across the view at a slant, so that one sweeps from the
+    // horizon up overhead rather than lying flat along it.
+    const yaw = 0.55;
 
     gl.disable(gl.BLEND);
     gl.activeTexture(gl.TEXTURE1);
@@ -634,20 +631,18 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
       }
     }
 
-    if (!open) {
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      // biome-ignore lint/correctness/useHookAtTopLevel: WebGL's useProgram, not a React hook
-      gl.useProgram(p.ground);
-      gl.uniform1i(p.groundAt.sky, 0);
-      gl.uniform1i(p.groundAt.noise, 1);
-      gl.uniform2f(p.groundAt.size, canvas.width, canvas.height);
-      gl.uniform2f(p.groundAt.half, halfW, halfH);
-      gl.uniform1f(p.groundAt.horizon, horizon);
-      gl.uniform1f(p.groundAt.time, seconds);
-      gl.uniform1i(p.groundAt.scene, scene);
-      gl.bindVertexArray(coverVao);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-    }
+    // The mountains and the water, over everything else.
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    // biome-ignore lint/correctness/useHookAtTopLevel: WebGL's useProgram, not a React hook
+    gl.useProgram(p.ground);
+    gl.uniform1i(p.groundAt.sky, 0);
+    gl.uniform1i(p.groundAt.noise, 1);
+    gl.uniform2f(p.groundAt.size, canvas.width, canvas.height);
+    gl.uniform2f(p.groundAt.half, halfW, halfH);
+    gl.uniform1f(p.groundAt.horizon, horizon);
+    gl.uniform1f(p.groundAt.time, seconds);
+    gl.bindVertexArray(coverVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     if (!shown) {
       // The stylesheet fades the canvas in from here: no frame is seen before
@@ -668,8 +663,7 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
       // has changed.
       const busy = overlay.active || wasActive;
       wasActive = overlay.active;
-      if (!shown || changed || repaint) settling = 24;
-      repaint = false;
+      if (!shown || changed) settling = 24;
       if (settling <= 0 && !busy) return;
       settling--;
       draw(OPENING);
@@ -710,14 +704,6 @@ export function mountSky(canvas: HTMLCanvasElement): Sky | null {
     view,
     overlay,
     stats,
-    get scene() {
-      return scene;
-    },
-    set scene(next: number) {
-      scene = Math.max(0, Math.min(SCENES.length - 1, Math.trunc(next)));
-      repaint = true;
-      fresh = true;
-    },
     onStep: null,
     release() {
       if (mounted !== sky) return;

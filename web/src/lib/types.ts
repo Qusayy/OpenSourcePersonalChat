@@ -162,6 +162,9 @@ export interface StoredMessage {
   gen_tps: number | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  /** What the answer said that nothing it looked up returned, in a line,
+   *  when it said anything of the kind. */
+  correction?: string | null;
   tool_calls: StoredToolCall[];
 }
 
@@ -252,6 +255,10 @@ export interface DoneEvent {
   /** Set when the reply is a question the model put back to the user in place
    *  of an answer. The figures are then those of the pass that chose to ask. */
   asked?: boolean;
+  /** The figures in the answer that nothing it looked up returned, and the
+   *  line said about them under the answer. Absent where it was not checked. */
+  unsupported?: string[];
+  correction?: string | null;
 }
 
 /** Every event of the chat stream, by name. A type, not an interface, so it

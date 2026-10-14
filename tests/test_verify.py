@@ -60,6 +60,7 @@ class CheckTests(unittest.TestCase):
             ("It is 17.9°C.", WEATHER), ("About 18 degrees.", WEATHER), ("It is 18°C.", WEATHER),
             ("About 62 miles.", CONVERT), ("62.14 mi", CONVERT), ("about 60 miles", CONVERT),
             ("92.34 EUR", CURRENCY), ("€92", CURRENCY), ("at a rate of 0.92", CURRENCY),
+            ("about €92.30", CURRENCY), ("100.00 dollars", CURRENCY),
             ("It is 3:42 pm in Paris.", CLOCK), ("It is 3:42 in Paris.", CLOCK), ("15:42", CLOCK),
             ("on 14 October 2026", CLOCK), ("She was born in 1815.", ARTICLE),
             ("It comes to 9,248.58.", CALC), ("roughly 9,250", CALC), ("1 million metres", BIG),

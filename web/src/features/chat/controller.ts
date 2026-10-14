@@ -353,7 +353,14 @@ export async function send(text: string): Promise<void> {
           // and the actions land just out of sight.
           const stick = nearBottom();
           const answer = raw;
-          commit(() => patchBot(bot.key, (b) => ({ ...b, content: answer, cost: data })));
+          commit(() =>
+            patchBot(bot.key, (b) => ({
+              ...b,
+              content: answer,
+              cost: data,
+              correction: data.correction ?? null,
+            })),
+          );
           if (stick) scrollBottom();
           setContext((data.prompt_tokens || 0) + (data.completion_tokens || 0));
           finishedUnseen = document.hidden;
@@ -442,6 +449,7 @@ export async function loadConversation(cid: string): Promise<void> {
         content: m.content,
         steps: [],
         cards,
+        correction: m.correction ?? null,
         cost:
           m.gen_tps != null || m.ttft_ms != null
             ? {

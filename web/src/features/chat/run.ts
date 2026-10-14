@@ -42,6 +42,8 @@ export interface BotItem {
   cards: CardEntry[];
   /** What it cost; null until it has ended (or for a stored answer that kept nothing). */
   cost: Cost | null;
+  /** A figure in it that nothing it looked up returned, said in a line. */
+  correction: string | null;
 }
 
 export type NoticeVariant = "" | "queue" | "err";
@@ -141,6 +143,7 @@ export function addBot(over: Partial<BotItem> = {}): BotItem {
     steps: [],
     cards: [],
     cost: null,
+    correction: null,
     ...over,
   };
   set((s) => ({ items: [...s.items, item] }));

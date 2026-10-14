@@ -88,10 +88,12 @@ class Figure:
 
 def _precision(digits: str, exponent: int = 0) -> float:
     """One unit of the last significant digit of a number written as
-    ``digits`` (no separators), times ten to ``exponent``."""
+    ``digits`` (no separators), times ten to ``exponent``. A trailing zero is
+    rounding, after the point as before it: "108.50" is 108.5 to the tenth,
+    and "100.00" a whole hundred written out."""
     if "." in digits:
-        decimals = len(digits.split(".", 1)[1])
-        return 10.0 ** (exponent - decimals)
+        decimals = digits.split(".", 1)[1].rstrip("0")
+        return 10.0 ** (exponent - len(decimals)) if decimals else 10.0 ** exponent
     trailing = len(digits) - len(digits.rstrip("0"))
     if trailing == len(digits):  # zero itself
         return 10.0 ** exponent

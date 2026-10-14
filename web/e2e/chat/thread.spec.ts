@@ -49,6 +49,28 @@ test.describe("a stored conversation", () => {
     await expect(page.locator("#ctx-value")).toHaveText("360");
   });
 
+  test("an answer's correction is drawn again under it, above what it cost", async ({ page }) => {
+    await openStored(page, 0);
+    const answer = answerOf(page);
+    const correction = answer.locator('[data-part="correction"]');
+    await expect(correction).toHaveText(
+      "Not in what was looked up: nine. Weather returned: Reykjavík, Iceland: Partly cloudy, 7.4°C.",
+    );
+    await expect(correction.locator(".icon")).toHaveCount(1);
+    // Between the answer and its footer.
+    const order = await answer.evaluate((el) =>
+      [...el.querySelectorAll('[data-part="correction"], [data-part="cost"], .prose')].map(
+        (node) => (node as HTMLElement).dataset.part ?? "prose",
+      ),
+    );
+    expect(order).toEqual(["prose", "correction", "cost"]);
+  });
+
+  test("an answer with nothing to correct has no correction", async ({ page }) => {
+    await openStored(page, 1);
+    await expect(answerOf(page).locator('[data-part="correction"]')).toHaveCount(0);
+  });
+
   test("lists keep their markers and a fourth-level heading its weight", async ({ page }) => {
     await openStored(page, 1);
     const styles = await page.evaluate(() => {

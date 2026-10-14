@@ -397,7 +397,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             set(summary),
             {"tasks", "ran", "passed", "failed", "pending", "unexpected_passes", "skipped",
              "task_success", "routing_accuracy", "skill_selection", "argument_match",
-             "invalid_output_rate",
+             "invalid_output_rate", "unsupported_rate", "correction_rate",
              "repair_rate", "second_step_rate", "limit_rate", "repeat_rate",
              "steps", "passes", "prompt_tokens", "output_tokens"},
         )

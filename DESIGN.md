@@ -331,6 +331,7 @@ There are none. A **panel** is a block with 16px above it and a hairline on top.
 ### Thread
 - **Question:** set as a heading (20px, 600). No bubble; weight and size say whose line it is. A long paste is set as body text and folded to five lines.
 - **Answer:** body text at the column measure, straight on the sheet. While it streams, a 2px live-coloured caret marks the writing position and the newest words fade up behind it.
+- **Correction:** under a reply that gave a figure nothing it looked up returned, one 13px line in the second ink between the reply and its cost line, led by the caution mark: which figures, and what a tool that can be quoted did return. It belongs to the reply and stays with it on reload. A page or an article is never quoted in it.
 - **Cost line:** under each finished reply, 13px in the second ink: tok/s, time to first token, tokens, time to answer, each numeral fixed-width in ink; then Copy and Ask again.
 - **Route line:** one line of 13px text above a reply, steps parted by hairlines. A step is drawn while it runs, in the live colour with the word "running", and afterwards only if it was a routing decision worth knowing.
 - **Notices:** a line in the thread with a mark. Queue notices take caution; an error is the one tinted block (8% fault in the sheet), with a Try again button.

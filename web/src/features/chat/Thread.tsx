@@ -126,6 +126,7 @@ const Answer = memo(function Answer({ item }: { item: BotItem }) {
           </CardStack>
         )}
         <Prose itemKey={item.key} live={item.live} content={item.content} />
+        {item.correction && <Correction text={item.correction} />}
         {item.cost && <CostLine item={item} />}
       </div>
     </div>
@@ -266,6 +267,24 @@ function CostLine({ item }: { item: BotItem }) {
         </Button>
       </span>
     </div>
+  );
+}
+
+/**
+ * What the answer said that nothing it looked up returned. A caption, not a
+ * notice: it belongs to this answer, stays with it on reload, and is set in
+ * the caption's size and ink, with the caution mark to say what kind of line
+ * it is.
+ */
+function Correction({ text }: { text: string }) {
+  return (
+    <p
+      data-part="correction"
+      className="flex items-start gap-2 mt-3 text-ink-2 text-1 [&>.icon]:mt-[2px] [&>.icon]:text-caution"
+    >
+      <Icon name="error" size={14} />
+      <span>{text}</span>
+    </p>
   );
 }
 

@@ -153,7 +153,7 @@ async def offline(name: str, args: dict):
 
 async def main() -> None:
     db.init()
-    for table in ("steps", "tool_calls", "messages", "conversations", "runs"):
+    for table in ("steps", "tool_calls", "context_turns", "messages", "conversations", "runs"):
         db._write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
     # 3. Right-to-left, oldest so it sorts last.
@@ -210,6 +210,8 @@ async def main() -> None:
         cid, "assistant",
         "Those are the nine figures: four computed here, four fetched, and one that failed.",
         ttft_ms=96.0, gen_tps=11.7, prompt_tokens=388, completion_tokens=19,
+        correction="Not in what was looked up: nine. Weather returned: Reykjavík, Iceland: "
+                   "Partly cloudy, 7.4°C.",
     )
     db.attach_tool_calls(mid, calls)
     db.touch_conversation(cid)

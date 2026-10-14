@@ -141,8 +141,18 @@ def init() -> None:
     _conn.execute("PRAGMA synchronous=NORMAL")
     _conn.execute("PRAGMA foreign_keys=ON")
     _conn.executescript(SCHEMA)
+    # Columns added after a database was first made.
+    _add_column("messages", "correction", "TEXT")
     _conn.commit()
     prune_steps()
+
+
+def _add_column(table: str, column: str, declaration: str) -> None:
+    """Add a column to a table made before it existed. Does nothing where it
+    is there already."""
+    have = {row[1] for row in _conn.execute(f"PRAGMA table_info({table})")}
+    if column not in have:
+        _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
 
 def close() -> None:
@@ -221,7 +231,7 @@ def get_conversation(cid: str) -> dict | None:
     convo = rows[0]
     convo["messages"] = _rows(
         "SELECT id, role, content, created_at, ttft_ms, gen_tps, prompt_tokens,"
-        "       completion_tokens"
+        "       completion_tokens, correction"
         "  FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
         (cid,),
     )
@@ -261,13 +271,15 @@ def add_message(
     gen_tps: float | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
+    correction: str | None = None,
 ) -> str:
     mid = uuid.uuid4().hex
     _write(
         "INSERT INTO messages (id, conversation_id, role, content, created_at,"
-        " ttft_ms, gen_tps, prompt_tokens, completion_tokens)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (mid, cid, role, content, time.time(), ttft_ms, gen_tps, prompt_tokens, completion_tokens),
+        " ttft_ms, gen_tps, prompt_tokens, completion_tokens, correction)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (mid, cid, role, content, time.time(), ttft_ms, gen_tps, prompt_tokens,
+         completion_tokens, correction),
     )
     return mid
 

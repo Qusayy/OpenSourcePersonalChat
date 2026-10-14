@@ -293,6 +293,7 @@ class _Keeper:
             gen_tps=usage.get("gen_tps"),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
+            correction=self.trace.correction,
         )
         db.attach_tool_calls(mid, self.call_ids)
         db.attach_steps(mid, self.trace.run_id)

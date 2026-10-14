@@ -138,5 +138,38 @@ class StepStorageTests(unittest.TestCase):
         self.assertIs(db.run_steps("mock")[0]["mock"], True)
 
 
+class MigrationTests(unittest.TestCase):
+    def test_a_database_made_before_a_column_existed_gains_it(self) -> None:
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest import mock
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "old.db"
+        old = sqlite3.connect(path)
+        old.execute(
+            "CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,"
+            " role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL,"
+            " ttft_ms REAL, gen_tps REAL, prompt_tokens INTEGER, completion_tokens INTEGER)"
+        )
+        old.commit()
+        old.close()
+        patcher = mock.patch.object(db, "settings", SimpleNamespace(mock=False, resolved_db_path=path))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        db.init()
+        db.close()
+        db.init()  # and again: it is added once
+        self.addCleanup(db.close)
+        cid = db.create_conversation("explainer", "Hi")
+        mid = db.add_message(cid, "assistant", "Hello", correction="Not in what was looked up: 5.")
+        stored = db.get_conversation(cid)["messages"]
+        self.assertEqual([(m["id"], m["correction"]) for m in stored],
+                         [(mid, "Not in what was looked up: 5.")])
+
+
 if __name__ == "__main__":
     unittest.main()

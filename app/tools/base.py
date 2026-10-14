@@ -92,6 +92,9 @@ class Tool:
     # conversation, it is replaced by a line saying it is out of date. None
     # for a result that does not go out of date.
     fresh_for: float | None = None
+    # Its results are text from the open web, written by anybody: never
+    # quoted in the harness's own voice, and never a reason to act.
+    untrusted: bool = False
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)

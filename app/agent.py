@@ -49,6 +49,8 @@ from .tools.base import (
     Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
     was_given,
 )
+from .verify import caption, note, scalars
+from .verify import check as check_figures
 from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
@@ -115,6 +117,12 @@ class Trace:
     # once the run has answered, or asked.
     sent: list[Part] | None = None
     system_key: str | None = None
+    # Whether the answer was checked against what was looked up, and what
+    # was found wrong with it: the figures in it that nothing returned, and
+    # the line the visitor is shown about them.
+    checked: bool = False
+    unsupported: list[str] = field(default_factory=list)
+    correction: str | None = None
     # How it ended: answered | asked | stopped | failed. None while it is
     # running. "asked" is a question put to the user in place of an answer.
     outcome: str | None = None
@@ -369,7 +377,9 @@ class _Run:
             if self._trimmed(window):
                 yield "trimmed", self.trim
             self._sending(system, now)
-            async with aclosing(self._answer(window.messages, held=self.holding)) as events:
+            async with aclosing(
+                self._answer(window.messages, parts=window.parts, held=self.holding)
+            ) as events:
                 async for event in events:
                     yield event
         finally:
@@ -795,7 +805,9 @@ class _Run:
                 return
             transcript.answer_cue(note, own)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
-            async with aclosing(self._answer(transcript.messages(), held=True)) as events:
+            async with aclosing(
+                self._answer(transcript.messages(), parts=transcript.parts(), held=True)
+            ) as events:
                 async for event in events:
                     yield event
         finally:
@@ -1100,9 +1112,55 @@ class _Run:
             ), Part("user", "instruction", SAY_SO)]
         return [question]
 
+    # ---------------------------------------------------------- the check --
+
+    def _check(self, parts: list[Part]) -> None:
+        """Hold the answer against what was looked up for it.
+
+        In full where this run looked something up and it worked: every
+        figure, and whether the answer says it has no live data. Where it only
+        has results from earlier in the conversation, only figures with a
+        unit or a currency, so that a poem written after a weather lookup is
+        left alone. Not at all where nothing was looked up.
+
+        What it reads the answer against: what this run's lookups returned,
+        all of it, as the visitor sees it on the cards; what was found and
+        read in this prompt, this turn's or replayed; and what the user wrote.
+        Never an earlier answer, so a mistake does not vouch for itself by
+        being repeated.
+        """
+        made = [(call, result) for call, result in self.trace.calls if result.ok]
+        found = [p.content for p in parts if p.kind in ("data", "observation")]
+        if not made and not found:
+            return
+        sources = list(found)
+        for _, result in made:
+            sources += [result.summary, *scalars(result.data)]
+        sources += [m["content"] for m in self.history if m["role"] == "user"]
+        sources.append(self.message)
+        result = check_figures(
+            self.trace.answer or "", sources, with_units_only=not made, denial=bool(made),
+        )
+        self.trace.checked = True
+        if result.clean:
+            return
+        quoted = [
+            (REGISTRY[call.name].label, outcome.summary) for call, outcome in made
+            if call.name in REGISTRY and not REGISTRY[call.name].untrusted
+        ]
+        self.trace.unsupported = list(result.unsupported)
+        self.trace.correction = caption(result, quoted)
+        if self.trace.sent is not None:
+            self.trace.sent.append(Part("user", "correction", note(result)))
+
     # ---------------------------------------------------------- the answer --
 
-    async def _answer(self, messages: list[dict], *, held: bool = False) -> AsyncIterator[Event]:
+    async def _answer(
+        self, messages: list[dict], *, parts: list[Part] = (), held: bool = False
+    ) -> AsyncIterator[Event]:
+        """The pass that writes the answer, from ``messages``. ``parts`` are
+        the same prompt with what each piece is, so the answer can be checked
+        against what was looked up for it."""
         sampling = self.persona.sampling()
         # Fitted to the window already. The engine's own fitting is kept as
         # the last guard: a run that added more than the room it was given.
@@ -1150,6 +1208,12 @@ class _Run:
                 self.trace.answer = data.pop("text", "")
                 if self.trace.sent is not None:
                     self.trace.sent.append(Part("assistant", "answer", self.trace.answer))
+                # Checked before anything is said of the answer: the keeper
+                # stores it when its step closes, and stores what was found.
+                if not stopped:
+                    self._check(parts)
+                data["unsupported"] = list(self.trace.unsupported)
+                data["correction"] = self.trace.correction
                 data["tool_calls"] = len(self.calls)
                 self.trace.usage = data
                 yield "step", {

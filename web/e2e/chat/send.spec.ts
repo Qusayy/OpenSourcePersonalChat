@@ -242,6 +242,18 @@ test.describe("against a stream the test controls", () => {
     await expect(answerOf(page).locator('[data-part="cost"]')).toHaveCount(0);
   });
 
+  test("a figure nothing returned is said under the answer", async ({ page }) => {
+    await ask(page, "/weather Paris");
+    await answer(page, "It is 25°C.", {
+      ...DONE,
+      unsupported: ["25°C"],
+      correction: "Not in what was looked up: 25°C. Weather returned: Paris, France: 17.9°C.",
+    });
+    await expect(answerOf(page).locator('[data-part="correction"]')).toHaveText(
+      "Not in what was looked up: 25°C. Weather returned: Paris, France: 17.9°C.",
+    );
+  });
+
   test("dropped history is said in the thread", async ({ page }) => {
     await ask(page, "hello");
     await push(page, "conversation", CONVERSATION);

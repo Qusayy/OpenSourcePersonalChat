@@ -196,6 +196,9 @@ def show(report: dict, file=None) -> None:
         f"invalid decisions {pct(s['invalid_output_rate'])}",
         file=file,
     )
+    if s.get("correction_rate") is not None:
+        print(f"  corrections {pct(s['correction_rate'])} of checked answers "
+              f"(a figure nothing returned: {pct(s['unsupported_rate'])})", file=file)
     if s.get("seconds") and s["seconds"]["total"]:
         t = s["seconds"]["total"]
         print(f"  seconds per task: median {t['median']}, 95% within {t['p95']}", file=file)

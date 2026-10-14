@@ -140,6 +140,12 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             failed += [f"prompt: does not contain {t!r}" for t in wanted_in if t not in read]
             failed += [f"prompt: contains {t!r}" for t in wanted_out if t in read]
 
+    if "corrected" in expect and bool(trace.correction) != expect["corrected"]:
+        failed.append(
+            f"corrected: {trace.correction!r}" if trace.correction
+            else "corrected: no correction, one expected"
+        )
+
     answer = (trace.answer or "").casefold()
     failed += [
         f"answer: does not contain {t!r}"

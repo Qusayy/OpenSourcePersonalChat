@@ -75,6 +75,10 @@ class Outcome:
             row["pending"] = self.task.pending
         if not self.turns:
             return row
+        if self.last.correction:
+            # Read off a run on the model, it is the check's false alarms
+            # and its catches, one by one.
+            row["correction"] = self.last.correction
         steps = [s for turn in self.turns for s in turn.trace.steps]
         models = [s for s in steps if s.model]
         reported = [s.new_tokens for s in models]
@@ -249,6 +253,8 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     # How each run's looking-up ended, read off the last line its answer pass
     # was given.
     cues = [(o.last.prompt or [{"content": ""}])[-1]["content"] for o in ran]
+    # The answers that were held against what was looked up for them.
+    checked = [o.last for o in ran if o.last is not None and o.last.checked]
     rows = [o.row(timed) for o in ran]
 
     summary = {
@@ -279,6 +285,10 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         # for a lookup it had already made.
         "limit_rate": _share(sum(agent.OUT_OF_LOOKUPS in cue for cue in cues), len(cues)),
         "repeat_rate": _share(sum(agent.ALREADY_LOOKED_UP in cue for cue in cues), len(cues)),
+        # Of the answers checked against their lookups: those with a figure
+        # nothing returned, and those that drew any correction at all.
+        "unsupported_rate": _share(sum(bool(t.unsupported) for t in checked), len(checked)),
+        "correction_rate": _share(sum(bool(t.correction) for t in checked), len(checked)),
         "steps": _spread([float(r["steps"]) for r in rows]),
         "passes": _spread([float(r["passes"]) for r in rows]),
         "prompt_tokens": _spread([float(r["prompt_tokens"]) for r in rows]),

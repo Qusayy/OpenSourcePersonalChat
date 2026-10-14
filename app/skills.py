@@ -1,8 +1,13 @@
 """Skills — one-click workflows built on top of the tools.
 
-A skill is data, not a code path: a way to turn the user's message into a list
-of tool calls, plus the prompt that turns those results into an answer. Adding
-one is an entry in SKILLS, not a new branch in the request handler.
+A skill is data, not a code path: what it needs from the user's message (its
+inputs), the lookups it makes with them, and the prompt that turns what they
+found into an answer. Adding one is an entry in SKILLS, not a new branch in
+the request handler.
+
+Its inputs are read from the message by the skill's own pattern where it has
+one, and otherwise the whole message is the one input it is given. A lookup is
+made when every input it takes was found.
 
 Every skill ends in exactly one model step, which is what lets the normal
 streaming path do the talking — the tools run first, the answer streams last.
@@ -16,8 +21,29 @@ from typing import Callable
 
 from .context import Part
 from .router import URL_RE, ToolCall
+from .tools.base import Arg
 
-SPLIT_RE = re.compile(r"\s+(?:vs\.?|versus|and|or)\s+", re.I)
+
+@dataclass(frozen=True)
+class Lookup:
+    """One lookup a skill makes: a tool, and which of the skill's inputs each
+    of the tool's arguments is given."""
+
+    tool: str
+    # (the tool's argument, the skill's input), in the tool's order.
+    given: tuple[tuple[str, str], ...]
+
+    def call(self, values: dict[str, str]) -> ToolCall | None:
+        """The call, if every input it takes has a value."""
+        if any(not values.get(source) for _, source in self.given):
+            return None
+        return ToolCall(self.tool, {arg: values[source] for arg, source in self.given}, via="skill")
+
+
+def look(tool: str, **given: str) -> Lookup:
+    """``look("wikipedia", query="a")``: the tool, then each argument and the
+    input it is given."""
+    return Lookup(tool, tuple(given.items()))
 
 
 @dataclass(frozen=True)
@@ -26,11 +52,46 @@ class Skill:
     name: str
     glyph: str
     blurb: str
-    pipeline: tuple[str, ...]          # tool names, for the UI's little graph
-    prepare: Callable[[str], list[ToolCall]]
     prompt: str                        # {input} and {results} are substituted
+    # What it needs from the message, and the lookups it makes with that.
+    inputs: tuple[Arg, ...] = ()
+    steps: tuple[Lookup, ...] = ()
+    # Reads the inputs out of the message: whichever it finds.
+    find: Callable[[str], dict[str, str]] | None = None
+    # The input the whole message is, when nothing was found for it.
+    whole: str | None = None
+    # Said to the model, for a skill it may choose itself; None for one only
+    # the visitor can.
+    cue: str | None = None
+    # What it does, in a line, for a reader who has not seen the button.
+    description: str = ""
     persona: str = "agent"
     placeholder: str = ""
+
+    @property
+    def pipeline(self) -> tuple[str, ...]:
+        """Tool names in the order the skill runs them, then the model."""
+        return (*(step.tool for step in self.steps), "model")
+
+    def read(self, text: str) -> dict[str, str]:
+        """The inputs this message gives: what the pattern found in it, and
+        the whole of it for the input that takes it when nothing else did."""
+        text = (text or "").strip()
+        values = {k: v for k, v in (self.find(text) if self.find else {}).items() if v}
+        if self.whole and text and not values:
+            values[self.whole] = text
+        return values
+
+    def missing(self, values: dict[str, str]) -> list[Arg]:
+        """The inputs it must have that ``values`` does not give."""
+        return [arg for arg in self.inputs if arg.required and not values.get(arg.name)]
+
+    def calls(self, values: dict[str, str]) -> list[ToolCall]:
+        """The lookups ``values`` are enough for, in order."""
+        return [call for step in self.steps if (call := step.call(values)) is not None]
+
+    def prepare(self, text: str) -> list[ToolCall]:
+        return self.calls(self.read(text))
 
     def as_dict(self) -> dict:
         return {
@@ -40,37 +101,33 @@ class Skill:
         }
 
 
-def _link(text: str) -> list[ToolCall]:
-    match = URL_RE.search(text or "")
-    if not match:
-        return []
-    return [ToolCall("read_url", {"url": match.group(0)}, via="skill")]
+def _link(text: str) -> dict[str, str]:
+    match = URL_RE.search(text)
+    return {"url": match.group(0)} if match else {}
 
 
-def _wiki(text: str) -> list[ToolCall]:
-    query = (text or "").strip()
-    return [ToolCall("wikipedia", {"query": query}, via="skill")] if query else []
+# Two things to compare, as people ask for that. Tried in order, the most
+# particular first, and the first that matches is taken.
+_END = r"\s*[?.!]*\s*$"
+_PAIRS = tuple(re.compile(p, re.I) for p in (
+    r"^(?:what(?:'s| is| are)\s+)?(?:the\s+)?differences?\s+between\s+(.+?)\s+and\s+(.+?)" + _END,
+    r"^how\s+(?:does|do|is|are)\s+(.+?)\s+(?:differ|different)\s+from\s+(.+?)" + _END,
+    r"^compare\s+(.+?)\s+(?:with|to|and|against|vs\.?|versus)\s+(.+?)" + _END,
+    r"^(.+?),?\s+compared\s+(?:with|to)\s+(.+?)" + _END,
+    r"^(.+?)\s+(?:vs\.?|versus|v\.)\s+(.+?)" + _END,
+    r"^[^,]*,\s*(.+?)\s+or\s+(.+?)" + _END,
+    r"^(.+?)\s+(?:and|or)\s+(.+?)" + _END,
+))
 
 
-def _wiki_pair(text: str) -> list[ToolCall]:
-    parts = [p.strip() for p in SPLIT_RE.split(text or "", maxsplit=1) if p.strip()]
-    if len(parts) < 2:
-        return _wiki(text)
-    return [ToolCall("wikipedia", {"query": p}, via="skill") for p in parts[:2]]
-
-
-def _weather(text: str) -> list[ToolCall]:
-    place = (text or "").strip()
-    return [ToolCall("weather", {"location": place}, via="skill")] if place else []
-
-
-def _maths(text: str) -> list[ToolCall]:
-    body = (text or "").strip()
-    return [ToolCall("calculator", {"expression": body}, via="skill")] if body else []
-
-
-def _none(text: str) -> list[ToolCall]:
-    return []
+def _pair(text: str) -> dict[str, str]:
+    for pattern in _PAIRS:
+        match = pattern.match(text)
+        if match:
+            a, b = (part.strip(" \t\"'“”‘’,") for part in match.groups())
+            if a and b:
+                return {"a": a, "b": b}
+    return {}
 
 
 SKILLS: dict[str, Skill] = {
@@ -81,12 +138,14 @@ SKILLS: dict[str, Skill] = {
             name="Summarise a link",
             glyph="⧉",
             blurb="Read a page and boil it down",
-            pipeline=("read_url", "model"),
-            prepare=_link,
             prompt=(
                 "Summarise the page below in at most five short bullet points, "
                 "then one closing sentence on why it matters.\n\n{results}"
             ),
+            inputs=(Arg("url", "string", True, "the link to read", max_len=200, quoted=True),),
+            steps=(look("read_url", url="url"),),
+            find=_link,
+            description="Read a web page and sum it up in a few points.",
             placeholder="Paste a URL…",
         ),
         Skill(
@@ -94,14 +153,16 @@ SKILLS: dict[str, Skill] = {
             name="Fact-check",
             glyph="⚖",
             blurb="Weigh a claim against Wikipedia",
-            pipeline=("wikipedia", "model"),
-            prepare=_wiki,
             prompt=(
                 "The user's claim: “{input}”.\n\nReference material:\n{results}\n\n"
                 "State whether the claim is supported, contradicted or unclear, "
                 "in one short paragraph. Quote the reference where it decides the "
                 "matter. If the reference does not cover it, say so plainly."
             ),
+            inputs=(Arg("claim", "string", True, "the claim to check", max_len=200),),
+            steps=(look("wikipedia", query="claim"),),
+            whole="claim",
+            description="Check whether a claim is true against Wikipedia.",
             placeholder="Type a claim to check…",
         ),
         Skill(
@@ -109,13 +170,19 @@ SKILLS: dict[str, Skill] = {
             name="Compare two things",
             glyph="⇹",
             blurb="Side-by-side from sources",
-            pipeline=("wikipedia", "wikipedia", "model"),
-            prepare=_wiki_pair,
             prompt=(
                 "Compare the two subjects using only the material below. Reply "
                 "with a markdown table of 3-5 rows, then one sentence naming the "
                 "clearest difference.\n\n{results}"
             ),
+            inputs=(
+                Arg("a", "string", True, "the first thing to compare", max_len=80),
+                Arg("b", "string", True, "the second thing to compare", max_len=80),
+            ),
+            steps=(look("wikipedia", query="a"), look("wikipedia", query="b")),
+            find=_pair,
+            whole="a",
+            description="Compare two things side by side, from Wikipedia.",
             placeholder="e.g. Python vs Rust",
         ),
         Skill(
@@ -123,12 +190,14 @@ SKILLS: dict[str, Skill] = {
             name="Weather brief",
             glyph="☁",
             blurb="Forecast, in plain words",
-            pipeline=("weather", "model"),
-            prepare=_weather,
             prompt=(
                 "Write a two-sentence brief for someone heading out today, using "
                 "only these readings. Mention what to wear.\n\n{results}"
             ),
+            inputs=(Arg("location", "string", True, "a town or city", max_len=80),),
+            steps=(look("weather", location="location"),),
+            whole="location",
+            description="Today's weather for a place, and what to wear.",
             placeholder="Which town or city?",
         ),
         Skill(
@@ -136,13 +205,15 @@ SKILLS: dict[str, Skill] = {
             name="Do the maths",
             glyph="⚡",
             blurb="Exact answer, then the working",
-            pipeline=("calculator", "model"),
-            prepare=_maths,
             prompt=(
                 "The exact result is below. Restate it, then explain the working "
                 "in two or three short steps. Do not recalculate — the figure "
                 "given is correct.\n\n{results}"
             ),
+            inputs=(Arg("expression", "string", True, "the sum to work out", max_len=200),),
+            steps=(look("calculator", expression="expression"),),
+            whole="expression",
+            description="Work a sum out exactly, then show the working.",
             placeholder="e.g. (1247 * 89) / 12",
         ),
         Skill(
@@ -150,12 +221,11 @@ SKILLS: dict[str, Skill] = {
             name="Explain this code",
             glyph="◇",
             blurb="Line by line, no tools",
-            pipeline=("model",),
-            prepare=_none,
             prompt=(
                 "Explain what this code does, then name one thing that could go "
                 "wrong with it.\n\n{input}"
             ),
+            description="Explain what a piece of code does.",
             persona="code",
             placeholder="Paste some code…",
         ),

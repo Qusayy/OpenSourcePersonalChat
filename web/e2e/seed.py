@@ -153,7 +153,7 @@ async def offline(name: str, args: dict):
 
 async def main() -> None:
     db.init()
-    for table in ("steps", "tool_calls", "messages", "conversations", "runs"):
+    for table in ("steps", "tool_calls", "context_turns", "messages", "conversations", "runs"):
         db._write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
     # 3. Right-to-left, oldest so it sorts last.
@@ -206,12 +206,28 @@ async def main() -> None:
         summary="No place called “Atlantis” was found.", ms=301.2, ok=False,
     ))
 
+    # How that answer ran, as its steps were kept.
+    run_id = "seeded-run"
+    for idx, (kind, name, via, ms, tokens) in enumerate((
+        ("route", "weather", "model", 310.0, (667, 18, 12)),
+        ("tool", "weather", "model", 412.3, (None, None, None)),
+        ("decide", None, "model", 400.0, (702, 36, 5)),
+        ("answer", None, None, 2900.0, (740, 61, 19)),
+    )):
+        db.add_step(
+            run_id, cid, idx, kind, name=name, via=via, total_ms=ms,
+            prompt_tokens=tokens[0], new_tokens=tokens[1], output_tokens=tokens[2],
+            first_token_ms=ms / 4 if tokens[0] else None, queue_ms=0.0 if tokens[0] else None,
+        )
     mid = db.add_message(
         cid, "assistant",
         "Those are the nine figures: four computed here, four fetched, and one that failed.",
         ttft_ms=96.0, gen_tps=11.7, prompt_tokens=388, completion_tokens=19,
+        correction="Not in what was looked up: nine. Weather returned: Reykjavík, Iceland: "
+                   "Partly cloudy, 7.4°C.",
     )
     db.attach_tool_calls(mid, calls)
+    db.attach_steps(mid, run_id)
     db.touch_conversation(cid)
 
     # The list is ordered by last use. Three rows written in the same instant

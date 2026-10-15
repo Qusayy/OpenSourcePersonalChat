@@ -95,7 +95,7 @@ export function showFigures(ttftMs?: number | null): void {
   }
 }
 
-export type LivePhase = "working" | "queued" | "reading" | "writing";
+export type LivePhase = "working" | "deciding" | "queued" | "reading" | "writing";
 
 // The status line's state while a request is in flight. Every phase but
 // "writing" is a wait, so it counts the seconds: on this hardware a wait is
@@ -103,6 +103,7 @@ export type LivePhase = "working" | "queued" | "reading" | "writing";
 // figures on the right, where it can change width without moving anything.
 const PHASE_WORDS: Record<LivePhase, string> = {
   working: "working",
+  deciding: "deciding",
   queued: "queued",
   reading: "reading",
   writing: "writing",

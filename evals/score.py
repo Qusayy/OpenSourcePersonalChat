@@ -44,6 +44,8 @@ def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
         return None, None, None
     ran = next((s for s in steps if s.kind == "tool"), None)
     tool = (ran.name if ran else None) if route.via == "skill" else route.name
+    if tool == "ask":
+        tool = None  # a question put back to the user, not a tool
     args = ran.input if ran else (route.input if route.via in ("slash", "heuristic") else None)
     return tool, args, route.via
 
@@ -139,6 +141,12 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             read = "\n".join(m["content"] for m in trace.prompt)
             failed += [f"prompt: does not contain {t!r}" for t in wanted_in if t not in read]
             failed += [f"prompt: contains {t!r}" for t in wanted_out if t in read]
+
+    if "corrected" in expect and bool(trace.correction) != expect["corrected"]:
+        failed.append(
+            f"corrected: {trace.correction!r}" if trace.correction
+            else "corrected: no correction, one expected"
+        )
 
     answer = (trace.answer or "").casefold()
     failed += [

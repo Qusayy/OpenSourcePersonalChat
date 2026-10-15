@@ -139,6 +139,41 @@ function Wikipedia({ data, meta }: KindProps) {
   );
 }
 
+/* ---------------------------------------------------------------- note -- */
+
+// A note kept, or the notes found. The words are the user's own, set as
+// they were kept; whose notes they are is the caption's qualifier.
+function Note({ data, meta }: KindProps) {
+  const kept = text(data, "action") === "remember";
+  const notes = list(data, "notes").map((n) => String(n ?? ""));
+  const whose = text(data, "scope") === "site" ? "this site" : "this conversation";
+  const query = text(data, "query");
+  return (
+    <Figure
+      tool="note"
+      card="note"
+      name={kept ? "Remember" : "Recall"}
+      note={kept ? `kept for ${whose}` : query ? `“${query}”` : whose}
+      meta={meta}
+    >
+      {kept ? (
+        <p className="my-1">{text(data, "text")}</p>
+      ) : notes.length > 0 ? (
+        <ul className="my-1 pl-5 list-disc">
+          {notes.map((n, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: two notes may say the same thing
+            <li key={i}>{n}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="my-1 text-ink-2">
+          {query ? `No note matches “${query}”.` : "There are no notes yet."}
+        </p>
+      )}
+    </Figure>
+  );
+}
+
 function PageRead({ data, meta }: KindProps) {
   return (
     <Figure tool="url" card="url" name="Page read" note={text(data, "domain")} meta={meta}>
@@ -379,5 +414,6 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   convert: Convert,
   clock: Clock,
   textstats: TextStats,
+  note: Note,
   error: Failure,
 };

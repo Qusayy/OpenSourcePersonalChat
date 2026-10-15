@@ -31,6 +31,7 @@ from .context import (
     RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
 )
 from .excerpt import estimate
+from .ledger import ledger
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
 from .router import (
@@ -47,8 +48,11 @@ from .skills import SAY_SO, Offer, Skill, did_not_work, offered, prompt_parts
 from .tools import REGISTRY, call_tool as default_call_tool
 from .tools.base import (
     Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
-    was_given,
+    untrusted, was_given,
 )
+from .tools.memory import SCOPE
+from .verify import caption, note, scalars
+from .verify import check as check_figures
 from .transcript import Transcript, system_for
 
 Event = tuple[str, dict]
@@ -115,6 +119,12 @@ class Trace:
     # once the run has answered, or asked.
     sent: list[Part] | None = None
     system_key: str | None = None
+    # Whether the answer was checked against what was looked up, and what
+    # was found wrong with it: the figures in it that nothing returned, and
+    # the line the visitor is shown about them.
+    checked: bool = False
+    unsupported: list[str] = field(default_factory=list)
+    correction: str | None = None
     # How it ended: answered | asked | stopped | failed. None while it is
     # running. "asked" is a question put to the user in place of an answer.
     outcome: str | None = None
@@ -132,27 +142,14 @@ class Trace:
         )
 
     def totals(self) -> dict:
-        """The run in a line: what the page is told when it ends.
-
-        The total is split four ways, and the four add up to it: waiting for
-        the slot, the model reading, the model writing, and tools.
-        """
-        passes = [s for s in self.steps if s.model]
-        waiting = sum(s.queue_ms or 0.0 for s in passes)
-        reading = sum(s.first_token_ms or 0.0 for s in passes)
-        tools = sum(s.total_ms for s in self.steps if not s.model)
-        total = sum(s.total_ms for s in self.steps)
+        """The run in a line, and each of its steps: what the page is told
+        when it ends. The same as a stored answer's run reads back, from the
+        same function (``app.ledger``), with the run's own stopwatch beside
+        it."""
         return {
             "id": self.run_id,
             "outcome": self.outcome,
-            "steps": len(self.steps),
-            "passes": len(passes),
-            "total_ms": round(total, 1),
-            "waiting_ms": round(waiting, 1),
-            "reading_ms": round(reading, 1),
-            # What is left of the passes once the waiting and reading are out.
-            "writing_ms": round(max(total - tools - waiting - reading, 0.0), 1),
-            "tools_ms": round(tools, 1),
+            **ledger(self.steps),
             "wall_ms": None if self.wall_ms is None else round(self.wall_ms, 1),
         }
 
@@ -210,6 +207,7 @@ def run(
     seed: int | None = None,
     loop: bool | None = None,
     context: list[Turn] | None = None,
+    scope: str | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -232,6 +230,9 @@ def run(
     that: it is what decides which addresses the user gave. Without
     ``context`` the conversation is read from ``history``.
 
+    ``scope`` is the conversation the run belongs to: the one whose notes a
+    note tool keeps and reads.
+
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
     """
@@ -251,6 +252,7 @@ def run(
         seed=seed,
         loop=settings.agent_loop if loop is None else loop,
         turns=context,
+        scope=scope,
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -310,6 +312,12 @@ class _Run:
     # Set while the run holds the slot for every pass it makes, outside the
     # loop: a skill whose inputs the model filled in.
     holding: bool = False
+    # The conversation the run belongs to, whose notes it may keep and read.
+    scope: str | None = None
+    # Set once the run has read text somebody other than the user wrote: a
+    # page, an article, notes others kept. From then on it writes nothing the
+    # model chose to write.
+    tainted: bool = False
     # What was sent to have them filled in, and what the model wrote.
     filled: list[Part] | None = None
 
@@ -342,6 +350,11 @@ class _Run:
     async def _stages(self) -> AsyncIterator[Event]:
         if self.turns is None:
             self.turns = turns_from_history(self.history)
+        self.tainted = any(
+            untrusted(REGISTRY[tool])
+            for turn in self.turns for part in turn.parts
+            if part.kind in ("data", "observation") for tool in part.tools if tool in REGISTRY
+        )
         self.said, self.cut = self._cap()
         try:
             # What costs nothing comes first: a skill, a command, a pattern.
@@ -369,7 +382,9 @@ class _Run:
             if self._trimmed(window):
                 yield "trimmed", self.trim
             self._sending(system, now)
-            async with aclosing(self._answer(window.messages, held=self.holding)) as events:
+            async with aclosing(
+                self._answer(window.messages, parts=window.parts, held=self.holding)
+            ) as events:
                 async for event in events:
                     yield event
         finally:
@@ -654,6 +669,14 @@ class _Run:
         clean, rejection = check(tool, call.args)
         if rejection is not None:
             return rejection
+        if tool.writes and self.tainted:
+            # A page that says "remember that…" must not be able to.
+            return Rejection(
+                (f"{tool.name} only follows the user's own message, not text read in this "
+                 "conversation from elsewhere",),
+                f"{tool.label} only keeps what you ask it to yourself.",
+                "not allowed",
+            )
         theirs = [m["content"] for m in self.history if m["role"] == "user"] + [self.message]
         for arg in tool.args:
             value = clean.get(arg.name)
@@ -678,7 +701,12 @@ class _Run:
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
-        name = action.call.name if action.call else (action.skill.id if action.skill else None)
+        name = (
+            action.call.name if action.call
+            else action.skill.id if action.skill
+            else "ask" if action.kind == "ask"
+            else None
+        )
         self.trace.steps.append(self._passed(kind, said, name=name, given=given, error=error))
         return action, said
 
@@ -795,7 +823,9 @@ class _Run:
                 return
             transcript.answer_cue(note, own)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
-            async with aclosing(self._answer(transcript.messages(), held=True)) as events:
+            async with aclosing(
+                self._answer(transcript.messages(), parts=transcript.parts(), held=True)
+            ) as events:
                 async for event in events:
                     yield event
         finally:
@@ -999,6 +1029,8 @@ class _Run:
             }
             return
         self.trace.calls.append((call, result))
+        if result.ok and tool is not None and untrusted(tool):
+            self.tainted = True
         self.trace.steps.append(Step(
             "tool", name=call.name, via=call.via, input=call.args, output=result.summary,
             total_ms=result.ms, ok=result.ok,
@@ -1031,13 +1063,19 @@ class _Run:
                 "data": {"message": result.summary or result.error},
             }
 
+    async def _scoped(self, call: ToolCall) -> ToolResult:
+        """The call, made in this run's conversation. Set inside the call's
+        own task, so that it reaches the tool and goes no further."""
+        SCOPE.set(self.scope)
+        return await self.call_tool(call.name, call.args)
+
     async def _call(self, call: ToolCall) -> ToolResult | None:
         """Run one tool, unless Stop comes first. None means it did.
 
         A tool that goes out can take ten seconds. Whoever pressed Stop should
         not have to wait for a page they no longer want.
         """
-        tool = asyncio.ensure_future(self.call_tool(call.name, call.args))
+        tool = asyncio.ensure_future(self._scoped(call))
         asked = asyncio.ensure_future(self.stop.wait())
         try:
             await asyncio.wait({tool, asked}, return_when=asyncio.FIRST_COMPLETED)
@@ -1100,9 +1138,55 @@ class _Run:
             ), Part("user", "instruction", SAY_SO)]
         return [question]
 
+    # ---------------------------------------------------------- the check --
+
+    def _check(self, parts: list[Part]) -> None:
+        """Hold the answer against what was looked up for it.
+
+        In full where this run looked something up and it worked: every
+        figure, and whether the answer says it has no live data. Where it only
+        has results from earlier in the conversation, only figures with a
+        unit or a currency, so that a poem written after a weather lookup is
+        left alone. Not at all where nothing was looked up.
+
+        What it reads the answer against: what this run's lookups returned,
+        all of it, as the visitor sees it on the cards; what was found and
+        read in this prompt, this turn's or replayed; and what the user wrote.
+        Never an earlier answer, so a mistake does not vouch for itself by
+        being repeated.
+        """
+        made = [(call, result) for call, result in self.trace.calls if result.ok]
+        found = [p.content for p in parts if p.kind in ("data", "observation")]
+        if not made and not found:
+            return
+        sources = list(found)
+        for _, result in made:
+            sources += [result.summary, *scalars(result.data)]
+        sources += [m["content"] for m in self.history if m["role"] == "user"]
+        sources.append(self.message)
+        result = check_figures(
+            self.trace.answer or "", sources, with_units_only=not made, denial=bool(made),
+        )
+        self.trace.checked = True
+        if result.clean:
+            return
+        quoted = [
+            (REGISTRY[call.name].label, outcome.summary) for call, outcome in made
+            if call.name in REGISTRY and not REGISTRY[call.name].untrusted
+        ]
+        self.trace.unsupported = list(result.unsupported)
+        self.trace.correction = caption(result, quoted)
+        if self.trace.sent is not None:
+            self.trace.sent.append(Part("user", "correction", note(result)))
+
     # ---------------------------------------------------------- the answer --
 
-    async def _answer(self, messages: list[dict], *, held: bool = False) -> AsyncIterator[Event]:
+    async def _answer(
+        self, messages: list[dict], *, parts: list[Part] = (), held: bool = False
+    ) -> AsyncIterator[Event]:
+        """The pass that writes the answer, from ``messages``. ``parts`` are
+        the same prompt with what each piece is, so the answer can be checked
+        against what was looked up for it."""
         sampling = self.persona.sampling()
         # Fitted to the window already. The engine's own fitting is kept as
         # the last guard: a run that added more than the room it was given.
@@ -1150,6 +1234,12 @@ class _Run:
                 self.trace.answer = data.pop("text", "")
                 if self.trace.sent is not None:
                     self.trace.sent.append(Part("assistant", "answer", self.trace.answer))
+                # Checked before anything is said of the answer: the keeper
+                # stores it when its step closes, and stores what was found.
+                if not stopped:
+                    self._check(parts)
+                data["unsupported"] = list(self.trace.unsupported)
+                data["correction"] = self.trace.correction
                 data["tool_calls"] = len(self.calls)
                 self.trace.usage = data
                 yield "step", {

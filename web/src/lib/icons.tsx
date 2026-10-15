@@ -28,6 +28,7 @@ const SHAPES = {
   convert: [P("M4 8h13l-3-3M20 16H7l3 3")],
   currency: [P("M4 9h13l-3-3M20 15H7l3 3"), P("M12 2v3M12 19v3", ".5")],
   textstats: [P("M4 5h16M4 10h16M4 15h10M4 20h6")],
+  note: [P("M5 4h11l3 3v13H5z"), P("M9 10h6M9 14h6M9 18h3", ".6")],
   wikipedia: [
     P("M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"),
     P("M3 12h18M12 3c2.5 2.6 2.5 15 0 18-2.5-3-2.5-15.4 0-18z"),
@@ -74,6 +75,8 @@ const ALIAS = {
   convert_units: "convert",
   read_url: "url",
   text_stats: "textstats",
+  remember: "note",
+  recall: "note",
   exchange: "currency",
   answer: "model",
   calc: "calculator",

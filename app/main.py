@@ -186,7 +186,7 @@ async def api_chat(payload: ChatRequest):
 
     cid = payload.conversation_id
     created = False
-    if cid and db.get_conversation(cid) is None:
+    if cid and db.conversation_head(cid) is None:
         cid = None
     if not cid:
         cid = db.create_conversation(persona.id, user_text)
@@ -207,7 +207,7 @@ async def api_chat(payload: ChatRequest):
         # Open before the page is told the id, so a Stop sent the moment it
         # arrives finds a run to stop.
         with engine.hold(run_id):
-            convo = db.get_conversation(cid)
+            convo = db.conversation_head(cid)
             yield sse(
                 "conversation",
                 {
@@ -224,7 +224,7 @@ async def api_chat(payload: ChatRequest):
             keeper = _Keeper(cid, persona.id, trace, question_id)
             run = agent.run(
                 user_text, persona=persona, skill=skill, history=history, trace=trace,
-                engine=engine, request_id=run_id, context=context,
+                engine=engine, request_id=run_id, context=context, scope=cid,
             )
             try:
                 # Closed with this response, not whenever it is collected: a
@@ -293,6 +293,7 @@ class _Keeper:
             gen_tps=usage.get("gen_tps"),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
+            correction=self.trace.correction,
         )
         db.attach_tool_calls(mid, self.call_ids)
         db.attach_steps(mid, self.trace.run_id)

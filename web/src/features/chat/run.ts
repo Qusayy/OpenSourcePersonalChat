@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import { bootstrap } from "@/lib/bootstrap";
-import type { CardData, CardKind, Skill, StepEvent } from "@/lib/types";
+import type { CardData, CardKind, Skill, StepEvent, StoredRun } from "@/lib/types";
 import { applyStep, type Cost, type StepRow } from "./rules";
 
 export type View = "empty" | "thread";
@@ -42,6 +42,11 @@ export interface BotItem {
   cards: CardEntry[];
   /** What it cost; null until it has ended (or for a stored answer that kept nothing). */
   cost: Cost | null;
+  /** A figure in it that nothing it looked up returned, said in a line. */
+  correction: string | null;
+  /** How it ran: every step and what it cost. Null until the run has ended,
+   *  or for a stored answer whose steps are no longer kept. */
+  run: StoredRun | null;
 }
 
 export type NoticeVariant = "" | "queue" | "err";
@@ -141,6 +146,8 @@ export function addBot(over: Partial<BotItem> = {}): BotItem {
     steps: [],
     cards: [],
     cost: null,
+    correction: null,
+    run: null,
     ...over,
   };
   set((s) => ({ items: [...s.items, item] }));

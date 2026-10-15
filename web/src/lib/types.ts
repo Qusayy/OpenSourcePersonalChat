@@ -119,6 +119,7 @@ export type CardKind =
   | "convert"
   | "clock"
   | "textstats"
+  | "note"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats
@@ -162,6 +163,11 @@ export interface StoredMessage {
   gen_tps: number | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
+  /** What the answer said that nothing it looked up returned, in a line,
+   *  when it said anything of the kind. */
+  correction?: string | null;
+  /** How the answer was arrived at, while its steps are kept. */
+  run?: StoredRun | null;
   tool_calls: StoredToolCall[];
 }
 
@@ -229,7 +235,31 @@ export interface RunEvent {
   tools_ms: number;
   /** First step to last by the clock; a little more than `total_ms`. */
   wall_ms: number | null;
+  /** Each step, in order: what "How it ran" lists. */
+  ledger: LedgerStep[];
 }
+
+/** One step of a run, as its ledger lists it. */
+export interface LedgerStep {
+  /** route | fill | decide | repair | tool | answer: one row per pass. */
+  kind: string;
+  /** The tool or skill; "ask" for a question put back; null for no tool. */
+  name: string | null;
+  /** How it was chosen: slash | heuristic | skill | model. */
+  via: string | null;
+  ok: boolean;
+  error: string | null;
+  /** On a pass: the prompt, what of it the model actually read (the rest
+   *  was in its cache; null where that was not reported), and what it wrote. */
+  tokens_in: number | null;
+  tokens_read: number | null;
+  tokens_out: number | null;
+  ms: number;
+}
+
+/** A run as a stored answer reads it back: the run event, without what
+ *  only the live run knew. */
+export type StoredRun = Omit<RunEvent, "outcome"> & { outcome: RunEvent["outcome"] | null };
 
 /** What the answer cost, sent when it ends. A run that was stopped before its
  *  answer was begun still ends in this, with `cancelled` set and nothing in the
@@ -252,6 +282,10 @@ export interface DoneEvent {
   /** Set when the reply is a question the model put back to the user in place
    *  of an answer. The figures are then those of the pass that chose to ask. */
   asked?: boolean;
+  /** The figures in the answer that nothing it looked up returned, and the
+   *  line said about them under the answer. Absent where it was not checked. */
+  unsupported?: string[];
+  correction?: string | null;
 }
 
 /** Every event of the chat stream, by name. A type, not an interface, so it

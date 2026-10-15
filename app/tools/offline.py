@@ -151,6 +151,30 @@ def _format(frac: Fraction) -> tuple[str, bool]:
     return f"{value:,.10g}", False
 
 
+# The most intermediate values kept with a result.
+MAX_WORKING = 20
+
+
+def _working(tree: ast.Expression) -> list[str]:
+    """The value of each part of the expression that is itself a calculation,
+    innermost first: the figures a person writes down on the way to the
+    answer, so that an answer explaining the working is not taken for one
+    that invented them."""
+    parts = [
+        node for node in ast.walk(tree.body)
+        if node is not tree.body and isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Call))
+    ]
+    out: list[str] = []
+    for node in reversed(parts):
+        try:
+            text, _ = _format(_eval(node))
+        except Exception:  # noqa: BLE001 - a part that cannot be worked out alone is left out
+            continue
+        if text not in out:
+            out.append(text)
+    return out[:MAX_WORKING]
+
+
 async def _calculator(expression: str) -> ToolResult:
     expr = (expression or "").strip().rstrip("=").strip()
     if not expr:
@@ -195,6 +219,7 @@ async def _calculator(expression: str) -> ToolResult:
         data={
             "expression": expr,
             "result": text,
+            "working": _working(tree),
             "exact": exact,
             "float": float(value),
             "fraction": f"{value.numerator}/{value.denominator}"

@@ -106,6 +106,7 @@ register(Tool(
     example="/wiki Ada Lovelace",
     budget=175,
     observe=_observe_article,
+    untrusted=True,
 ))
 
 

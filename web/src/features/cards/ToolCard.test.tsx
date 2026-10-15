@@ -11,6 +11,12 @@ const draw = (card: CardKind, data: CardData, meta?: { label?: string; ms?: numb
 const words = (el: Element) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
 
 const FULL: Record<Exclude<CardKind, "error">, CardData> = {
+  note: {
+    action: "recall",
+    query: "bike",
+    notes: ["the blue bike is mine"],
+    scope: "conversation",
+  },
   calculator: {
     expression: "(1024 * 3.5) / 7 + 2**10",
     result: 1536,
@@ -142,6 +148,25 @@ describe("each kind of card, with everything the tool can send", () => {
     expect(el.querySelector(".hour")?.getAttribute("transform")).toBe("rotate(281.5 40 40)");
     expect(el.querySelector(".minute")?.getAttribute("transform")).toBe("rotate(138.0 40 40)");
     expect(el.querySelectorAll(".ticks line")).toHaveLength(12);
+  });
+
+  it("a note kept says whose it is, and notes found are listed in their words", () => {
+    const kept = draw("note", {
+      action: "remember",
+      text: "my locker is 418",
+      scope: "conversation",
+    });
+    expect(words(kept)).toContain("Remember");
+    expect(words(kept)).toContain("kept for this conversation");
+    expect(words(kept)).toContain("my locker is 418");
+    const found = draw("note", FULL.note);
+    expect(words(found)).toContain("Recall");
+    expect(words(found)).toContain("“bike”");
+    expect([...found.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "the blue bike is mine",
+    ]);
+    const none = draw("note", { action: "recall", query: "boat", notes: [] });
+    expect(words(none)).toContain("No note matches “boat”.");
   });
 
   it("text stats scale each term's bar to the commonest term", () => {

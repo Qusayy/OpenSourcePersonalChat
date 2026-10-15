@@ -49,6 +49,47 @@ test.describe("a stored conversation", () => {
     await expect(page.locator("#ctx-value")).toHaveText("360");
   });
 
+  test("an answer's correction is drawn again under it, above what it cost", async ({ page }) => {
+    await openStored(page, 0);
+    const answer = answerOf(page);
+    const correction = answer.locator('[data-part="correction"]');
+    await expect(correction).toHaveText(
+      "Not in what was looked up: nine. Weather returned: Reykjavík, Iceland: Partly cloudy, 7.4°C.",
+    );
+    await expect(correction.locator(".icon")).toHaveCount(1);
+    // Between the answer and its footer.
+    const order = await answer.evaluate((el) =>
+      [...el.querySelectorAll('[data-part="correction"], [data-part="cost"], .prose')].map(
+        (node) => (node as HTMLElement).dataset.part ?? "prose",
+      ),
+    );
+    expect(order).toEqual(["prose", "correction", "cost"]);
+  });
+
+  test("how a stored answer ran is read back from its steps", async ({ page }) => {
+    await openStored(page, 0);
+    const toggle = answerOf(page).locator('[data-act="ledger"]');
+    await toggle.click();
+    const rows = answerOf(page).locator('[data-part="ledger"] li');
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("choice");
+    await expect(rows.nth(0)).toContainText(/weather/i);
+    await expect(rows.nth(0)).toContainText("read 18 of 667 · wrote 12");
+    await expect(rows.nth(2)).toContainText("choice again");
+    await expect(rows.nth(3)).toContainText("answer");
+    await expect(answerOf(page).locator('[data-part="ledger"]')).toContainText("run 4.02s");
+  });
+
+  test("an answer whose steps were not kept offers nothing to open", async ({ page }) => {
+    await openStored(page, 1);
+    await expect(answerOf(page).locator('[data-act="ledger"]')).toHaveCount(0);
+  });
+
+  test("an answer with nothing to correct has no correction", async ({ page }) => {
+    await openStored(page, 1);
+    await expect(answerOf(page).locator('[data-part="correction"]')).toHaveCount(0);
+  });
+
   test("lists keep their markers and a fourth-level heading its weight", async ({ page }) => {
     await openStored(page, 1);
     const styles = await page.evaluate(() => {

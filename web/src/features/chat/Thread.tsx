@@ -8,8 +8,8 @@ import { Icon } from "@/lib/icons";
 import { renderMarkdown } from "@/lib/markdown";
 import { Button } from "@/shell/Button";
 import { toast } from "@/state/shell";
-import { dom, send, streamed } from "./controller";
-import { costFigures, isLongMessage, type StepRow } from "./rules";
+import { dom, send, streamed, toolLabel } from "./controller";
+import { costFigures, isLongMessage, ledgerRows, type StepRow } from "./rules";
 import {
   type BotItem,
   type NoticeItem,
@@ -126,6 +126,7 @@ const Answer = memo(function Answer({ item }: { item: BotItem }) {
           </CardStack>
         )}
         <Prose itemKey={item.key} live={item.live} content={item.content} />
+        {item.correction && <Correction text={item.correction} />}
         {item.cost && <CostLine item={item} />}
       </div>
     </div>
@@ -227,8 +228,10 @@ function Step({ step }: { step: StepRow }) {
  * phone, and an unlabelled glyph has to be guessed at.
  */
 function CostLine({ item }: { item: BotItem }) {
+  const [open, setOpen] = useState(false);
   const cost = item.cost;
   if (!cost) return null;
+  const run = item.run && item.run.ledger.length > 0 ? item.run : null;
 
   const copy = () => {
     void copyText(item.content).then((copied) =>
@@ -242,30 +245,95 @@ function CostLine({ item }: { item: BotItem }) {
   };
 
   return (
-    <div
-      data-part="cost"
-      className="flex flex-wrap items-center gap-y-1 gap-x-4 mt-3 text-ink-2 text-1"
-    >
-      <span className="flex flex-wrap gap-y-1 gap-x-4">
-        {/* The numeral is fixed-width so a column of these lines up; the words
+    <>
+      <div
+        data-part="cost"
+        className="flex flex-wrap items-center gap-y-1 gap-x-4 mt-3 text-ink-2 text-1"
+      >
+        <span className="flex flex-wrap gap-y-1 gap-x-4">
+          {/* The numeral is fixed-width so a column of these lines up; the words
             around it are words and are set as words. */}
-        {costFigures(cost).map((fig) => (
-          <span key={fig.words}>
-            <b className="num text-ink font-[400]">{fig.value}</b>
-            {` ${fig.words}`}
-          </span>
+          {costFigures(cost).map((fig) => (
+            <span key={fig.words}>
+              <b className="num text-ink font-[400]">{fig.value}</b>
+              {` ${fig.words}`}
+            </span>
+          ))}
+          {cost.cancelled && <span>stopped</span>}
+        </span>
+        <span className="flex gap-1 ml-auto">
+          {run && (
+            <Button
+              variant="text"
+              small
+              quiet
+              data-act="ledger"
+              aria-expanded={open}
+              onClick={() => setOpen((was) => !was)}
+            >
+              How it ran
+            </Button>
+          )}
+          <Button variant="text" small quiet data-act="copy" onClick={copy}>
+            Copy
+          </Button>
+          <Button variant="text" small quiet data-act="again" onClick={again}>
+            Ask again
+          </Button>
+        </span>
+      </div>
+      {run && open && <Ledger run={run} />}
+    </>
+  );
+}
+
+/**
+ * How the answer was arrived at: every step, what it read and wrote, and how
+ * long it took, then the run's time split four ways. The one place a step's
+ * cost is itemised, so it is shown only when asked for.
+ */
+function Ledger({ run }: { run: NonNullable<BotItem["run"]> }) {
+  const { rows, split } = ledgerRows(run, toolLabel);
+  return (
+    <div data-part="ledger" className="mt-2 text-ink-2 text-1">
+      <ol className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] gap-x-4 gap-y-1">
+        {rows.map((row, i) => (
+          <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: the steps are in order, and two may be alike
+            key={i}
+            className="contents"
+            data-failed={row.failed || undefined}
+          >
+            <span>{row.kind}</span>
+            <span className="text-ink overflow-hidden text-ellipsis whitespace-nowrap">
+              {row.name}
+              {row.failed && <span className="text-fault"> failed</span>}
+            </span>
+            <span className="num">{row.tokens}</span>
+            <span className="num text-right">{row.ms}</span>
+          </li>
         ))}
-        {cost.cancelled && <span>stopped</span>}
-      </span>
-      <span className="flex gap-1 ml-auto">
-        <Button variant="text" small quiet data-act="copy" onClick={copy}>
-          Copy
-        </Button>
-        <Button variant="text" small quiet data-act="again" onClick={again}>
-          Ask again
-        </Button>
-      </span>
+      </ol>
+      <p className="mt-2 num">{split}</p>
     </div>
+  );
+}
+
+/**
+ * What the answer said that nothing it looked up returned. A caption, not a
+ * notice: it belongs to this answer, stays with it on reload, and is set in
+ * the caption's size and ink, with the caution mark to say what kind of line
+ * it is.
+ */
+function Correction({ text }: { text: string }) {
+  return (
+    <p
+      data-part="correction"
+      className="flex items-start gap-2 mt-3 text-ink-2 text-1 [&>.icon]:mt-[2px] [&>.icon]:text-caution"
+    >
+      <Icon name="error" size={14} />
+      <span>{text}</span>
+    </p>
   );
 }
 

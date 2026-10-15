@@ -145,7 +145,7 @@ class PlainAnswerTests(ChatCase):
             set(done),
             {"cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
              "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb",
-             "tool_calls"},
+             "tool_calls", "unsupported", "correction"},
         )
         self.assertIs(done["cancelled"], False)
         self.assertEqual(done["completion_tokens"], 4)
@@ -742,7 +742,7 @@ class StoredTraceTests(ChatCase):
         self.assertEqual([name for name, _ in stream].count("run"), 1)
         self.assertEqual(
             set(stream[-1][1]),
-            {"id", "outcome", "steps", "passes", "total_ms", "waiting_ms", "reading_ms",
+            {"id", "outcome", "steps", "passes", "total_ms", "waiting_ms", "reading_ms", "ledger",
              "writing_ms", "tools_ms", "wall_ms"},
         )
         self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (1, 1))
@@ -903,6 +903,82 @@ class LoopOverHttpTests(ChatCase):
                 rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
                 self.assertEqual([r["kind"] for r in rows], kinds)
                 self.assertEqual(self.engine.route_prompts, [])
+
+
+class LedgerTests(ChatCase):
+    """What a run did, told when it ends and read back with its answer."""
+
+    def test_a_stored_answer_reads_back_the_same_ledger_the_page_was_told(self) -> None:
+        support.with_settings(self, agent_loop=True)
+        support.played_tools(self, {"weather": WEATHER})
+        self.use_engine(ScriptedEngine([
+            '{"tool": "weather", "args": {"location": "Paris"}}', '{"tool": "none"}', "Take a coat.",
+        ]))
+        stream = self.chat("Do I need a coat in Paris", persona="agent")
+        live = stream[-1][1]
+        stored = self.conversation(stream)["messages"][1]["run"]
+        self.assertEqual([s["kind"] for s in live["ledger"]], ["route", "tool", "decide", "answer"])
+        for key in ("steps", "passes", "total_ms", "waiting_ms", "reading_ms", "writing_ms",
+                    "tools_ms", "ledger"):
+            with self.subTest(key=key):
+                self.assertEqual(stored[key], live[key])
+        self.assertEqual(stored["id"], live["id"])
+        self.assertIsNone(stored["wall_ms"])
+
+    def test_a_question_asked_back_is_named_as_one(self) -> None:
+        self.use_engine(PlayedEngine(decision={"tool": "ask", "args": {"question": "Which city?"}}))
+        stream = self.chat("what's the weather like", persona="agent")
+        self.assertEqual(stream[-1][1]["ledger"][0]["name"], "ask")
+
+    def test_an_answer_whose_steps_are_gone_has_no_run(self) -> None:
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        db.prune_steps(keep_days=-1)
+        self.assertIsNone(self.conversation(stream)["messages"][1]["run"])
+        self.assertNotIn("run", self.conversation(stream)["messages"][0])
+
+
+class CorrectionTests(ChatCase):
+    """An answer held against what was looked up for it."""
+
+    def test_a_figure_nothing_returned_is_said_under_the_answer_and_kept(self) -> None:
+        support.played_tools(self, {"weather": WEATHER})
+        engine = self.use_engine(ScriptedEngine(["It is 25°C, so leave the coat.", "Fine."]))
+        first = self.chat("/weather Paris", persona="explainer")
+        done = only(first, "done")[0]
+        expected = (
+            "Not in what was looked up: 25°C. Weather returned: "
+            "Paris, France: overcast, 17.9°C (feels 17.2°C), wind 9.4 km/h."
+        )
+        self.assertEqual((done["unsupported"], done["correction"]), (["25°C"], expected))
+        cid = only(first, "conversation")[0]["id"]
+        # Kept with the answer, so a reload shows it too.
+        self.assertEqual(self.conversation(first)["messages"][1]["correction"], expected)
+        # And kept for the model, in the harness's voice, quoting nothing.
+        _, records = db.conversation_record(cid)
+        last = records[0]["parts"][-1]
+        self.assertEqual(last["kind"], "correction")
+        self.assertEqual(
+            last["content"],
+            "Checked by the harness: 25°C in the answer above is not in what was looked up.",
+        )
+        # The next message still reads on from where the last one ended.
+        self.chat("Why?", persona="explainer", conversation_id=cid)
+        before, after = engine.passes
+        self.assertTrue(after.prompt.startswith(before.prompt + before.output))
+        self.assertIn(last["content"], after.prompt)
+
+    def test_an_answer_true_to_its_lookup_draws_nothing(self) -> None:
+        support.played_tools(self, {"weather": WEATHER})
+        self.use_engine(ScriptedEngine(["About 18 degrees and overcast."]))
+        stream = self.chat("/weather Paris", persona="explainer")
+        done = only(stream, "done")[0]
+        self.assertEqual((done["unsupported"], done["correction"]), ([], None))
+        self.assertIsNone(self.conversation(stream)["messages"][1]["correction"])
+
+    def test_an_answer_that_looked_nothing_up_is_not_checked(self) -> None:
+        self.use_engine(ScriptedEngine(["Paris has 2.1 million people."]))
+        done = only(self.chat("How many people live in Paris?", persona="explainer"), "done")[0]
+        self.assertIsNone(done["correction"])
 
 
 class ReplayTests(ChatCase):

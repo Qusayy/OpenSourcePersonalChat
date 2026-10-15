@@ -467,6 +467,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
 | `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
+| `AURORA_NOTES` | `conversation` | notes the Agent keeps when asked to remember something. `conversation`: read back only in the conversation they were made in, and deleted with it. `site`: shared by every conversation, for a private deployment only. `off`: none. See *Notes* |
 | `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
 | `AURORA_GATE` | `on` | `off`, exactly, serves the site to everyone. Anything else keeps it behind the cover; see [The gate](#the-gate) |
@@ -543,7 +544,12 @@ prose preambles and invented keys. Five layers, cheapest first:
 
 A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
 for it. It is announced on the page at the moment it is made and at no other
-time, and the per-step timings are printed in the UI rather than hidden.
+time, and the status line says "deciding" while it runs. Under each answer,
+**How it ran** lists every step of the run in order: what the model read of
+its prompt (and how much of it was already in its cache), what it wrote, and
+how long each step took, then the run's time split into waiting, reading,
+writing and tools. It is read back from the steps the answer kept, so a
+reopened conversation shows the same.
 
 The grammar cannot be compiled without llama.cpp, so where the tests run it is
 read instead: `tests/gbnf.py` understands the subset of GBNF the generator
@@ -600,6 +606,45 @@ What was sent is kept with the conversation and deleted with it. It holds
 fetched pages, so it decides nothing: which addresses the reader may open is
 decided by the visitor's own messages alone, and an address the model read in
 a page is not one of them.
+
+### Checking the answer
+
+When a run has looked something up, its answer is held against what came
+back before it is shown as finished. Every number in the answer is read with
+its unit, and one that is in none of what was looked up (the results whole, as
+the cards show them), nor in what the user wrote, is named in one line under
+the answer: "Not in what was looked up: 64°F. Weather returned: Paris,
+France: overcast, 17.9°C." An answer that says it has no live data beside a
+lookup that worked is answered the same way. A figure agrees when it is what
+the source comes to, rounded or cut short, so "about 62 miles" for 62.1371 is
+fine and "63 miles" is not.
+
+The line quotes a tool only when its output is the harness's own (a sum, a
+time, the weather, a rate), never a page or an article. It is kept with the
+answer, and the model reads a fixed note about it in later turns. It checks
+figures, not sentences: it can tell that a number came from nowhere, not that
+what is said around it is true. Derivations a visitor asked for, such as a
+temperature in Fahrenheit, are flagged too, by design, since the model is told
+not to work figures out itself.
+
+### Notes
+
+Asked to remember something ("keep in mind that my locker is 418", or
+`/remember …`), the Agent keeps a note, and finds it again when a later
+message needs it (`/recall …`). A note is a line in the user's own words, in
+the site's own database, searched with SQLite's full-text search where the
+build has it.
+
+Whose notes they are is the deployment's choice. By default a note belongs to
+the conversation it was made in: it is read back only there and deleted with
+it, because this site has no accounts, and a note shared across conversations
+would be shared with every visitor. `AURORA_NOTES=site` shares them, which only
+suits a private deployment; `off` removes both tools.
+
+A note is only ever kept on the user's word. Once a run has read text somebody
+else wrote (a page, an article, notes shared across the site), the model may
+not keep one: a page that says "remember that…" is refused like an address the
+user never gave. A `/remember` typed by the user is always kept.
 
 ### Safety
 
@@ -935,6 +980,7 @@ python scripts/eval_agent.py --engine real --compare evals/reports/before.json
 python scripts/eval_agent.py --engine real --single            # one choice where a task does not ask for more
 python scripts/eval_agent.py --engine real --probe-routing     # one first choice, cold then warm
 python scripts/eval_agent.py --engine real --probe-cache       # what each pass of three turns read
+python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt   # another wording, this run only
 ```
 
 **Scripted**, each task brings what the model says, so the run measures the
@@ -958,6 +1004,12 @@ ways and compare: the report says how many runs made a second lookup, how many
 were ended by a limit and how many by asking for the same thing twice, beside
 task success and seconds per task. That comparison is what decides whether the
 loop stays on. Scripted tasks are written for the loop on.
+
+A wording file (`--rules`) puts other texts in front of the model for one
+run: the loop's rules, and the persona, a tool's or a skill's line on the menu.
+It is how a rewording is measured before it is made the default, since with a
+model this small a reworded line can move routing either way. The report names
+the file and its digest.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

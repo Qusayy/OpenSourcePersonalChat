@@ -308,4 +308,5 @@ register(Tool(
     example="/read https://example.com",
     budget=250,
     observe=_observe,
+    untrusted=True,
 ))

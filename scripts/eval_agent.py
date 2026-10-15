@@ -6,6 +6,7 @@
     python scripts/eval_agent.py --engine real --compare previous.json
     python scripts/eval_agent.py --engine real --probe-routing
     python scripts/eval_agent.py --engine real --probe-cache
+    python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt
 
 With ``--engine scripted`` each task brings what the model says, so the run
 measures the code around the model. It needs no weights and takes a second.
@@ -45,6 +46,7 @@ from app.transcript import Transcript, system_for  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
 from evals.tasks import TASKS, load_tasks  # noqa: E402
+from evals.wording import applied, load as load_wording  # noqa: E402
 
 
 def load_engine():
@@ -181,6 +183,8 @@ def show(report: dict, file=None) -> None:
 
     loop = "" if report.get("loop", True) else ", one choice where a task does not ask for more"
     print(f"\n{report['engine']} engine, seed {report['seed']}{loop}", file=file)
+    if report.get("rules"):
+        print(f"  worded by {report['rules']['file']} ({report['rules']['sha256']})", file=file)
     print(
         f"  {s['passed']} passed, {s['failed']} failed, {s['pending']} known gaps, "
         f"{s['unexpected_passes']} passed that were marked as gaps, {s['skipped']} not run",
@@ -192,6 +196,9 @@ def show(report: dict, file=None) -> None:
         f"invalid decisions {pct(s['invalid_output_rate'])}",
         file=file,
     )
+    if s.get("correction_rate") is not None:
+        print(f"  corrections {pct(s['correction_rate'])} of checked answers "
+              f"(a figure nothing returned: {pct(s['unsupported_rate'])})", file=file)
     if s.get("seconds") and s["seconds"]["total"]:
         t = s["seconds"]["total"]
         print(f"  seconds per task: median {t['median']}, 95% within {t['p95']}", file=file)
@@ -239,15 +246,24 @@ def main(argv: list[str] | None = None) -> int:
         help="time one routing pass cold and warm instead of running the tasks (real engine only)",
     )
     parser.add_argument(
+        "--rules", type=Path,
+        help="a wording file: other texts for the model to choose by, for this run only",
+    )
+    parser.add_argument(
         "--probe-cache", action="store_true",
         help="play a three-turn conversation and show what each pass read (real engine only)",
     )
     args = parser.parse_args(argv)
+    try:
+        wording = load_wording(args.rules) if args.rules else None
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
 
     if args.probe_cache:
         if args.engine != "real":
             parser.error("--probe-cache reads what the model server reports, so it needs --engine real")
-        rows = asyncio.run(probe_cache(load_engine(), args.seed))
+        with applied(wording):
+            rows = asyncio.run(probe_cache(load_engine(), args.seed))
         show_probe(rows)
         print(json.dumps(rows, indent=2, ensure_ascii=False))
         return 0
@@ -255,7 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.probe_routing:
         if args.engine != "real":
             parser.error("--probe-routing times the model, so it needs --engine real")
-        probe = asyncio.run(probe_routing(load_engine(), args.seed))
+        with applied(wording):
+            probe = asyncio.run(probe_routing(load_engine(), args.seed))
         print(json.dumps(probe, indent=2, ensure_ascii=False))
         return 0
 
@@ -263,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = load_engine() if args.engine == "real" else None
     report = asyncio.run(run_suite(
         tasks, engine_kind=args.engine, engine=engine, seed=args.seed, categories=args.category,
-        loop=False if args.single else None,
+        loop=False if args.single else None, wording=wording,
     ))
     if args.compare:
         report["compared"] = compare(report, json.loads(args.compare.read_text(encoding="utf-8")))

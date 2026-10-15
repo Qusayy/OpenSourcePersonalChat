@@ -23,6 +23,7 @@ const CONTENTS = [
   ["stack", "The stack"],
   ["queue", "One request at a time"],
   ["template", "Getting the prompt right"],
+  ["agent", "The Agent"],
   ["limits", "What it cannot do"],
 ] as const;
 
@@ -180,6 +181,25 @@ export function AboutPage() {
         </Panel>
       </Section>
 
+      <Section title="The Agent looks things up, within limits" id="agent">
+        <Panel>
+          <P>
+            {
+              "The Agent persona has tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
+            }
+            <Code>/weather Lisbon</Code>
+            {
+              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice."
+            }
+          </P>
+          <P>
+            {
+              "What it reads from the web is material, never instructions. It only opens an address you wrote yourself, and keeps a note only when you ask; by default a note belongs to the conversation it was made in and goes when the conversation does. Its answer is held against what it looked up, and a figure no lookup returned is named in a line under the answer. Under each answer, How it ran lists every step with what the model read, what it wrote and how long it took."
+            }
+          </P>
+        </Panel>
+      </Section>
+
       <Section title="What it cannot do" id="limits">
         <Panel>
           <P>
@@ -195,6 +215,10 @@ export function AboutPage() {
             {
               " tokens. Older turns are trimmed automatically when a conversation outgrows it; the system prompt is always kept."
             }
+          </P>
+          <P>
+            The check on an answer looks at its figures, not its sentences: it can tell that a
+            number came from nowhere, not that what is said around it is true.
           </P>
         </Panel>
       </Section>

@@ -41,6 +41,7 @@ EXPECTATIONS = {
     "outcome",              # answered | asked | stopped | failed; "answered" if left out
     "prompt_contains",      # each of these is somewhere in the prompt the answer pass read
     "prompt_not_contains",
+    "corrected",            # whether the answer drew a correction: a figure nothing returned
     "answer_contains",      # each of these is in the answer, whatever its case
     "answer_not_contains",
 }

@@ -389,7 +389,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         report = await run_suite(load_tasks(), engine_kind="scripted")
         self.assertEqual(
             set(report),
-            {"engine", "seed", "loop", "created", "model", "tokens_are_estimates", "summary",
+            {"engine", "seed", "loop", "rules", "created", "model", "tokens_are_estimates", "summary",
              "by_category", "tasks"},
         )
         summary = report["summary"]
@@ -397,7 +397,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             set(summary),
             {"tasks", "ran", "passed", "failed", "pending", "unexpected_passes", "skipped",
              "task_success", "routing_accuracy", "skill_selection", "argument_match",
-             "invalid_output_rate",
+             "invalid_output_rate", "unsupported_rate", "correction_rate",
              "repair_rate", "second_step_rate", "limit_rate", "repeat_rate",
              "steps", "passes", "prompt_tokens", "output_tokens"},
         )

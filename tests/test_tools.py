@@ -389,8 +389,14 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual(
             self.rules()["root"],
             "t-calculator | t-clock | t-convert-units | t-text-stats | t-wikipedia | "
-            "t-weather | t-currency | t-read-url | t-ask | t-none",
+            "t-weather | t-currency | t-read-url | t-remember | t-recall | t-ask | t-none",
         )
+
+    def test_with_notes_off_neither_note_tool_is_offered(self) -> None:
+        support.with_settings(self, notes="off")
+        root = self.rules()["root"]
+        self.assertNotIn("t-remember", root)
+        self.assertNotIn("t-recall", root)
 
     def test_every_registered_tool_has_a_rule(self) -> None:
         rules = self.rules()
@@ -402,7 +408,8 @@ class GrammarTests(unittest.TestCase):
         support.with_settings(self, allow_outbound=False)
         self.assertEqual(
             self.rules()["root"],
-            "t-calculator | t-clock | t-convert-units | t-text-stats | t-ask | t-none",
+            "t-calculator | t-clock | t-convert-units | t-text-stats | t-remember | t-recall | "
+            "t-ask | t-none",
         )
         self.assertNotIn("weather", tool_menu())
 

@@ -23,11 +23,13 @@ cache, is in a row only where the model server reported it for every pass.
 from __future__ import annotations
 
 import statistics
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
-from app import agent
+from app import agent, db
 from app.config import settings
 from app.context import Turn as Sent
 from app.llm import Engine
@@ -38,6 +40,7 @@ from . import fixtures
 from .score import route_match, score, skill_match
 from .scripted import ScriptedEngine
 from .tasks import Task, Turn
+from .wording import Wording, applied
 
 # How a task can end.
 PASSED = "passed"
@@ -74,6 +77,10 @@ class Outcome:
             row["pending"] = self.task.pending
         if not self.turns:
             return row
+        if self.last.correction:
+            # Read off a run on the model, it is the check's false alarms
+            # and its catches, one by one.
+            row["correction"] = self.last.correction
         steps = [s for turn in self.turns for s in turn.trace.steps]
         models = [s for s in steps if s.model]
         reported = [s.new_tokens for s in models]
@@ -123,6 +130,7 @@ async def run_task(
                     text, persona=persona, skill=get_skill(task.skill), history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
                     loop=True if task.loop else loop, context=list(sent),
+                    scope=f"task:{task.id}",
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
@@ -151,6 +159,7 @@ async def run_suite(
     seed: int | None = 0,
     categories: Iterable[str] | None = None,
     loop: bool | None = None,
+    wording: Wording | None = None,
 ) -> dict:
     """Run every task this engine can run, and return the report.
 
@@ -158,7 +167,8 @@ async def run_suite(
     makes an engine per task from the task's own script. ``loop`` is what the
     site's setting would be: unset, it is the setting; False makes every
     task that does not ask for the loop choose once, the way to see what the
-    loop is worth. Scripts are written for the loop on.
+    loop is worth. Scripts are written for the loop on. ``wording`` puts other
+    texts in front of the model for this run only: see ``evals.wording``.
     """
     if engine_kind not in ("scripted", "real"):
         raise ValueError(f"unknown engine {engine_kind!r}")
@@ -166,22 +176,26 @@ async def run_suite(
         raise ValueError("a real run needs a loaded engine")
     wanted = set(categories) if categories else None
 
-    outcomes: list[Outcome] = []
-    for task in tasks:
-        if wanted is not None and task.category not in wanted:
-            continue
-        if not task.runs_with(engine_kind):
-            outcomes.append(Outcome(task, SKIPPED, [], []))
-            continue
-        if engine_kind == "real":
-            outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
-            continue
-        scripted = ScriptedEngine(task.script or ())
-        try:
-            outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
-        finally:
-            # No worker thread may outlive the loop it reports to.
-            await scripted.settled()
+    # What a task keeps (a note) goes to a file that lasts for this run, never
+    # to the site's own database.
+    with applied(wording), tempfile.TemporaryDirectory() as scratch, \
+            db.elsewhere(Path(scratch) / "evals.db"):
+        outcomes: list[Outcome] = []
+        for task in tasks:
+            if wanted is not None and task.category not in wanted:
+                continue
+            if not task.runs_with(engine_kind):
+                outcomes.append(Outcome(task, SKIPPED, [], []))
+                continue
+            if engine_kind == "real":
+                outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
+                continue
+            scripted = ScriptedEngine(task.script or ())
+            try:
+                outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
+            finally:
+                # No worker thread may outlive the loop it reports to.
+                await scripted.settled()
 
     timed = engine_kind == "real"
     return {
@@ -189,6 +203,8 @@ async def run_suite(
         "seed": seed,
         # Whether the loop was on for the tasks that do not ask for it.
         "loop": settings.agent_loop if loop is None else loop,
+        # Other texts the model was given in place of its own, if any were.
+        "rules": wording.describe() if wording else None,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "model": _model(engine) if timed else None,
         # Without a tokenizer a token is counted as four characters.
@@ -243,6 +259,8 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     # How each run's looking-up ended, read off the last line its answer pass
     # was given.
     cues = [(o.last.prompt or [{"content": ""}])[-1]["content"] for o in ran]
+    # The answers that were held against what was looked up for them.
+    checked = [o.last for o in ran if o.last is not None and o.last.checked]
     rows = [o.row(timed) for o in ran]
 
     summary = {
@@ -273,6 +291,10 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         # for a lookup it had already made.
         "limit_rate": _share(sum(agent.OUT_OF_LOOKUPS in cue for cue in cues), len(cues)),
         "repeat_rate": _share(sum(agent.ALREADY_LOOKED_UP in cue for cue in cues), len(cues)),
+        # Of the answers checked against their lookups: those with a figure
+        # nothing returned, and those that drew any correction at all.
+        "unsupported_rate": _share(sum(bool(t.unsupported) for t in checked), len(checked)),
+        "correction_rate": _share(sum(bool(t.correction) for t in checked), len(checked)),
         "steps": _spread([float(r["steps"]) for r in rows]),
         "passes": _spread([float(r["passes"]) for r in rows]),
         "prompt_tokens": _spread([float(r["prompt_tokens"]) for r in rows]),

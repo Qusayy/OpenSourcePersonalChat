@@ -40,6 +40,8 @@ SLASH = {
     "currency": "currency", "fx": "currency", "money": "currency",
     "clock": "clock", "time": "clock", "date": "clock",
     "stats": "text_stats", "textstats": "text_stats",
+    "remember": "remember", "note": "remember",
+    "recall": "recall", "notes": "recall",
 }
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
@@ -94,6 +96,10 @@ def _args_from_free_text(tool_name: str, rest: str) -> dict | None:
         return {"timezone_name": rest or "UTC"}
     if tool_name == "text_stats":
         return {"text": rest} if rest else None
+    if tool_name == "remember":
+        return {"text": rest} if rest else None
+    if tool_name == "recall":
+        return {"query": rest}
     if tool_name == "convert_units":
         m = re.match(rf"{NUMBER}\s*([^\s]+)\s*(?:to|in|into|->)?\s*([^\s]+)", rest, re.I)
         if not m:

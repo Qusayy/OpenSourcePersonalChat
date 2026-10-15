@@ -7,16 +7,25 @@ tokens a second, a connection pool would be ceremony without benefit.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from .config import settings
+from .ledger import ledger
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
+# A file used in place of the configured one, while `elsewhere` holds it.
+_override: Path | None = None
+# Whether this SQLite has full-text search. Notes are searched with LIKE
+# where it has not.
+_fts = False
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -120,6 +129,18 @@ CREATE TABLE IF NOT EXISTS context_turns (
     created_at       REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_context_conv ON context_turns(conversation_id, created_at);
+
+-- Notes the Agent was asked to keep. A note made under the "conversation"
+-- scope belongs to its conversation and goes with it; one made under "site"
+-- belongs to the deployment. Not pruned.
+CREATE TABLE IF NOT EXISTS notes (
+    id               INTEGER PRIMARY KEY,
+    scope            TEXT NOT NULL,
+    conversation_id  TEXT,
+    text             TEXT NOT NULL,
+    created_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_conv ON notes(conversation_id, created_at);
 """
 
 # How long a step is kept when the settings do not say. A trace is a copy of
@@ -132,8 +153,8 @@ _pruned_at = 0.0
 
 
 def init() -> None:
-    global _conn
-    path = settings.resolved_db_path
+    global _conn, _fts
+    path = _override or settings.resolved_db_path
     path.parent.mkdir(parents=True, exist_ok=True)
     _conn = sqlite3.connect(str(path), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
@@ -141,8 +162,40 @@ def init() -> None:
     _conn.execute("PRAGMA synchronous=NORMAL")
     _conn.execute("PRAGMA foreign_keys=ON")
     _conn.executescript(SCHEMA)
+    # Columns added after a database was first made.
+    _add_column("messages", "correction", "TEXT")
+    # Made apart from the schema: a build of SQLite without the module raises
+    # here, and the notes are then searched without it.
+    try:
+        _conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(text)")
+        _fts = True
+    except sqlite3.OperationalError:
+        _fts = False
     _conn.commit()
     prune_steps()
+
+
+def _add_column(table: str, column: str, declaration: str) -> None:
+    """Add a column to a table made before it existed. Does nothing where it
+    is there already."""
+    have = {row[1] for row in _conn.execute(f"PRAGMA table_info({table})")}
+    if column not in have:
+        _conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
+@contextmanager
+def elsewhere(path: Path | str) -> Iterator[None]:
+    """Use the database at ``path`` for what runs inside, and the one before
+    afterwards. An evaluation keeps what its tasks write out of the site's
+    own database this way."""
+    global _conn, _override
+    saved = (_conn, _override)
+    _conn, _override = None, Path(path)
+    try:
+        yield
+    finally:
+        close()
+        _conn, _override = saved
 
 
 def close() -> None:
@@ -159,15 +212,21 @@ def _db() -> sqlite3.Connection:
     return _conn
 
 
+# The connection is opened before the lock is taken: opening it writes (it
+# clears out old steps), and the lock is not one a thread can take twice.
+
+
 def _write(sql: str, params: tuple = ()) -> None:
+    db = _db()
     with _lock:
-        _db().execute(sql, params)
-        _db().commit()
+        db.execute(sql, params)
+        db.commit()
 
 
 def _rows(sql: str, params: tuple = ()) -> list[dict]:
+    db = _db()
     with _lock:
-        return [dict(r) for r in _db().execute(sql, params).fetchall()]
+        return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
 # ------------------------------------------------------------ conversations --
@@ -221,7 +280,7 @@ def get_conversation(cid: str) -> dict | None:
     convo = rows[0]
     convo["messages"] = _rows(
         "SELECT id, role, content, created_at, ttft_ms, gen_tps, prompt_tokens,"
-        "       completion_tokens"
+        "       completion_tokens, correction"
         "  FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
         (cid,),
     )
@@ -237,11 +296,49 @@ def get_conversation(cid: str) -> dict | None:
             orphans.append(call)
     for message in convo["messages"]:
         message["tool_calls"] = by_message.get(message["id"], [])
+    # And each answer's run, as it was kept, for as long as its steps are.
+    runs = _runs_by_message(cid)
+    for message in convo["messages"]:
+        if message["role"] == "assistant":
+            message["run"] = runs.get(message["id"])
     convo["orphan_tool_calls"] = orphans
     return convo
 
 
+def conversation_head(cid: str) -> dict | None:
+    """A conversation's own row, without its messages: whether it is there,
+    and what it is called."""
+    rows = _rows("SELECT id, title, persona FROM conversations WHERE id = ?", (cid,))
+    return rows[0] if rows else None
+
+
+def _runs_by_message(cid: str) -> dict[str, dict]:
+    """Each answered run of a conversation, read back from its steps, by the
+    message it answered with. Fetched by conversation, which is indexed."""
+    rows = _rows(
+        "SELECT run_id, message_id, idx, kind, name, via, prompt_tokens, new_tokens,"
+        "       output_tokens, queue_ms, first_token_ms, total_ms, ok, error"
+        "  FROM steps WHERE conversation_id = ? ORDER BY created_at ASC, idx ASC",
+        (cid,),
+    )
+    grouped: dict[str, list[dict]] = {}
+    run_of: dict[str, str] = {}
+    for row in rows:
+        if row["message_id"]:
+            grouped.setdefault(row["message_id"], []).append(row)
+            run_of[row["message_id"]] = row["run_id"]
+    out = {}
+    for mid, steps in grouped.items():
+        steps.sort(key=lambda r: r["idx"])
+        out[mid] = {"id": run_of[mid], "outcome": None, **ledger(steps), "wall_ms": None}
+    return out
+
+
 def delete_conversation(cid: str) -> None:
+    for row in _rows("SELECT id FROM notes WHERE conversation_id = ?", (cid,)):
+        if _fts:
+            _write("DELETE FROM notes_fts WHERE rowid = ?", (row["id"],))
+    _write("DELETE FROM notes WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM context_turns WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM steps WHERE conversation_id = ?", (cid,))
     _write("DELETE FROM tool_calls WHERE conversation_id = ?", (cid,))
@@ -261,13 +358,15 @@ def add_message(
     gen_tps: float | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
+    correction: str | None = None,
 ) -> str:
     mid = uuid.uuid4().hex
     _write(
         "INSERT INTO messages (id, conversation_id, role, content, created_at,"
-        " ttft_ms, gen_tps, prompt_tokens, completion_tokens)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (mid, cid, role, content, time.time(), ttft_ms, gen_tps, prompt_tokens, completion_tokens),
+        " ttft_ms, gen_tps, prompt_tokens, completion_tokens, correction)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (mid, cid, role, content, time.time(), ttft_ms, gen_tps, prompt_tokens,
+         completion_tokens, correction),
     )
     return mid
 
@@ -320,6 +419,62 @@ def conversation_messages(cid: str) -> list[dict]:
         "SELECT role, content FROM messages WHERE conversation_id = ?"
         " ORDER BY created_at ASC",
         (cid,),
+    )
+
+
+# -------------------------------------------------------------------- notes --
+
+
+def add_note(text: str, *, scope: str, conversation_id: str | None) -> int:
+    """Keep a note. ``conversation_id`` is the conversation it belongs to,
+    under the conversation scope; None under the site's."""
+    db = _db()
+    with _lock:
+        cur = db.execute(
+            "INSERT INTO notes (scope, conversation_id, text, created_at) VALUES (?, ?, ?, ?)",
+            (scope, conversation_id, text, time.time()),
+        )
+        if _fts:
+            db.execute("INSERT INTO notes_fts (rowid, text) VALUES (?, ?)", (cur.lastrowid, text))
+        db.commit()
+        return int(cur.lastrowid)
+
+
+def _terms(query: str) -> list[str]:
+    return re.findall(r"\w+", query or "")[:12]
+
+
+def search_notes(
+    query: str, *, scope: str, conversation_id: str | None, limit: int = 5
+) -> list[dict]:
+    """The notes of a scope that match ``query``, best first; the latest when
+    it has nothing to match. Under the conversation scope only that
+    conversation's notes are ever read."""
+    if scope == "conversation":
+        where, params = "n.scope = 'conversation' AND n.conversation_id = ?", [conversation_id]
+    else:
+        where, params = "n.scope = 'site'", []
+    terms = _terms(query)
+    if not terms:
+        return _rows(
+            f"SELECT n.id, n.text, n.created_at FROM notes n WHERE {where}"
+            " ORDER BY n.created_at DESC LIMIT ?", (*params, limit),
+        )
+    _db()  # opened, so `_fts` says what this database has
+    if _fts:
+        # Each word quoted, so that nothing in a query is taken for syntax.
+        match = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
+        return _rows(
+            f"SELECT n.id, n.text, n.created_at FROM notes_fts f JOIN notes n ON n.id = f.rowid"
+            f" WHERE notes_fts MATCH ? AND {where} ORDER BY f.rank LIMIT ?",
+            (match, *params, limit),
+        )
+    likes = " OR ".join("n.text LIKE ? ESCAPE '\\'" for _ in terms)
+    escaped = ["%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+               for t in terms]
+    return _rows(
+        f"SELECT n.id, n.text, n.created_at FROM notes n WHERE ({likes}) AND {where}"
+        " ORDER BY n.created_at DESC LIMIT ?", (*escaped, *params, limit),
     )
 
 
@@ -437,7 +592,12 @@ def prune_steps(keep_days: float | None = None) -> None:
     global _pruned_at
     _pruned_at = time.time()
     days = _keep_days() if keep_days is None else keep_days
-    _write("DELETE FROM steps WHERE created_at < ?", (time.time() - days * 86400,))
+    # Whole runs, by their last step, so a run is never read back in part.
+    _write(
+        "DELETE FROM steps WHERE run_id IN (SELECT run_id FROM steps GROUP BY run_id"
+        " HAVING MAX(created_at) < ?)",
+        (time.time() - days * 86400,),
+    )
 
 
 # --------------------------------------------------------------------- runs --

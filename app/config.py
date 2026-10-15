@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     agent_max_decisions: int = 3    # passes that choose, for one message
     agent_max_seconds: float = 90.0  # for everything before the answer
 
+    # notes
+    # What the Agent may keep when asked to remember something, and who can
+    # read it back. "conversation": a note belongs to the conversation it was
+    # made in, is read back only there and is deleted with it. "site": every
+    # conversation shares the notes, which only suits a private deployment,
+    # since this site has no accounts. "off": no notes at all. A plain string,
+    # like the gate, so that a mistake keeps notes to their conversation.
+    notes: str = "conversation"
+
     # gate
     # Who is let past the cover; see app/gate.py. The site is served to
     # everyone only when this is exactly "off". It is a plain string and not

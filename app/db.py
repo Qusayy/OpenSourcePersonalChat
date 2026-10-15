@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import settings
+from .ledger import ledger
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
@@ -211,15 +212,21 @@ def _db() -> sqlite3.Connection:
     return _conn
 
 
+# The connection is opened before the lock is taken: opening it writes (it
+# clears out old steps), and the lock is not one a thread can take twice.
+
+
 def _write(sql: str, params: tuple = ()) -> None:
+    db = _db()
     with _lock:
-        _db().execute(sql, params)
-        _db().commit()
+        db.execute(sql, params)
+        db.commit()
 
 
 def _rows(sql: str, params: tuple = ()) -> list[dict]:
+    db = _db()
     with _lock:
-        return [dict(r) for r in _db().execute(sql, params).fetchall()]
+        return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
 # ------------------------------------------------------------ conversations --
@@ -289,8 +296,42 @@ def get_conversation(cid: str) -> dict | None:
             orphans.append(call)
     for message in convo["messages"]:
         message["tool_calls"] = by_message.get(message["id"], [])
+    # And each answer's run, as it was kept, for as long as its steps are.
+    runs = _runs_by_message(cid)
+    for message in convo["messages"]:
+        if message["role"] == "assistant":
+            message["run"] = runs.get(message["id"])
     convo["orphan_tool_calls"] = orphans
     return convo
+
+
+def conversation_head(cid: str) -> dict | None:
+    """A conversation's own row, without its messages: whether it is there,
+    and what it is called."""
+    rows = _rows("SELECT id, title, persona FROM conversations WHERE id = ?", (cid,))
+    return rows[0] if rows else None
+
+
+def _runs_by_message(cid: str) -> dict[str, dict]:
+    """Each answered run of a conversation, read back from its steps, by the
+    message it answered with. Fetched by conversation, which is indexed."""
+    rows = _rows(
+        "SELECT run_id, message_id, idx, kind, name, via, prompt_tokens, new_tokens,"
+        "       output_tokens, queue_ms, first_token_ms, total_ms, ok, error"
+        "  FROM steps WHERE conversation_id = ? ORDER BY created_at ASC, idx ASC",
+        (cid,),
+    )
+    grouped: dict[str, list[dict]] = {}
+    run_of: dict[str, str] = {}
+    for row in rows:
+        if row["message_id"]:
+            grouped.setdefault(row["message_id"], []).append(row)
+            run_of[row["message_id"]] = row["run_id"]
+    out = {}
+    for mid, steps in grouped.items():
+        steps.sort(key=lambda r: r["idx"])
+        out[mid] = {"id": run_of[mid], "outcome": None, **ledger(steps), "wall_ms": None}
+    return out
 
 
 def delete_conversation(cid: str) -> None:
@@ -387,7 +428,6 @@ def conversation_messages(cid: str) -> list[dict]:
 def add_note(text: str, *, scope: str, conversation_id: str | None) -> int:
     """Keep a note. ``conversation_id`` is the conversation it belongs to,
     under the conversation scope; None under the site's."""
-    # Opened before the lock is taken: opening it writes, and takes the lock.
     db = _db()
     with _lock:
         cur = db.execute(
@@ -552,7 +592,12 @@ def prune_steps(keep_days: float | None = None) -> None:
     global _pruned_at
     _pruned_at = time.time()
     days = _keep_days() if keep_days is None else keep_days
-    _write("DELETE FROM steps WHERE created_at < ?", (time.time() - days * 86400,))
+    # Whole runs, by their last step, so a run is never read back in part.
+    _write(
+        "DELETE FROM steps WHERE run_id IN (SELECT run_id FROM steps GROUP BY run_id"
+        " HAVING MAX(created_at) < ?)",
+        (time.time() - days * 86400,),
+    )
 
 
 # --------------------------------------------------------------------- runs --

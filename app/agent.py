@@ -31,6 +31,7 @@ from .context import (
     RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
 )
 from .excerpt import estimate
+from .ledger import ledger
 from .llm import Completion, Engine, Stop, engine as default_engine
 from .personas import Persona
 from .router import (
@@ -141,27 +142,14 @@ class Trace:
         )
 
     def totals(self) -> dict:
-        """The run in a line: what the page is told when it ends.
-
-        The total is split four ways, and the four add up to it: waiting for
-        the slot, the model reading, the model writing, and tools.
-        """
-        passes = [s for s in self.steps if s.model]
-        waiting = sum(s.queue_ms or 0.0 for s in passes)
-        reading = sum(s.first_token_ms or 0.0 for s in passes)
-        tools = sum(s.total_ms for s in self.steps if not s.model)
-        total = sum(s.total_ms for s in self.steps)
+        """The run in a line, and each of its steps: what the page is told
+        when it ends. The same as a stored answer's run reads back, from the
+        same function (``app.ledger``), with the run's own stopwatch beside
+        it."""
         return {
             "id": self.run_id,
             "outcome": self.outcome,
-            "steps": len(self.steps),
-            "passes": len(passes),
-            "total_ms": round(total, 1),
-            "waiting_ms": round(waiting, 1),
-            "reading_ms": round(reading, 1),
-            # What is left of the passes once the waiting and reading are out.
-            "writing_ms": round(max(total - tools - waiting - reading, 0.0), 1),
-            "tools_ms": round(tools, 1),
+            **ledger(self.steps),
             "wall_ms": None if self.wall_ms is None else round(self.wall_ms, 1),
         }
 
@@ -713,7 +701,12 @@ class _Run:
         # What went wrong, if anything did: it was stopped, the pass failed, or
         # what it said could not be used.
         error = "stopped" if stopped else (said.error or action.note)
-        name = action.call.name if action.call else (action.skill.id if action.skill else None)
+        name = (
+            action.call.name if action.call
+            else action.skill.id if action.skill
+            else "ask" if action.kind == "ask"
+            else None
+        )
         self.trace.steps.append(self._passed(kind, said, name=name, given=given, error=error))
         return action, said
 

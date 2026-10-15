@@ -742,7 +742,7 @@ class StoredTraceTests(ChatCase):
         self.assertEqual([name for name, _ in stream].count("run"), 1)
         self.assertEqual(
             set(stream[-1][1]),
-            {"id", "outcome", "steps", "passes", "total_ms", "waiting_ms", "reading_ms",
+            {"id", "outcome", "steps", "passes", "total_ms", "waiting_ms", "reading_ms", "ledger",
              "writing_ms", "tools_ms", "wall_ms"},
         )
         self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (1, 1))
@@ -903,6 +903,38 @@ class LoopOverHttpTests(ChatCase):
                 rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
                 self.assertEqual([r["kind"] for r in rows], kinds)
                 self.assertEqual(self.engine.route_prompts, [])
+
+
+class LedgerTests(ChatCase):
+    """What a run did, told when it ends and read back with its answer."""
+
+    def test_a_stored_answer_reads_back_the_same_ledger_the_page_was_told(self) -> None:
+        support.with_settings(self, agent_loop=True)
+        support.played_tools(self, {"weather": WEATHER})
+        self.use_engine(ScriptedEngine([
+            '{"tool": "weather", "args": {"location": "Paris"}}', '{"tool": "none"}', "Take a coat.",
+        ]))
+        stream = self.chat("Do I need a coat in Paris", persona="agent")
+        live = stream[-1][1]
+        stored = self.conversation(stream)["messages"][1]["run"]
+        self.assertEqual([s["kind"] for s in live["ledger"]], ["route", "tool", "decide", "answer"])
+        for key in ("steps", "passes", "total_ms", "waiting_ms", "reading_ms", "writing_ms",
+                    "tools_ms", "ledger"):
+            with self.subTest(key=key):
+                self.assertEqual(stored[key], live[key])
+        self.assertEqual(stored["id"], live["id"])
+        self.assertIsNone(stored["wall_ms"])
+
+    def test_a_question_asked_back_is_named_as_one(self) -> None:
+        self.use_engine(PlayedEngine(decision={"tool": "ask", "args": {"question": "Which city?"}}))
+        stream = self.chat("what's the weather like", persona="agent")
+        self.assertEqual(stream[-1][1]["ledger"][0]["name"], "ask")
+
+    def test_an_answer_whose_steps_are_gone_has_no_run(self) -> None:
+        stream = self.chat("Why is the sky blue?", persona="explainer")
+        db.prune_steps(keep_days=-1)
+        self.assertIsNone(self.conversation(stream)["messages"][1]["run"])
+        self.assertNotIn("run", self.conversation(stream)["messages"][0])
 
 
 class CorrectionTests(ChatCase):

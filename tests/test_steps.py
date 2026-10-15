@@ -138,6 +138,21 @@ class StepStorageTests(unittest.TestCase):
         self.assertIs(db.run_steps("mock")[0]["mock"], True)
 
 
+class PruneTests(unittest.TestCase):
+    def setUp(self) -> None:
+        support.temp_database(self)
+
+    def test_a_run_is_kept_or_forgotten_whole(self) -> None:
+        old, new = time.time() - 40 * 86400, time.time()
+        # A run whose first step is past the retention and whose last is not.
+        db.add_step("straddles", "c1", 0, "route", created_at=old)
+        db.add_step("straddles", "c1", 1, "answer", created_at=new)
+        db.add_step("gone", "c1", 0, "answer", created_at=old)
+        db.prune_steps(keep_days=30)
+        self.assertEqual([r["idx"] for r in db.run_steps("straddles")], [0, 1])
+        self.assertEqual(db.run_steps("gone"), [])
+
+
 class MigrationTests(unittest.TestCase):
     def test_a_database_made_before_a_column_existed_gains_it(self) -> None:
         import sqlite3

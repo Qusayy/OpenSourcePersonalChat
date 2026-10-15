@@ -44,6 +44,8 @@ def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
         return None, None, None
     ran = next((s for s in steps if s.kind == "tool"), None)
     tool = (ran.name if ran else None) if route.via == "skill" else route.name
+    if tool == "ask":
+        tool = None  # a question put back to the user, not a tool
     args = ran.input if ran else (route.input if route.via in ("slash", "heuristic") else None)
     return tool, args, route.via
 

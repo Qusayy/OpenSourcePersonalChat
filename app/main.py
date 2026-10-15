@@ -186,7 +186,7 @@ async def api_chat(payload: ChatRequest):
 
     cid = payload.conversation_id
     created = False
-    if cid and db.get_conversation(cid) is None:
+    if cid and db.conversation_head(cid) is None:
         cid = None
     if not cid:
         cid = db.create_conversation(persona.id, user_text)
@@ -207,7 +207,7 @@ async def api_chat(payload: ChatRequest):
         # Open before the page is told the id, so a Stop sent the moment it
         # arrives finds a run to stop.
         with engine.hold(run_id):
-            convo = db.get_conversation(cid)
+            convo = db.conversation_head(cid)
             yield sse(
                 "conversation",
                 {

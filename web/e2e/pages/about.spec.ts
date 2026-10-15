@@ -129,6 +129,17 @@ test("says where the model is held", async ({ page }) => {
   await expect(stack).not.toContainText("llama-cpp-python");
 });
 
+test("says how the Agent works and what it is held to", async ({ page }) => {
+  await page.goto("/about");
+  const agent = page.locator("#agent");
+  await expect(agent).toContainText("at most three lookups, within ninety seconds");
+  await expect(agent).toContainText("It only opens an address you wrote yourself");
+  await expect(agent).toContainText(
+    "a figure no lookup returned is named in a line under the answer",
+  );
+  await expect(agent).toContainText("How it ran");
+});
+
 test("its contents list goes to each part", async ({ page }) => {
   await page.goto("/about");
   await page

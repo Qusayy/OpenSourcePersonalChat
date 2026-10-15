@@ -544,7 +544,12 @@ prose preambles and invented keys. Five layers, cheapest first:
 
 A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
 for it. It is announced on the page at the moment it is made and at no other
-time, and the per-step timings are printed in the UI rather than hidden.
+time, and the status line says "deciding" while it runs. Under each answer,
+**How it ran** lists every step of the run in order: what the model read of
+its prompt (and how much of it was already in its cache), what it wrote, and
+how long each step took, then the run's time split into waiting, reading,
+writing and tools. It is read back from the steps the answer kept, so a
+reopened conversation shows the same.
 
 The grammar cannot be compiled without llama.cpp, so where the tests run it is
 read instead: `tests/gbnf.py` understands the subset of GBNF the generator
@@ -601,6 +606,26 @@ What was sent is kept with the conversation and deleted with it. It holds
 fetched pages, so it decides nothing: which addresses the reader may open is
 decided by the visitor's own messages alone, and an address the model read in
 a page is not one of them.
+
+### Checking the answer
+
+When a run has looked something up, its answer is held against what came
+back before it is shown as finished. Every number in the answer is read with
+its unit, and one that is in none of what was looked up (the results whole, as
+the cards show them), nor in what the user wrote, is named in one line under
+the answer: "Not in what was looked up: 64°F. Weather returned: Paris,
+France: overcast, 17.9°C." An answer that says it has no live data beside a
+lookup that worked is answered the same way. A figure agrees when it is what
+the source comes to, rounded or cut short, so "about 62 miles" for 62.1371 is
+fine and "63 miles" is not.
+
+The line quotes a tool only when its output is the harness's own (a sum, a
+time, the weather, a rate), never a page or an article. It is kept with the
+answer, and the model reads a fixed note about it in later turns. It checks
+figures, not sentences: it can tell that a number came from nowhere, not that
+what is said around it is true. Derivations a visitor asked for, such as a
+temperature in Fahrenheit, are flagged too, by design, since the model is told
+not to work figures out itself.
 
 ### Notes
 

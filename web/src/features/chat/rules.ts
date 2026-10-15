@@ -5,7 +5,7 @@
 
 import { fmt, fmtInt, fmtMs } from "@/lib/format";
 import { hasIcon } from "@/lib/icons";
-import type { EngineInfo, Skill, StepEvent, Tool } from "@/lib/types";
+import type { EngineInfo, LedgerStep, Skill, StepEvent, StoredRun, Tool } from "@/lib/types";
 
 /* ------------------------------------------------------------- composer -- */
 
@@ -129,6 +129,86 @@ export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] 
   return rows.some((r) => r.id === data.id)
     ? rows.map((r) => (r.id === data.id ? row : r))
     : [...rows, row];
+}
+
+/* ------------------------------------------------------- how it ran -- */
+
+/** One row of "How it ran". */
+export interface LedgerRow {
+  /** What the step was, in a word or two. */
+  kind: string;
+  /** What it chose or called, in the page's own words. */
+  name: string;
+  /** "read 18 of 667 · wrote 12" for a pass through the model; empty otherwise. */
+  tokens: string;
+  ms: string;
+  failed: boolean;
+}
+
+// What each kind of step is called. A choice made without the model is
+// named by how it was made.
+const CHOSEN_BY: Record<string, string> = {
+  slash: "command",
+  heuristic: "pattern",
+  skill: "skill",
+};
+const KIND_WORDS: Record<string, string> = {
+  route: "choice",
+  decide: "choice again",
+  repair: "sent back",
+  fill: "filled in",
+  tool: "tool",
+  answer: "answer",
+};
+
+function tokensOf(step: LedgerStep): string {
+  if (step.tokens_in == null && step.tokens_out == null) return "";
+  const said: string[] = [];
+  if (step.tokens_in != null) {
+    said.push(
+      step.tokens_read != null && step.tokens_read !== step.tokens_in
+        ? `read ${fmtInt(step.tokens_read)} of ${fmtInt(step.tokens_in)}`
+        : `read ${fmtInt(step.tokens_in)}`,
+    );
+  }
+  if (step.tokens_out != null) said.push(`wrote ${fmtInt(step.tokens_out)}`);
+  return said.join(" · ");
+}
+
+/**
+ * A run's ledger as the rows "How it ran" lists, in order, and the line that
+ * splits its time. `label` names a tool or skill in the page's words.
+ */
+export function ledgerRows(
+  run: StoredRun,
+  label: (name: string) => string,
+): { rows: LedgerRow[]; split: string } {
+  const rows = run.ledger.map((step) => {
+    const free = step.kind === "route" && step.via && step.via !== "model";
+    let name = "";
+    if (step.kind !== "answer") {
+      if (step.name === "ask") name = "asked you";
+      else if (step.name) name = label(step.name);
+      else name = "none";
+    }
+    return {
+      kind: free
+        ? (CHOSEN_BY[step.via as string] ?? "choice")
+        : (KIND_WORDS[step.kind] ?? step.kind),
+      name,
+      tokens: tokensOf(step),
+      ms: fmtMs(step.ms),
+      failed: !step.ok,
+    };
+  });
+  const split = [
+    `run ${fmtMs(run.total_ms)}`,
+    `waiting ${fmtMs(run.waiting_ms)}`,
+    `reading ${fmtMs(run.reading_ms)}`,
+    `writing ${fmtMs(run.writing_ms)}`,
+    `tools ${fmtMs(run.tools_ms)}`,
+  ].join(" · ");
+  return { rows, split };
 }
 
 /* -------------------------------------------------- what an answer cost -- */

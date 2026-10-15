@@ -33,6 +33,7 @@ describe("setPhase", () => {
     const boundary = vi.fn();
     onRequestBoundary(boundary);
     setPhase("working", "working");
+    setPhase("deciding", "deciding");
     setPhase("reading", "reading");
     setPhase("writing", "writing");
     expect(boundary).toHaveBeenCalledTimes(1);

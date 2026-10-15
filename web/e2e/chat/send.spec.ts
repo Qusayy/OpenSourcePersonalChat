@@ -421,22 +421,80 @@ test.describe("against a stream the test controls", () => {
     await push(page, "start", START);
     await push(page, "token", { t: "Lisbon.", ttft_ms: 86.4 });
     await push(page, "done", { ...DONE, tool_calls: 2 });
-    // The last event of every stream. The page has no use for it yet.
+    // The last event of every stream: the whole run, step by step.
     await push(page, "run", {
       id: "req-1",
       outcome: "answered",
-      steps: 6,
-      passes: 4,
+      steps: 4,
+      passes: 3,
       total_ms: 9800,
       waiting_ms: 0,
       reading_ms: 5200,
       writing_ms: 3800,
       tools_ms: 800,
       wall_ms: 9850,
+      ledger: [
+        {
+          kind: "route",
+          name: "weather",
+          via: "model",
+          ok: true,
+          error: null,
+          tokens_in: 667,
+          tokens_read: 18,
+          tokens_out: 12,
+          ms: 3100,
+        },
+        {
+          kind: "tool",
+          name: "weather",
+          via: "model",
+          ok: true,
+          error: null,
+          tokens_in: null,
+          tokens_read: null,
+          tokens_out: null,
+          ms: 800,
+        },
+        {
+          kind: "decide",
+          name: null,
+          via: "model",
+          ok: true,
+          error: null,
+          tokens_in: 702,
+          tokens_read: 36,
+          tokens_out: 5,
+          ms: 2600,
+        },
+        {
+          kind: "answer",
+          name: null,
+          via: null,
+          ok: true,
+          error: null,
+          tokens_in: 740,
+          tokens_read: 61,
+          tokens_out: 4,
+          ms: 3300,
+        },
+      ],
     });
     await end(page);
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
     await expect(route).toHaveText("Model's choice3.10sModel's choice2.60sNo tool needed2.20s");
+    // What it cost step by step is there when asked for, and not before.
+    const ledger = answerOf(page).locator('[data-part="ledger"]');
+    await expect(ledger).toHaveCount(0);
+    const toggle = answerOf(page).locator('[data-act="ledger"]');
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(ledger.locator("li")).toHaveCount(4);
+    await expect(ledger.locator("li").first()).toContainText("read 18 of 667 · wrote 12");
+    await expect(ledger).toContainText("run 9.80s · waiting 0ms · reading 5.20s");
+    await toggle.click();
+    await expect(ledger).toHaveCount(0);
     await expect(answerOf(page).locator(".prose")).toHaveText("Lisbon.");
     await expect(notice(page)).toHaveCount(0);
   });
@@ -459,7 +517,9 @@ test.describe("against a stream the test controls", () => {
       pass: 1,
     });
     await expect(notice(page)).toHaveCount(0);
-    await expect(page.locator("#status")).toHaveAttribute("data-phase", "working");
+    // The model is choosing, and the status line says so.
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "deciding");
+    await expect(page.locator("#b-state")).toContainText("deciding");
     await expect(answerOf(page).locator('[data-part="route"]')).toHaveText(
       "Choosing a toolrunning",
     );
@@ -474,6 +534,8 @@ test.describe("against a stream the test controls", () => {
       ms: 2200,
       pass: 1,
     });
+    // It has chosen: working again until the answer is being read.
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "working");
     await answer(page, "Lisbon, probably.");
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
     await expect(notice(page)).toHaveCount(0);

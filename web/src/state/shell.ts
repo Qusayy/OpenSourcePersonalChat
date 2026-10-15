@@ -10,7 +10,7 @@
 import { create } from "zustand";
 
 /** A phase a request passes through, or "held": it ended while the tab was hidden. */
-export type PhaseKey = "working" | "queued" | "reading" | "writing" | "held";
+export type PhaseKey = "working" | "deciding" | "queued" | "reading" | "writing" | "held";
 
 export interface Phase {
   key: PhaseKey;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Skill, StepEvent, Tool } from "@/lib/types";
+import type { LedgerStep, Skill, StepEvent, StoredRun, Tool } from "@/lib/types";
 import {
   applyStep,
   charCount,
@@ -7,6 +7,7 @@ import {
   costFigures,
   isLongMessage,
   LONG_CHARS,
+  ledgerRows,
   MAX_CHARS,
   paletteQuery,
   paletteRows,
@@ -74,6 +75,101 @@ describe("queueWording", () => {
       text: "Next in line — starting shortly.",
       ahead: "next in line",
     });
+  });
+});
+
+describe("ledgerRows", () => {
+  const step = (over: Partial<LedgerStep>): LedgerStep => ({
+    kind: "route",
+    name: null,
+    via: "model",
+    ok: true,
+    error: null,
+    tokens_in: null,
+    tokens_read: null,
+    tokens_out: null,
+    ms: 0,
+    ...over,
+  });
+  const run = (ledger: LedgerStep[]): StoredRun => ({
+    id: "r",
+    outcome: null,
+    steps: ledger.length,
+    passes: 0,
+    total_ms: 4480,
+    waiting_ms: 0,
+    reading_ms: 890,
+    writing_ms: 2710,
+    tools_ms: 880,
+    wall_ms: null,
+    ledger,
+  });
+  const label = (name: string) =>
+    ({ weather: "Weather", compare: "Compare two things" })[name] ?? name;
+
+  it("lists each pass with what it read of its prompt, what it wrote, and its time", () => {
+    const { rows, split } = ledgerRows(
+      run([
+        step({ name: "weather", tokens_in: 667, tokens_read: 18, tokens_out: 12, ms: 310 }),
+        step({ kind: "tool", name: "weather", ms: 880 }),
+        step({ kind: "decide", tokens_in: 702, tokens_read: 36, tokens_out: 5, ms: 400 }),
+        step({
+          kind: "answer",
+          via: null,
+          tokens_in: 740,
+          tokens_read: 61,
+          tokens_out: 48,
+          ms: 2900,
+        }),
+      ]),
+      label,
+    );
+    expect(rows).toEqual([
+      {
+        kind: "choice",
+        name: "Weather",
+        tokens: "read 18 of 667 · wrote 12",
+        ms: "310ms",
+        failed: false,
+      },
+      { kind: "tool", name: "Weather", tokens: "", ms: "880ms", failed: false },
+      {
+        kind: "choice again",
+        name: "none",
+        tokens: "read 36 of 702 · wrote 5",
+        ms: "400ms",
+        failed: false,
+      },
+      { kind: "answer", name: "", tokens: "read 61 of 740 · wrote 48", ms: "2.90s", failed: false },
+    ]);
+    expect(split).toBe("run 4.48s · waiting 0ms · reading 890ms · writing 2.71s · tools 880ms");
+  });
+
+  it("says what read was not reported by the whole prompt it was given", () => {
+    const { rows } = ledgerRows(run([step({ tokens_in: 400, tokens_out: 9, ms: 1 })]), label);
+    expect(rows[0]?.tokens).toBe("read 400 · wrote 9");
+  });
+
+  it("names a choice made without the model by how it was made", () => {
+    const { rows } = ledgerRows(
+      run([
+        step({ via: "slash", name: "weather" }),
+        step({ via: "heuristic", name: "weather" }),
+        step({ via: "skill", name: "compare" }),
+        step({ kind: "fill", name: "compare" }),
+        step({ name: "ask" }),
+        step({ kind: "repair", name: "weather", ok: false, error: "rejected" }),
+      ]),
+      label,
+    );
+    expect(rows.map((r) => [r.kind, r.name, r.failed])).toEqual([
+      ["command", "Weather", false],
+      ["pattern", "Weather", false],
+      ["skill", "Compare two things", false],
+      ["filled in", "Compare two things", false],
+      ["choice", "asked you", false],
+      ["sent back", "Weather", true],
+    ]);
   });
 });
 

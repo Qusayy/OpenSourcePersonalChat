@@ -311,6 +311,9 @@ export async function send(text: string): Promise<void> {
             livePhase("working");
           }
           stepBot(bot.key, data);
+          // While the model chooses, the line says so; when it has chosen,
+          // the run is back to working until the answer is being read.
+          if (data.kind === "route") livePhase(data.status === "running" ? "deciding" : "working");
           if (data.kind === "tool") stepMeta.set(data.id, { label: data.label, ms: data.ms });
           if (data.status === "failed") {
             announce(`${data.label} failed: ${data.detail || "unknown error"}`);
@@ -373,6 +376,9 @@ export async function send(text: string): Promise<void> {
                 )} per second.`,
           );
           void refreshList();
+        } else if (event === "run") {
+          const run = data;
+          commit(() => patchBot(bot.key, (b) => ({ ...b, run })));
         } else if (event === "error") {
           caretOn = false;
           prose.finish(raw);
@@ -416,8 +422,11 @@ export async function send(text: string): Promise<void> {
 // What a tool is called on screen, for cards replayed from a stored
 // conversation, where only its registry name was kept.
 let toolLabels: Map<string, string> | null = null;
-function toolLabel(name: string): string {
-  toolLabels ??= new Map(bootstrap().tools.map((t) => [t.name, t.label || t.name]));
+export function toolLabel(name: string): string {
+  toolLabels ??= new Map([
+    ...bootstrap().tools.map((t) => [t.name, t.label || t.name] as const),
+    ...bootstrap().skills.map((s) => [s.id, s.name || s.id] as const),
+  ]);
   return toolLabels.get(name) ?? name;
 }
 
@@ -450,6 +459,7 @@ export async function loadConversation(cid: string): Promise<void> {
         steps: [],
         cards,
         correction: m.correction ?? null,
+        run: m.run ?? null,
         cost:
           m.gen_tps != null || m.ttft_ms != null
             ? {

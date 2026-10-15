@@ -66,6 +66,25 @@ test.describe("a stored conversation", () => {
     expect(order).toEqual(["prose", "correction", "cost"]);
   });
 
+  test("how a stored answer ran is read back from its steps", async ({ page }) => {
+    await openStored(page, 0);
+    const toggle = answerOf(page).locator('[data-act="ledger"]');
+    await toggle.click();
+    const rows = answerOf(page).locator('[data-part="ledger"] li');
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("choice");
+    await expect(rows.nth(0)).toContainText(/weather/i);
+    await expect(rows.nth(0)).toContainText("read 18 of 667 · wrote 12");
+    await expect(rows.nth(2)).toContainText("choice again");
+    await expect(rows.nth(3)).toContainText("answer");
+    await expect(answerOf(page).locator('[data-part="ledger"]')).toContainText("run 4.02s");
+  });
+
+  test("an answer whose steps were not kept offers nothing to open", async ({ page }) => {
+    await openStored(page, 1);
+    await expect(answerOf(page).locator('[data-act="ledger"]')).toHaveCount(0);
+  });
+
   test("an answer with nothing to correct has no correction", async ({ page }) => {
     await openStored(page, 1);
     await expect(answerOf(page).locator('[data-part="correction"]')).toHaveCount(0);

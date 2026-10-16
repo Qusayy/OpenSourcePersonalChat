@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { Outlet, useLocation } from "react-router";
 import { mountAurora } from "@/lib/aurora";
 import { installCopyButtons } from "@/lib/clipboard";
+import { curtains, mountCurtains } from "@/lib/curtains";
 import { cx } from "@/lib/cx";
 import type { EngineStatus } from "@/lib/types";
 import { useInfo, usePollHealth, usePollTelemetry } from "@/state/queries";
@@ -46,6 +47,7 @@ export function Layout() {
       >
         Skip to content
       </a>
+      <Curtains page={page} />
       <AuroraStrip />
       <TopBar page={page} />
       <Outlet />
@@ -69,6 +71,26 @@ function AuroraStrip() {
   useEffect(() => (strip.current ? mountAurora(strip.current) : undefined), []);
   return (
     <div className="aurora" id="aurora" aria-hidden="true" hidden ref={strip}>
+      <canvas />
+    </div>
+  );
+}
+
+/* --------------------------------------------------------- the curtains -- */
+
+/**
+ * The aurora at rest, hanging from the top bar (lib/curtains.ts). Fixed to
+ * the window and behind everything, like the strip above. The long pages
+ * always hang them; the chat page says when, since only its empty sheet does.
+ */
+function Curtains({ page }: { page: PageName }) {
+  const band = useRef<HTMLDivElement>(null);
+  useEffect(() => (band.current ? mountCurtains(band.current) : undefined), []);
+  useEffect(() => {
+    if (page !== "chat") curtains.rest(true);
+  }, [page]);
+  return (
+    <div className="curtains" id="curtains" aria-hidden="true" hidden ref={band}>
       <canvas />
     </div>
   );

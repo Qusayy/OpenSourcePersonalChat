@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useLocation, useNavigationType } from "react-router";
+import { curtains } from "@/lib/curtains";
 import { cx } from "@/lib/cx";
 import { Button } from "@/shell/Button";
 import { Main } from "@/shell/Main";
@@ -56,6 +57,10 @@ export function ChatPage() {
   }, []);
 
   useNewChatOnChatLink();
+
+  // The curtains hang over the empty sheet and go when a conversation starts;
+  // the light at the status line takes over from them.
+  useEffect(() => curtains.rest(empty), [empty]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

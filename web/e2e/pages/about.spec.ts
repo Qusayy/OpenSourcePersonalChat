@@ -138,6 +138,13 @@ test("says how the Agent works and what it is held to", async ({ page }) => {
   await expect(agent).toContainText("How it ran");
 });
 
+test("hangs a shallow band of the curtains at its head", async ({ page }) => {
+  await page.goto("/about");
+  const band = page.locator("#curtains");
+  await expect(band).toBeVisible({ timeout: 8000 });
+  expect((await band.boundingBox())?.height).toBe(96);
+});
+
 test("its contents list goes to each part", async ({ page }) => {
   await page.goto("/about");
   await page

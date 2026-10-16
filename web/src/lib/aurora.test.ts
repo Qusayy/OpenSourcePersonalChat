@@ -99,15 +99,21 @@ async function world({ reduce = false, gl = null, sheet, idleCallback = true }: 
     vi.stubGlobal("requestIdleCallback", undefined);
   }
 
-  // A 2D canvas that reads back the live colour first and the sheet second,
-  // which is the order resolveColour paints them in.
+  // A 2D canvas that reads back the live colour, then the sheet, then the
+  // violet, which is the order resolveColour paints them in.
   let reads = 0;
   const twoD = sheet
     ? {
         fillStyle: "",
         fillRect() {},
         clearRect() {},
-        getImageData: () => ({ data: reads++ % 2 === 0 ? [0, 128, 64, 255] : [...sheet, 255] }),
+        getImageData: () => ({
+          data: [
+            [0, 128, 64, 255],
+            [...sheet, 255],
+            [102, 70, 168, 255],
+          ][reads++ % 3],
+        }),
       }
     : null;
   const getContext = vi.fn((kind: string) =>
@@ -407,7 +413,8 @@ describe("with WebGL: the shader", () => {
     run(32);
     expect(light.gl.uniform1f).toHaveBeenCalledWith("u_curve", 1);
     expect(light.gl.uniform1f).toHaveBeenCalledWith("u_peak", 0.24);
-    expect(light.gl.uniform3f).toHaveBeenLastCalledWith("u_colour", 0, 128 / 255, 64 / 255);
+    expect(light.gl.uniform3f).toHaveBeenCalledWith("u_colour", 0, 128 / 255, 64 / 255);
+    expect(light.gl.uniform3f).toHaveBeenLastCalledWith("u_high", 102 / 255, 70 / 255, 168 / 255);
     document.body.innerHTML = "";
 
     const dark = fakeGL();

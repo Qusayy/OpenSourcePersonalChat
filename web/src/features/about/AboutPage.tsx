@@ -20,11 +20,11 @@ import { useInfo } from "@/state/queries";
    same pieces as the benchmark page. */
 
 const CONTENTS = [
+  ["limits", "What it's good for"],
+  ["agent", "When it looks things up"],
   ["stack", "The stack"],
-  ["queue", "One request at a time"],
-  ["template", "Getting the prompt right"],
-  ["agent", "The Agent"],
-  ["limits", "What it cannot do"],
+  ["queue", "One answer at a time"],
+  ["template", "The chat template"],
 ] as const;
 
 /** A fact read from the machine as you look at it; absent when the machine
@@ -46,8 +46,8 @@ export function AboutPage() {
   const info = useInfo();
   return (
     <LongPage>
-      <PageHead title="Everything here runs on one small server" contents={CONTENTS}>
-        {`No API key, no upstream provider, no GPU. ${info.model} at ${info.quant} on a ${info.hardware}, answering in the open with its own speed printed under every reply.`}
+      <PageHead title="What answers you, and how" contents={CONTENTS}>
+        {`${info.model} at ${info.quant} on a ${info.hardware}, with no GPU. Every word of an answer is written here; only a lookup (Wikipedia, the weather, a rate, a page you paste) goes out to the web.`}
       </PageHead>
 
       <Section
@@ -79,6 +79,46 @@ export function AboutPage() {
             </Fact>
           ) : null}
         </Facts>
+      </Section>
+
+      <Section title="What it's good for, and what it isn't" id="limits">
+        <Panel>
+          <P>
+            {"It is a "}
+            <b>{`${info.params}-parameter`}</b>
+            {` model at ${info.quant}. Use it for short explanations, quick drafts, summarising something you paste in, and simple code. Don't trust it with arithmetic, citations, long chains of reasoning or anything recent. For sums, rates and the weather, use a skill or the Agent: they look the answer up instead of guessing. How long each answer took is printed under it.`}
+          </P>
+          <P>
+            {"The context window is "}
+            <b className="num">{info.n_ctx}</b>
+            {
+              " tokens. Older turns are trimmed automatically when a conversation outgrows it; the system prompt is always kept."
+            }
+          </P>
+          <P>
+            The check on an answer looks at its figures, not its sentences: it can tell that a
+            number came from nowhere, not that what is said around it is true.
+          </P>
+        </Panel>
+      </Section>
+
+      <Section title="When it looks things up" id="agent">
+        <Panel>
+          <P>
+            {
+              "Switch to the Agent persona and it can use tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
+            }
+            <Code>/weather Lisbon</Code>
+            {
+              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice."
+            }
+          </P>
+          <P>
+            {
+              "What it reads from the web is material, never instructions. It only opens an address you wrote yourself, and keeps a note only when you ask; by default a note belongs to the conversation it was made in and goes when the conversation does. Its answer is held against what it looked up, and a figure no lookup returned is named in a line under the answer. Under each answer, How it ran lists every step with what the model read, what it wrote and how long it took."
+            }
+          </P>
+        </Panel>
       </Section>
 
       <Section title="The stack" id="stack">
@@ -121,17 +161,17 @@ export function AboutPage() {
         </Panel>
       </Section>
 
-      <Section title="One request at a time — on purpose" id="queue">
+      <Section title="One answer at a time" id="queue">
         <Panel>
           <P>
-            {"Two generations running side by side finish "}
+            {"Two answers written side by side finish "}
             <em>later</em>
             {
-              " than the same two run back to back: they fight over the same memory bandwidth and the same "
+              " than the same two written back to back: they share the same memory bandwidth and the same "
             }
             <span className="num">{info.n_threads}</span>
             {
-              " model threads. So this server takes one at a time and shows you your place in the line. Honest queueing beats fake concurrency."
+              " model threads. So the server writes one at a time, and if anything is ahead of you, the status line shows your place."
             }
           </P>
           <P>
@@ -144,7 +184,7 @@ export function AboutPage() {
         </Panel>
       </Section>
 
-      <Section title="Getting the prompt right matters more than the sampler" id="template">
+      <Section title="The chat template" id="template">
         <Panel>
           <P>
             An instruct model fed raw text behaves like a base model: it rambles, it repeats, it
@@ -158,10 +198,10 @@ export function AboutPage() {
             {" / "}
             <Code>{"<|im_end|>"}</Code>
             {
-              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at a normal "
+              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at each persona's own temperature ("
             }
-            <Code>temperature 0.7</Code>
-            {" with a light "}
+            <Code>0.7</Code>
+            {" for Explainer) with a light "}
             <Code>repeat_penalty</Code>
             {". No dedup hack required."}
           </P>
@@ -178,48 +218,6 @@ export function AboutPage() {
               How that compares with a larger model
             </Link>
           </MemoryEstimate>
-        </Panel>
-      </Section>
-
-      <Section title="The Agent looks things up, within limits" id="agent">
-        <Panel>
-          <P>
-            {
-              "The Agent persona has tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
-            }
-            <Code>/weather Lisbon</Code>
-            {
-              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice."
-            }
-          </P>
-          <P>
-            {
-              "What it reads from the web is material, never instructions. It only opens an address you wrote yourself, and keeps a note only when you ask; by default a note belongs to the conversation it was made in and goes when the conversation does. Its answer is held against what it looked up, and a figure no lookup returned is named in a line under the answer. Under each answer, How it ran lists every step with what the model read, what it wrote and how long it took."
-            }
-          </P>
-        </Panel>
-      </Section>
-
-      <Section title="What it cannot do" id="limits">
-        <Panel>
-          <P>
-            {"It is a "}
-            <b>1.5-billion-parameter</b>
-            {
-              " model quantised to four bits. It will get arithmetic wrong, invent citations, lose the thread on long reasoning chains, and know nothing about anything recent. It is good at short explanations, quick drafts, summarising what you paste in, and simple code — and it answers in a couple of seconds without sending a byte off this machine."
-            }
-          </P>
-          <P>
-            {"The context window is "}
-            <b className="num">{info.n_ctx}</b>
-            {
-              " tokens. Older turns are trimmed automatically when a conversation outgrows it; the system prompt is always kept."
-            }
-          </P>
-          <P>
-            The check on an answer looks at its figures, not its sentences: it can tell that a
-            number came from nowhere, not that what is said around it is true.
-          </P>
         </Panel>
       </Section>
     </LongPage>

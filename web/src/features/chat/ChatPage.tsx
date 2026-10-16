@@ -115,15 +115,13 @@ export function ChatPage() {
             hidden={!empty}
           >
             <h1 className="arrive mb-4 text-7 font-bold leading-[1.04] tracking-[-0.03em] text-balance">
-              A small model,
-              <br />
-              hosted honestly.
+              Ask it something small.
             </h1>
             {/* One string, so one text node: two side by side are shaped apart,
                 and the space between the model's name and the next word is
                 then a hair off. */}
             <p className="arrive text-3 text-pretty" style={{ "--i": 1 } as React.CSSProperties}>
-              {`${info.model} runs entirely on this server — no API, no upstream provider. Every answer shows what it actually cost to produce.`}
+              {`Sums, conversions, the weather, a link boiled down, a quick draft. The writing comes from ${info.model} on this server; for facts, a skill or the Agent looks them up.`}
             </p>
           </section>
 

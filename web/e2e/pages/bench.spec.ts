@@ -13,9 +13,7 @@ test.describe("before any run", () => {
   });
 
   test("opens on what the server already knows", async ({ page }) => {
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-      "What this server actually does",
-    );
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("How fast this server writes");
     // Said before anything is read as a result.
     await expect(page.getByRole("note")).toContainText("This server is in mock mode");
     await expect(page.locator("#run-status")).toHaveText(

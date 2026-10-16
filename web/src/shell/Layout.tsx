@@ -148,7 +148,7 @@ function useHealthNotices(): void {
   const last = useRef<EngineStatus>(status);
   useEffect(() => {
     if (status === last.current) return;
-    if (status === "ready" && last.current === "loading") toast("Model warm — ready to go");
+    if (status === "ready" && last.current === "loading") toast("The model is ready.");
     if (status === "error") toast("The model could not be loaded", "err");
     last.current = status;
   }, [status]);

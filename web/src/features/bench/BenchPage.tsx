@@ -185,8 +185,8 @@ export function BenchPage() {
 
   return (
     <LongPage>
-      <PageHead title="What this server actually does" contents={CONTENTS}>
-        {`The suite below runs ${info.model} through the same code path the chat page uses — same lock, same sampling, same context window — and reports what came back. Nothing here is quoted from a spec sheet.`}
+      <PageHead title="How fast this server writes" contents={CONTENTS}>
+        {`The suite runs ${info.model} through the same path the chat uses (same lock, same sampling, same context window) and records what came back.`}
       </PageHead>
 
       {info.mock ? (
@@ -318,7 +318,7 @@ export function BenchPage() {
       <Section
         title="Against other hardware"
         id="context"
-        sub="Same model, same quantisation, different machines."
+        sub="Other machines, from published figures for Qwen2.5-1.5B at Q4_K_M, a model of about this size."
       >
         <Caveat>
           Every row except this server is an order-of-magnitude range collected from published
@@ -377,23 +377,18 @@ export function BenchPage() {
       <Section title="Why it is this fast" id="why">
         <Panel>
           <P>
-            {"Generating a token means reading "}
+            {"Writing a token means reading "}
             <b>every weight in the model once</b>
             {". At "}
-            <Code>Q4_K_M</Code>
+            <Code>{info.quant}</Code>
             {
-              " that is about a gigabyte per token, so throughput tracks memory bandwidth far more closely than clock speed: "
+              " that is the whole model file, read again for every token, so throughput tracks memory bandwidth far more closely than clock speed: "
             }
             <b>tokens per second ≈ effective bandwidth ÷ model size</b>
-            {
-              ". A pair of shared cloud vCPUs reaches single-digit gigabytes per second, which puts this model at around ten tokens per second there; a desktop's faster memory is why its row above sits so much higher."
-            }
+            {", which is why a desktop's faster memory puts its row above this server's."}
           </P>
           <P>
-            That formula is also the whole argument for 4-bit. Dropping from 16-bit to 4-bit weights
-            cuts the bytes moved per token by roughly four, and the speed rises by roughly the same
-            factor — which is what makes a 1.5B model usable on a couple of shared cores, where a 7B
-            model would manage a token or two a second.
+            {`That formula is also the whole argument for 4-bit. Dropping from 16-bit to 4-bit weights cuts the bytes moved per token by roughly four, and the speed rises by roughly the same factor, which is what makes a ${info.params} model usable on shared CPU cores, where a 7B model would write several times more slowly.`}
           </P>
           <P>
             {
@@ -410,7 +405,7 @@ export function BenchPage() {
             }
             <span className="num">{info.n_threads}</span>
             {
-              " model threads, and finish later than the same two run back to back, so this server serialises them and tells you your position instead of pretending to be parallel."
+              " model threads, and finish later than the same two run back to back, so this server writes them one at a time and shows your place in the line."
             }
           </P>
         </Panel>

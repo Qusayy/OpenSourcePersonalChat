@@ -9,9 +9,7 @@ const row = (page: import("@playwright/test").Page, term: string) =>
 
 test("says what runs here, with the model's own name", async ({ page }) => {
   await page.goto("/about");
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    "Everything here runs on one small server",
-  );
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("What answers you, and how");
   const model = await page.evaluate(async () => (await (await fetch("/api/health")).json()).engine);
   await expect(page.locator("header p")).toContainText(`${model.model} at ${model.quant} on a`);
   await expect(row(page, "Params").locator("dd")).toHaveText(model.params);
@@ -144,7 +142,7 @@ test("its contents list goes to each part", async ({ page }) => {
   await page.goto("/about");
   await page
     .getByRole("navigation", { name: "On this page" })
-    .getByText("What it cannot do")
+    .getByText("What it's good for")
     .click();
   await expect(page).toHaveURL(/\/about#limits$/);
   await expect(page.locator("#limits h2")).toBeInViewport();

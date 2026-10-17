@@ -5,9 +5,11 @@
  * it is and how high it reaches follow the measured tokens per second, as a
  * share of the fastest steady rate this page has seen, with a small lift as
  * each token lands; while the model is still reading the prompt it holds a
- * slow, low swell. It is the page's one luminous thing, and it is the live
- * colour, so it obeys the same rule as everything else that wears that colour:
- * if nothing is in progress, it is not there.
+ * slow, low swell. It is the live colour along the line, turning violet where
+ * it reaches highest, and it obeys the same rule as everything else that wears
+ * the live colour: if nothing is in progress, it is not there. (The curtains
+ * under the top bar, curtains.ts, are the aurora at rest; this is the aurora
+ * at work.)
  *
  * Two renderers drive off one energy value:
  *
@@ -24,7 +26,7 @@
  * have. The shader itself is new, and so are four things that one got wrong
  * for this job: it wrote opaque pixels, it eased per frame (so it ran twice as
  * fast on a 120 Hz screen), it never stopped, and its noise had steps in it
- * (see `hash`).
+ * (see `hash` in gl.ts, which the curtains share).
  *
  * Nothing happens when this module is imported. `mountAurora` is given the
  * strip's element once it exists and returns the way to let go of it; until
@@ -32,13 +34,7 @@
  */
 
 import { onFrame, reduced } from "./frame";
-
-const VERT = `#version 300 es
-void main() {
-  // One oversized triangle covers the strip with no vertex buffer at all.
-  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
-  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-}`;
+import { buildProgram, fitCanvas, isDark, NOISE, type RGB, readColours, type Size } from "./gl";
 
 const FRAG = `#version 300 es
 precision highp float;
@@ -46,45 +42,12 @@ precision highp float;
 uniform vec2  u_res;
 uniform float u_time;
 uniform float u_energy;   // 0..1
-uniform vec3  u_colour;   // the live colour, as sRGB
+uniform vec3  u_colour;   // the live colour, as sRGB: low down, along the line
+uniform vec3  u_high;     // the violet the light turns toward as it climbs
 uniform float u_peak;     // the most alpha any pixel may reach
 uniform float u_curve;    // below 1, lifts the middle of the range; the top stays put
 out vec4 fragColor;
-
-// A value for each point of the lattice, from integer arithmetic, which is
-// exact. The usual float hash (fract of a large product) is not: the same
-// lattice point, reached as i + 1 from one cell and as i from the next,
-// could round differently and come out as two unrelated values. That is a
-// step in the noise at a cell's edge, and it drew the light as hard-edged
-// vertical bands.
-float hash(vec2 p) {
-  uvec2 q = uvec2(ivec2(p)) * uvec2(1597334673u, 3812015801u);
-  uint n = (q.x ^ q.y) * 1597334673u;
-  return float(n >> 8) * (1.0 / 16777216.0);
-}
-
-// For the dither only, where a value that changes every frame is wanted and
-// continuity means nothing.
-float grain(vec2 p) {
-  p = fract(p * vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
-}
-
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-
-// Two octaves, renormalised to 0..1: broad shapes, with one finer layer for
-// the rays.
-float soft(vec2 p) {
-  return (noise(p) + 0.5 * noise(p * 2.03 + 17.1)) / 1.5;
-}
-
+${NOISE}
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;        // origin bottom-left: 0 is the status line
   // Horizontal distance in strip-heights, so a curtain is the same width on a
@@ -118,7 +81,10 @@ void main() {
   // The dither must not carry a pixel past the ceiling it was promised.
   a = clamp(a, 0.0, u_peak);
 
-  fragColor = vec4(u_colour * a, a);        // premultiplied
+  // Green along the line, violet where the light reaches highest, as a real
+  // aurora is green low down and turns violet above.
+  vec3 colour = mix(u_colour, u_high, smoothstep(0.12, 0.7, uv.y / reach));
+  fragColor = vec4(colour * a, a);          // premultiplied
 }`;
 
 // The most alpha the effect may reach, per scheme. Set so that secondary text
@@ -128,9 +94,6 @@ const PEAK = { light: 0.24, dark: 0.24 };
 // left as it falls; dark is lifted, or most of the curtain would be too close
 // to the sheet to see.
 const CURVE = { light: 1, dark: 0.55 };
-// Half resolution, upscaled by CSS: the light is soft, and this is the single
-// biggest saving a fragment-heavy effect has.
-const SCALE = 0.5;
 // Brightness is the rate as a share of the fastest steady rate this page has
 // seen, not of any fixed number: a machine that writes six tokens a second and
 // one that writes sixty are both at full brightness when writing at their own
@@ -139,7 +102,7 @@ const SCALE = 0.5;
 const RATE_FLOOR = 1; // tok/s; below this, "full speed" would be noise
 const STEADY_AFTER = 2500; // ms of writing before a rate is taken to be steady
 
-type UniformName = "res" | "time" | "energy" | "colour" | "peak" | "curve";
+type UniformName = "res" | "time" | "energy" | "colour" | "high" | "peak" | "curve";
 type Uniforms = Record<UniformName, WebGLUniformLocation | null>;
 
 /** How the strip is being drawn, as written to its `data-mode`. */
@@ -152,11 +115,11 @@ let gl: WebGL2RenderingContext | null = null;
 let glCanvas: HTMLCanvasElement | null = null; // the canvas `gl` was made from
 let uniforms: Uniforms | null = null;
 let glOk = false;
-let colour: [number, number, number] = [0, 0.4, 0.2];
+let colour: RGB = [0, 0.4, 0.2];
+let high: RGB = [0.4, 0.27, 0.66];
 let peak = PEAK.light;
 let curve = CURVE.light;
-let width = 0;
-let height = 0;
+const size: Size = { width: 0, height: 0 };
 
 let waiting = false;
 let writing = false;
@@ -170,39 +133,24 @@ let off: (() => void) | null = null; // unsubscribes the frame loop
 let started = 0; // when the strip was first mounted; the shader's clock runs from here
 let unmount: (() => void) | null = null;
 
-/** `--live` is an oklch() token; a shader needs numbers. Paint one pixel with
- *  it and read the pixel back. Also decides which scheme's ceiling applies. */
+/** The live colour and the violet, as the shader's numbers. Also decides which
+ *  scheme's ceiling applies, from the sheet behind the strip. */
 function resolveColour(): void {
   if (!host) return;
-  const probe = document.createElement("canvas");
-  probe.width = probe.height = 1;
-  const ctx = probe.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return;
-  ctx.fillStyle = getComputedStyle(host).color;
-  ctx.fillRect(0, 0, 1, 1);
-  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data as unknown as [number, number, number];
-  colour = [r / 255, g / 255, b / 255];
-  ctx.clearRect(0, 0, 1, 1);
-  ctx.fillStyle = getComputedStyle(document.body).backgroundColor;
-  ctx.fillRect(0, 0, 1, 1);
-  const [sr, sg, sb] = ctx.getImageData(0, 0, 1, 1).data as unknown as [number, number, number];
-  const dark = sr + sg + sb < 384;
+  const style = getComputedStyle(host);
+  const read = readColours(
+    style.color,
+    getComputedStyle(document.body).backgroundColor,
+    style.getPropertyValue("--aurora-violet").trim(),
+  );
+  if (!read) return;
+  const [low, sheet, violet] = read as [RGB, RGB, RGB];
+  colour = low;
+  high = violet;
+  const dark = isDark(sheet);
   peak = dark ? PEAK.dark : PEAK.light;
   curve = dark ? CURVE.dark : CURVE.light;
   host.style.setProperty("--peak", String(peak));
-}
-
-function compile(ctx: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
-  const shader = ctx.createShader(type);
-  if (!shader) return null;
-  ctx.shaderSource(shader, source);
-  ctx.compileShader(shader);
-  if (!ctx.getShaderParameter(shader, ctx.COMPILE_STATUS)) {
-    console.warn("[aurora] shader failed:", ctx.getShaderInfoLog(shader));
-    ctx.deleteShader(shader);
-    return null;
-  }
-  return shader;
 }
 
 // Canvases that already tell us when their context goes.
@@ -233,26 +181,14 @@ function initGL(): void {
   if (!ctx || ctx.isContextLost()) return; // the CSS strip keeps the job
   gl = ctx;
   glCanvas = canvas;
-  const vs = compile(ctx, ctx.VERTEX_SHADER, VERT);
-  const fs = compile(ctx, ctx.FRAGMENT_SHADER, FRAG);
-  if (!vs || !fs) return;
-  const program = ctx.createProgram();
-  ctx.attachShader(program, vs);
-  ctx.attachShader(program, fs);
-  ctx.linkProgram(program);
-  if (!ctx.getProgramParameter(program, ctx.LINK_STATUS)) {
-    console.warn("[aurora] link failed:", ctx.getProgramInfoLog(program));
-    return;
-  }
-  // biome-ignore lint/correctness/useHookAtTopLevel: WebGL's useProgram, not a React hook
-  ctx.useProgram(program);
-  ctx.bindVertexArray(ctx.createVertexArray());
-  ctx.clearColor(0, 0, 0, 0);
+  const program = buildProgram(ctx, FRAG, "aurora");
+  if (!program) return;
   uniforms = {
     res: ctx.getUniformLocation(program, "u_res"),
     time: ctx.getUniformLocation(program, "u_time"),
     energy: ctx.getUniformLocation(program, "u_energy"),
     colour: ctx.getUniformLocation(program, "u_colour"),
+    high: ctx.getUniformLocation(program, "u_high"),
     peak: ctx.getUniformLocation(program, "u_peak"),
     curve: ctx.getUniformLocation(program, "u_curve"),
   };
@@ -265,33 +201,19 @@ function initGL(): void {
   }
 }
 
-function sizeCanvas(ctx: WebGL2RenderingContext, el: HTMLCanvasElement): boolean {
-  // Before layout the canvas reports 0×0; drawing then would stretch a single
-  // pixel across the strip.
-  if (!el.clientWidth || !el.clientHeight) return false;
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  const w = Math.max(1, Math.floor(el.clientWidth * dpr * SCALE));
-  const h = Math.max(1, Math.floor(el.clientHeight * dpr * SCALE));
-  if (w !== width || h !== height) {
-    width = el.width = w;
-    height = el.height = h;
-    ctx.viewport(0, 0, w, h);
-  }
-  return true;
-}
-
 function paint(seconds: number): void {
   if (!host) return;
   // The fallback and the measure of the effect for tests: always set.
   host.style.setProperty("--e", energy.toFixed(3));
-  if (!glOk || !gl || !uniforms || !canvas || gl.isContextLost() || !sizeCanvas(gl, canvas)) {
+  if (!glOk || !gl || !uniforms || !canvas || gl.isContextLost() || !fitCanvas(gl, canvas, size)) {
     return;
   }
   gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.uniform2f(uniforms.res, width, height);
+  gl.uniform2f(uniforms.res, size.width, size.height);
   gl.uniform1f(uniforms.time, seconds);
   gl.uniform1f(uniforms.energy, energy);
   gl.uniform3f(uniforms.colour, colour[0], colour[1], colour[2]);
+  gl.uniform3f(uniforms.high, high[0], high[1], high[2]);
   gl.uniform1f(uniforms.peak, peak);
   gl.uniform1f(uniforms.curve, curve);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -393,7 +315,7 @@ export function mountAurora(el: HTMLElement): () => void {
     glCanvas = null;
     uniforms = null;
     glOk = false;
-    width = height = 0;
+    size.width = size.height = 0;
   }
   if (!started) started = performance.now();
 

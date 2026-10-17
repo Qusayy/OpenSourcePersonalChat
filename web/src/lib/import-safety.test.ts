@@ -18,6 +18,8 @@ describe("importing a lib module where there is no DOM", () => {
     ["format", () => import("./format")],
     ["frame", () => import("./frame")],
     ["aurora", () => import("./aurora")],
+    ["curtains", () => import("./curtains")],
+    ["gl", () => import("./gl")],
     ["trace", () => import("./trace")],
     ["prose-stream", () => import("./prose-stream")],
     ["icons", () => import("./icons")],
@@ -37,6 +39,12 @@ describe("importing a lib module where there is no DOM", () => {
       aurora.rate(10);
       aurora.pulse();
       aurora.phase(null);
+    }).not.toThrow();
+
+    const { curtains } = await import("./curtains");
+    expect(() => {
+      curtains.rest(true);
+      curtains.rest(false);
     }).not.toThrow();
 
     const { iconSvg, hasIcon } = await import("./icons");

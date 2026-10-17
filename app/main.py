@@ -109,8 +109,8 @@ def render_page(page: str, status_code: int = 200) -> Response:
         "about": "About — Aurora",
     }
     description = (
-        f"{info['params']} {info['model']} running locally on a {info['hardware']} "
-        "— with the numbers on screen."
+        f"{info['model']} on a {info['hardware']}: quick answers, "
+        "with tools for sums, weather and links."
     )
     return frontend.page(
         page=page,

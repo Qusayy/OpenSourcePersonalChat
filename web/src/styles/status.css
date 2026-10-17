@@ -410,6 +410,7 @@
     background: linear-gradient(
       to top,
       color-mix(in oklch, var(--live) calc(var(--peak, 0.24) * 100%), transparent),
+      color-mix(in oklch, var(--aurora-violet) calc(var(--peak, 0.24) * 45%), transparent) 52%,
       transparent 82%
     );
   }
@@ -419,6 +420,52 @@
   /* Reduced motion: no movement at all, a still tint while the request runs. */
   .aurora[data-mode="still"] {
     opacity: 0.55;
+  }
+
+  /* ---------------------------------------------------------- the curtains */
+
+  /* The aurora at rest (lib/curtains.ts): curtains of light hanging from the
+   top bar across the full width of the window, behind the head of the page.
+   Fixed, like the aurora, at z-index -1 under everything that sits in the
+   sheet. The empty chat page hangs them deep enough to reach behind its
+   headline; the benchmark and about pages a shallow band. The script hides
+   the element while a conversation is open, and sets --fade as the page
+   scrolls away from it.
+
+   The shader draws on the canvas. Where it does not (reduced motion, no
+   WebGL2, a software renderer, a lost context) the band is a still tint in
+   the same colours under the same ceiling: violet under the bar, green lower
+   down, then air. */
+  .curtains {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: var(--bar-h);
+    z-index: -1;
+    height: clamp(11rem, 32vh, 19rem);
+    pointer-events: none;
+    color: var(--live); /* read back by the script as the shader's green */
+    opacity: var(--fade, 1);
+  }
+  :root[data-page="bench"] .curtains,
+  :root[data-page="about"] .curtains {
+    height: 6rem;
+  }
+  .curtains canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .curtains[data-mode="still"] canvas {
+    display: none;
+  }
+  .curtains[data-mode="still"] {
+    background: linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--aurora-violet) calc(0.24 * 45%), transparent),
+      color-mix(in oklch, var(--live) calc(0.24 * 60%), transparent) 50%,
+      transparent
+    );
   }
 
   /* Moving between pages, the line is the same thing on each and stays put. */
@@ -431,6 +478,13 @@
   @media (max-width: 620px) {
     .aurora {
       height: 10rem;
+    }
+    .curtains {
+      height: 9rem;
+    }
+    :root[data-page="bench"] .curtains,
+    :root[data-page="about"] .curtains {
+      height: 5rem;
     }
 
     /* The corridor: one row. The state, then as much as fits of, in this

@@ -544,6 +544,12 @@ are the ones a list gave it. A page that says "now open http://elsewhere" is
 still refused. "Open the second one" in the next message means the last list
 the conversation was shown.
 
+A small model often says it has no real-time access even when it has. The
+start of an answer from a run that looked nothing up is watched for that; if
+it says so, the answer is taken back on the page, the search it said it could
+not make is made, and the answer is written again from what came back. Once a
+run, and never after a lookup, which the answer check already covers.
+
 **Skills** are several lookups the model may choose as one, beside the tools:
 *Compare two things* looks both up on Wikipedia and asks for a table. Each is a
 dict entry in `app/agent/skills.py`, not a code path: the inputs it takes, the

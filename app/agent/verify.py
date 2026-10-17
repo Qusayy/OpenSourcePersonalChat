@@ -215,6 +215,12 @@ _DENIALS = (
         re.I,
     ),
     re.compile(
+        r"\b(?:my knowledge cut-?off|as of my (?:last|latest) (?:update|training)|"
+        r"my training data (?:only )?(?:goes|extends|runs) (?:up )?(?:to|until)|"
+        r"(?:don't|do not|cannot|can't) (?:provide|give you) (?:the )?(?:latest|current|real[- ]?time))",
+        re.I,
+    ),
+    re.compile(
         r"\b(?:can't|cannot|can not|unable to|not able to)\s+"
         r"(?:browse|access\s+(?:the\s+)?(?:internet|web|real[- ]?time|live|current)|"
         r"check\s+(?:current|live|real[- ]?time|today's)|look\s+(?:that|this|it)\s+up)",

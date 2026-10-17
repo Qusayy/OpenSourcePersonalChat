@@ -18,6 +18,7 @@ Two things this module deliberately does not do:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -40,19 +41,22 @@ from .context import (
 )
 from .policy import call_key, refusal, users_words
 from .route import (
+    NEWS,
     URL_RE,
     Action,
     ToolCall,
     decision_grammar,
     decision_limit,
     free_route,
+    news_topic,
     parse_action,
+    search_query,
 )
 from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered
 from .style import Style, style_for
 from .trace import Step, Trace, pass_ms, total
 from .transcript import CUE_PLAIN, CUE_WITH_DATA, Transcript, sent_at, system_for
-from .verify import caption, note, scalars
+from .verify import caption, denies_access, note, scalars
 from .verify import check as check_figures
 
 Event = tuple[str, dict]
@@ -70,6 +74,10 @@ ALREADY_LOOKED_UP = (
 # The least a lookup in the loop is given to read, however little room is
 # left: a line.
 LEAST_SHARE = 40
+
+# How much of an answer is watched for a claim that it cannot look anything
+# up, in characters. Such a claim comes first; past this, the answer stands.
+WATCHED = 400
 
 
 def what_happened(result: ToolResult) -> str:
@@ -215,6 +223,9 @@ class _Run:
     tainted: bool = False
     # When the message was sent, as the model is told it.
     now: datetime | None = None
+    # What an answer wrote before it was taken back for saying it could not
+    # look something up; None while no answer has been.
+    retracted: str | None = None
     # The last list of results the model was shown: the pages it may ask to
     # open by number, and addresses it may go to though the user never wrote
     # them, since a search, not a page, gave them.
@@ -579,15 +590,65 @@ class _Run:
                 return
             transcript.answer_cue(note, own, style=self.style.cue)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
-            async with aclosing(
-                self._answer(transcript.messages(), parts=transcript.parts(), held=True)
-            ) as events:
+            async with aclosing(self._answer(
+                transcript.messages(), parts=transcript.parts(), held=True, watch=self._watch(),
+            )) as events:
                 async for event in events:
                     yield event
+            if self.retracted is not None and not self.stop.is_set():
+                async with aclosing(self._guard(transcript, steps, start)) as events:
+                    async for event in events:
+                        yield event
         finally:
             # On every way out, however it ends. If a pass of this run is
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
+
+    def _watch(self) -> Callable[[str], bool] | None:
+        """What the answer is watched for, where it is: a claim that there is
+        no live data to be had, from a run that looked nothing up and could
+        have. None where there is nothing a lookup could add."""
+        if self.found or self.lost or self.tainted or self.retracted is not None:
+            return None
+        return denies_access if self._guard_call() is not None else None
+
+    def _guard_call(self) -> ToolCall | None:
+        """The lookup an answer that denied having live data is replaced by:
+        the headlines for news, a search for anything else."""
+        tools = {t.name for t in available()} if self.tools_enabled else set()
+        if NEWS.search(self.message) and "news" in tools:
+            topic = news_topic(self.message)
+            return ToolCall("news", {"topic": topic} if topic else {}, via="guard")
+        query = search_query(self.message)
+        if "web_search" in tools and query:
+            return ToolCall("web_search", {"query": query}, via="guard")
+        return None
+
+    async def _guard(self, transcript: Transcript, steps: int, start: int) -> AsyncIterator[Event]:
+        """The answer said it could not look anything up, and it can. What it
+        wrote is taken back, the lookup it said it could not make is made,
+        and the answer is written again from what came back. Once a run."""
+        call = self._guard_call()
+        if call is None:
+            return
+        transcript.action(json.dumps({"tool": call.name, "args": call.args}, ensure_ascii=False))
+        self.calls.append(call)
+        share = max(LEAST_SHARE, self.run_room - (estimate(transcript.rendered()) - start))
+        async for event in self._lookup(steps, call, budget=share):
+            yield event
+        if self.last is None or self.stop.is_set():
+            yield self._stopped()
+            return
+        transcript.observation(
+            call.name, self.seen if self.last.ok else what_happened(self.last), ok=self.last.ok,
+        )
+        transcript.answer_cue(style=self.style.cue)
+        self._sending(transcript.parts()[0].content, transcript.run_parts())
+        async with aclosing(
+            self._answer(transcript.messages(), parts=transcript.parts(), held=True)
+        ) as events:
+            async for event in events:
+                yield event
 
     async def _skill_lookups(
         self, skill: Skill, values: dict, transcript: Transcript, made: set[str],
@@ -908,11 +969,17 @@ class _Run:
     # ---------------------------------------------------------- the answer --
 
     async def _answer(
-        self, messages: list[dict], *, parts: list[Part] = (), held: bool = False
+        self, messages: list[dict], *, parts: list[Part] = (), held: bool = False,
+        watch: Callable[[str], bool] | None = None,
     ) -> AsyncIterator[Event]:
         """The pass that writes the answer, from ``messages``. ``parts`` are
         the same prompt with what each piece is, so the answer can be checked
-        against what was looked up for it."""
+        against what was looked up for it.
+
+        ``watch``, where given, is held against the start of the answer as it
+        is written. If it holds, the pass is stopped, the page is told to take
+        back what it showed (``retract``), and ``retracted`` keeps what was
+        written; the run decides what follows."""
         sampling = self.style.sampling(looked_up=bool(self.found))
         # Fitted to the window already. The engine's own fitting is kept as
         # the last guard: a run that added more than the room it was given.
@@ -933,7 +1000,23 @@ class _Run:
         async with aclosing(
             self.engine.stream_chat(fitted, sampling, self.request_id, seed=self.seed, held=held)
         ) as stream:
+            began = time.perf_counter()
+            written = ""
             async for event, data in stream:
+                if event == "token" and watch is not None:
+                    written += data.get("t", "")
+                    if watch(written):
+                        self.retracted = written
+                        self.trace.steps.append(Step(
+                            "answer", model=True, input=trimmed, output=written,
+                            total_ms=(time.perf_counter() - began) * 1000 + waited,
+                            ok=False, error="retracted: it said it could not look this up",
+                        ))
+                        yield event, data
+                        yield "retract", {"reason": "It said it could not look this up, so it will."}
+                        return
+                    if len(written) > WATCHED:
+                        watch = None
                 if event == "error":
                     self.trace.steps.append(Step(
                         "answer", model=True, input=trimmed, ok=False, error=data.get("message"),

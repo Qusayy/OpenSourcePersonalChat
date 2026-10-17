@@ -210,8 +210,8 @@ PAGE = ToolResult(True, "Page “Tides” (example.org): high water at 06:12.", 
                         "text": "High water is at 06:12."})
 
 
-class ProvenanceTests(unittest.IsolatedAsyncioTestCase):
-    """An address a search gave may be read; one a page gave may not."""
+class RunCase(unittest.IsolatedAsyncioTestCase):
+    """A run of the agent with the loop on, its model a script."""
 
     def setUp(self) -> None:
         support.no_network(self)
@@ -221,6 +221,10 @@ class ProvenanceTests(unittest.IsolatedAsyncioTestCase):
         engine = ScriptedEngine(script)
         self.addAsyncCleanup(engine.settled)
         return engine
+
+
+class ProvenanceTests(RunCase):
+    """An address a search gave may be read; one a page gave may not."""
 
     async def test_a_page_from_the_results_may_be_read_by_its_address(self) -> None:
         read = '{"tool": "read_url", "args": {"url": "https://example.org/tides"}}'
@@ -260,6 +264,58 @@ class ProvenanceTests(unittest.IsolatedAsyncioTestCase):
         await collect(agent.run("open the first one", history=[], engine=engine,
                                 call_tool=call_tool, links=links))
         self.assertEqual(handed, [links])
+
+
+DENIAL = "I don't have real-time access to current events, but generally speaking it varies."
+FOUND = ToolResult(True, "Search", card="search", data={"items": [
+    results.item("Results of the vote", "https://example.org/vote", snippet="The motion passed 312 to 201."),
+]})
+
+
+class GuardTests(RunCase):
+    """An answer that says it cannot look something up, from a run that
+    could have, is taken back, and the lookup is made."""
+
+    async def test_the_answer_is_taken_back_and_written_again_from_a_search(self) -> None:
+        engine = self.scripted(NONE, DENIAL, "The motion passed, 312 to 201.")
+        seen = support.played_tools(self, {"web_search": FOUND})
+        trace = agent.Trace()
+        stream = await collect(agent.run("how did the vote on the motion go", history=[],
+                                         trace=trace, engine=engine))
+        names = [name for name, _ in stream]
+        self.assertIn("retract", names)
+        self.assertLess(names.index("retract"), names.index("done"))
+        self.assertEqual(seen["web_search"], [{"query": "how did the vote on the motion go"}])
+        self.assertEqual(trace.calls[0][0].via, "guard")
+        self.assertEqual(trace.answer, "The motion passed, 312 to 201.")
+        self.assertEqual([s.kind for s in trace.steps], ["route", "answer", "tool", "answer"])
+        self.assertEqual((trace.steps[1].ok, trace.steps[1].error.split(":")[0]), (False, "retracted"))
+        self.assertTrue(engine.free)
+
+    async def test_an_answer_that_looked_something_up_is_left_to_the_check(self) -> None:
+        weather = '{"tool": "web_search", "args": {"query": "the vote"}}'
+        engine = self.scripted(weather, NONE, DENIAL)
+        support.played_tools(self, {"web_search": FOUND})
+        stream = await collect(agent.run("how did the vote on the motion go", history=[], engine=engine))
+        self.assertNotIn("retract", [name for name, _ in stream])
+
+    async def test_with_nothing_to_look_it_up_with_the_answer_stands(self) -> None:
+        support.with_settings(self, search="off")
+        engine = self.scripted(NONE, DENIAL)
+        trace = agent.Trace()
+        stream = await collect(agent.run("how did the vote on the motion go", history=[],
+                                         trace=trace, engine=engine))
+        self.assertNotIn("retract", [name for name, _ in stream])
+        self.assertEqual(trace.answer, DENIAL)
+
+    async def test_it_is_taken_back_once_and_not_again(self) -> None:
+        engine = self.scripted(NONE, DENIAL, DENIAL)
+        support.played_tools(self, {"web_search": FOUND})
+        trace = agent.Trace()
+        stream = await collect(agent.run("how did the vote on the motion go", history=[],
+                                         trace=trace, engine=engine))
+        self.assertEqual([name for name, _ in stream].count("retract"), 1)
+        self.assertEqual(trace.answer, DENIAL)
 
 
 class ConversationLinksTests(support.ChatCase):

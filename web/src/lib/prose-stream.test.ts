@@ -428,6 +428,20 @@ describe("proseRenderer: under reduced motion", () => {
   });
 });
 
+describe("proseRenderer: an answer taken back", () => {
+  it("leaves nothing of it, and the next answer is written from the start", async () => {
+    const { prose, stable, tail } = await world({ reduce: true });
+    prose.update("I cannot browse.\n\nBut generally", true);
+    expect(stable.innerHTML).not.toBe("");
+    prose.reset();
+    expect(stable.innerHTML).toBe("");
+    expect(tail.innerHTML).toBe("");
+    prose.update("The motion passed.", true);
+    expect(tail.innerHTML).toBe('<p>The motion passed.<span class="caret"></span></p>');
+    expect(stable.innerHTML).toBe("");
+  });
+});
+
 /** The renderer, and the markdown renderer it uses, from the same module graph. */
 async function withMarkdown() {
   const w = await world();

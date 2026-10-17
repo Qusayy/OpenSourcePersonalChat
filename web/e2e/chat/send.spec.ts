@@ -554,6 +554,26 @@ test.describe("against a stream the test controls", () => {
     await expect(page.locator("#sr-status")).toHaveText("Weather failed: no such place");
   });
 
+  test("an answer taken back leaves nothing of itself, and the next is written in its place", async ({
+    page,
+  }) => {
+    await ask(page, "how did the vote go");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "start", START);
+    await push(page, "token", { t: "I don't have real-time access ", ttft_ms: 80 });
+    await push(page, "token", { t: "to current events." });
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose).toContainText("real-time access");
+    await push(page, "retract", { reason: "It said it could not look this up, so it will." });
+    await expect(prose).not.toContainText("real-time access");
+    await push(page, "start", START);
+    await push(page, "token", { t: "The motion passed.", ttft_ms: 60 });
+    await expect(prose).toContainText("The motion passed.");
+    await push(page, "done", DONE);
+    await end(page);
+    await expect(prose).toHaveText("The motion passed.");
+  });
+
   test("a search lists its pages numbered, each opening in a tab of its own", async ({ page }) => {
     await ask(page, "who is the current president of France");
     await push(page, "conversation", CONVERSATION);

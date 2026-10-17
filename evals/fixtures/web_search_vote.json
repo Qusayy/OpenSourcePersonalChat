@@ -1,0 +1,29 @@
+{
+  "tool": "web_search",
+  "args": {
+    "query": "how did the vote on the motion go"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Search “how did the vote on the motion go”: 1. Results of the vote on the motion (example.org)",
+    "card": "search",
+    "data": {
+      "query": "how did the vote on the motion go",
+      "engine": "searxng",
+      "answer": "",
+      "items": [
+        {
+          "title": "Results of the vote on the motion",
+          "url": "https://example.org/vote",
+          "source": "example.org",
+          "published": null,
+          "age": "",
+          "snippet": "The motion passed by 312 votes to 201 after a late-night debate."
+        }
+      ]
+    },
+    "error": null
+  }
+}

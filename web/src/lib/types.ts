@@ -284,6 +284,9 @@ export type ChatEvents = {
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
   /** Something had to give for the prompt to fit the window: the oldest
    *  messages, given to the model only in short, or the end of this one. */
+  /** The answer so far is taken back: it said it could not look something
+   *  up, and the run is looking it up and writing it again. */
+  retract: { reason: string };
   trimmed: {
     dropped: number;
     /** Earlier turns read whole, and earlier turns given only in short. */

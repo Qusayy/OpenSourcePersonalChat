@@ -92,6 +92,8 @@ export interface ProseRenderer {
   /** Cancel the tidying-up `finish` left pending. For when the element is
    *  being thrown away; it changes nothing that is on screen. */
   dispose(): void;
+  /** Take everything off: the answer so far is being written again. */
+  reset(): void;
 }
 
 /**
@@ -199,6 +201,17 @@ export function proseRenderer(host: Element): ProseRenderer {
     dispose() {
       for (const timer of pending) clearTimeout(timer);
       pending.clear();
+    },
+
+    reset() {
+      this.dispose();
+      stable.innerHTML = "";
+      tail.innerHTML = "";
+      caret.remove();
+      settled = 0;
+      written = 0;
+      fresh = [];
+      finished = null;
     },
   };
 }

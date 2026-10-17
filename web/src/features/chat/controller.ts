@@ -319,6 +319,15 @@ export async function send(text: string): Promise<void> {
           if (nearBottom()) scrollBottom();
         } else if (event === "trimmed") {
           notice("", trimmedWording(data.dropped, data.cut));
+        } else if (event === "retract") {
+          // The answer said it could not look this up. It can, and it will:
+          // what was written is taken off the page, and the next answer is
+          // written in its place.
+          raw = "";
+          dirty = false;
+          prose.reset();
+          livePhase("working");
+          announce(data.reason);
         } else if (event === "start") {
           requestId = data.request_id;
           livePhase("reading"); // holds until the first token lands

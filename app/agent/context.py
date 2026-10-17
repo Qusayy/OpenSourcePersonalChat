@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from ..llm import render_chatml
+from ..chatml import render_chatml
 from ..text import clip, estimate
 
 # The most a summary of dropped turns takes.

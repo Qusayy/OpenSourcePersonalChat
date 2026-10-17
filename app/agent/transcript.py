@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 
-from ..llm import render_chatml
+from ..chatml import render_chatml
 from ..tools.base import Tool, tool_menu
 from .context import Part, merged
 from .personas import Persona

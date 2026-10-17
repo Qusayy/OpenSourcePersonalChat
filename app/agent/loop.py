@@ -29,6 +29,7 @@ from typing import AsyncIterator, Awaitable, Callable
 from ..config import settings
 from ..ledger import ledger
 from ..llm import Completion, Engine, Stop, engine as default_engine
+from ..llm.usage import blank
 from ..text import estimate
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
@@ -456,23 +457,19 @@ class _Run:
         said = self.asked_by
         self.trace.outcome = "asked"
         self.trace.answer = self.question
-        self.trace.usage = {
-            "cancelled": False,
-            "asked": True,
-            "ttft_ms": said.ttft_ms,
-            "queue_wait_ms": said.queue_wait_ms,
-            "prompt_tokens": said.prompt_tokens,
-            "read_tokens": said.read_tokens,
-            "cached_tokens": said.cached_tokens,
-            "completion_tokens": said.completion_tokens or 0,
-            # The pass wrote JSON under a grammar. Its speed is not the speed
-            # of an answer, and is not passed off as one.
-            "prefill_tps": None,
-            "gen_tps": None,
-            "total_ms": said.total_ms,
-            "rss_mb": None,
-            "tool_calls": 0,
-        }
+        # The pass wrote JSON under a grammar. Its speed is not the speed of
+        # an answer, and is not passed off as one: the rates stay blank.
+        self.trace.usage = blank(
+            asked=True,
+            ttft_ms=said.ttft_ms,
+            queue_wait_ms=said.queue_wait_ms,
+            prompt_tokens=said.prompt_tokens,
+            read_tokens=said.read_tokens,
+            cached_tokens=said.cached_tokens,
+            completion_tokens=said.completion_tokens or 0,
+            total_ms=said.total_ms,
+            tool_calls=0,
+        )
         token = {"t": self.question}
         if said.ttft_ms is not None:
             token["ttft_ms"] = said.ttft_ms
@@ -486,20 +483,7 @@ class _Run:
         """
         self.trace.outcome = "stopped"
         self.trace.answer = ""
-        self.trace.usage = {
-            "cancelled": True,
-            "ttft_ms": None,
-            "queue_wait_ms": None,
-            "prompt_tokens": None,
-            "read_tokens": None,
-            "cached_tokens": None,
-            "completion_tokens": 0,
-            "prefill_tps": None,
-            "gen_tps": None,
-            "total_ms": None,
-            "rss_mb": None,
-            "tool_calls": len(self.trace.calls),
-        }
+        self.trace.usage = blank(cancelled=True, tool_calls=len(self.trace.calls))
         return "done", self.trace.usage
 
     # ------------------------------------------------------------ routing --

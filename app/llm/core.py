@@ -37,45 +37,14 @@ from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator, Iterator
 
+from ..chatml import render_chatml
 from ..config import Settings, settings as default_settings
 from ..ops.telemetry import describe, follow_server, process_rss_mb, usable_cpu_count
+from . import mock
 from .server import LlamaServer, Reading
+from .usage import blank
 
 log = logging.getLogger("aurora.llm")
-
-# ---------------------------------------------------------------- ChatML ----
-
-IM_START = "<|im_start|>"
-IM_END = "<|im_end|>"
-
-
-def render_chatml(messages: list[dict]) -> str:
-    """Render a conversation the way Qwen2.5-Instruct expects.
-
-    Used for token accounting and trimming only — the actual prompt is built by
-    llama-cpp-python, or by llama-server, from the GGUF's own chat template.
-    The two agree closely enough that the counts shown in the UI are
-    trustworthy.
-    """
-    parts = []
-    for m in messages:
-        parts.append(f"{IM_START}{m['role']}\n{m['content']}{IM_END}\n")
-    parts.append(f"{IM_START}assistant\n")
-    return "".join(parts)
-
-
-MOCK_VOCAB = (
-    "Quantization stores each weight in fewer bits, so the model file shrinks "
-    "and far less memory has to be read for every single token that gets "
-    "produced. Because generation on a CPU is limited by memory bandwidth "
-    "rather than raw arithmetic, halving the bytes very nearly doubles the "
-    "speed. The trade is a small loss of precision, which a four bit K quant "
-    "hides well at this size. That is the whole reason a one and a half "
-    "billion parameter model feels responsive without a graphics card.\n\n"
-    "In short: fewer bytes per weight, fewer bytes moved, more tokens per "
-    "second.\n"
-).split(" ")
-
 
 # ----------------------------------------------------------------- state ----
 
@@ -96,9 +65,6 @@ SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repeat_penalty", "max_tokens"
 # and the routing pass names only three settings; sent these, a pass is the
 # same pass on either engine.
 LIBRARY_DEFAULTS = {"temperature": 0.2, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.0}
-
-# What the mock engine answers when asked to choose under a grammar.
-MOCK_DECISION = '{"tool": "none"}'
 
 
 @dataclass(frozen=True)
@@ -426,15 +392,7 @@ class Engine:
         prompt it read and how much it had in its cache. Nothing else reports
         that, and it is left empty."""
         if self.cfg.mock:
-            if grammar is not None:
-                # A pass held to a grammar is a decision, and without a model
-                # the only honest one is "no tool". It is said at once: there
-                # is nothing here whose speed is worth imitating.
-                yield MOCK_DECISION
-                return
-            for i, word in enumerate(MOCK_VOCAB):
-                time.sleep(self.cfg.mock_delay)  # ~11 tok/s by default
-                yield ("" if i == 0 else " ") + word
+            yield from mock.chunks(grammar, self.cfg.mock_delay)
             return
 
         named: dict[str, Any] = {k: sampling[k] for k in SAMPLING_KEYS if k in sampling}
@@ -617,20 +575,10 @@ class Engine:
                 # we wait. A run that is holding the slot has done its waiting.
                 held = held and self._holder == request_id
                 if not held:
-                    self._waiting.append(request_id)
                     acquire = asyncio.ensure_future(self._lock.acquire())
-                    first_notice = True
-                    while not stopped.is_set():
-                        done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
-                        if acquire in done or stopped.is_set():
-                            break
-                        try:
-                            ahead = list(self._waiting).index(request_id)
-                        except ValueError:
-                            ahead = 0
-                        yield "queue", {"position": ahead, "first": first_notice}
-                        first_notice = False
-                    self._waiting.remove(request_id)
+                    async with aclosing(self._queue(request_id, acquire, stopped)) as waiting:
+                        async for event in waiting:
+                            yield event
 
                 queue_wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
                 if stopped.is_set():
@@ -638,20 +586,10 @@ class Engine:
                     # read and nothing written, and the pass says so. Its place
                     # in the queue, or the slot if it had just won it, is given
                     # up by the block at the end.
-                    yield "done", {
-                        "text": "",
-                        "cancelled": True,
-                        "ttft_ms": None,
-                        "queue_wait_ms": queue_wait_ms,
-                        "prompt_tokens": None,
-                        "read_tokens": None,
-                        "cached_tokens": None,
-                        "completion_tokens": 0,
-                        "prefill_tps": None,
-                        "gen_tps": None,
-                        "total_ms": None,
-                        "rss_mb": process_rss_mb(),
-                    }
+                    yield "done", blank(
+                        text="", cancelled=True, queue_wait_ms=queue_wait_ms,
+                        rss_mb=process_rss_mb(),
+                    )
                     return
                 self._busy = True
 
@@ -757,6 +695,25 @@ class Engine:
                         if self._lock.locked():
                             self._lock.release()
 
+    async def _queue(
+        self, request_id: str, acquire: asyncio.Future, stopped: Stop
+    ) -> AsyncIterator[tuple[str, dict]]:
+        """Wait in line for the slot until ``acquire`` wins it or the request is
+        stopped, saying where in the line it stands at every tick."""
+        self._waiting.append(request_id)
+        first_notice = True
+        while not stopped.is_set():
+            done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
+            if acquire in done or stopped.is_set():
+                break
+            try:
+                ahead = list(self._waiting).index(request_id)
+            except ValueError:
+                ahead = 0
+            yield "queue", {"position": ahead, "first": first_notice}
+            first_notice = False
+        self._waiting.remove(request_id)
+
     def _worker_left(self) -> None:
         """Run on the event loop once a worker thread has left the model.
 
@@ -800,20 +757,10 @@ class Engine:
         taken = False
         with self.hold(request_id) as stopped:
             try:
-                self._waiting.append(request_id)
                 acquire = asyncio.ensure_future(self._lock.acquire())
-                first_notice = True
-                while not stopped.is_set():
-                    done, _ = await asyncio.wait({acquire}, timeout=self.QUEUE_TICK)
-                    if acquire in done or stopped.is_set():
-                        break
-                    try:
-                        ahead = list(self._waiting).index(request_id)
-                    except ValueError:
-                        ahead = 0
-                    yield "queue", {"position": ahead, "first": first_notice}
-                    first_notice = False
-                self._waiting.remove(request_id)
+                async with aclosing(self._queue(request_id, acquire, stopped)) as waiting:
+                    async for event in waiting:
+                        yield event
 
                 waited = round((time.perf_counter() - queued_at) * 1000, 1)
                 if stopped.is_set():

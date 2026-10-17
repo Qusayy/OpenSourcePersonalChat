@@ -17,7 +17,6 @@ from unittest import mock
 try:
     from app import agent
     from app.agent.context import Part, Turn
-    from app.agent.personas import get_persona
     from app.agent.route import parse_slash
     from app.agent.transcript import data
     from app.store import conversations, db, notes
@@ -77,7 +76,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual([n["text"] for n in found], ["100% of the 10_000 keys"])
 
     def test_a_conversations_notes_go_with_it(self) -> None:
-        cid = conversations.create("agent", "hi")
+        cid = conversations.create("hi")
         notes.add_note("my locker is 418", scope="conversation", conversation_id=cid)
         notes.add_note("the wifi is called Harbour", scope="site", conversation_id=None)
         conversations.delete(cid)
@@ -132,7 +131,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(engine.settled)
         trace = agent.Trace()
         await collect(agent.run(
-            message, persona=get_persona("agent"), history=list(history), context=list(context),
+            message, history=list(history), context=list(context),
             trace=trace, engine=engine, scope=scope,
         ))
         return trace
@@ -198,7 +197,7 @@ class EvalDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(folder.cleanup)
         site = Path(folder.name) / "site.db"
         with mock.patch.object(db, "settings", SimpleNamespace(mock=False, resolved_db_path=site)):
-            task = Task(id="keeps", category="c", persona="agent",
+            task = Task(id="keeps", category="c",
                         turns=("/remember my locker is 418",), script=("Noted.",),
                         expect={"calls": ["remember"]})
             report = await run_suite([task], engine_kind="scripted")

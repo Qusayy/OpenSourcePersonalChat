@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import re
 import socket
 import tempfile
 import time
@@ -76,6 +77,17 @@ def shape(stream: list[tuple[str, Any]]) -> list[str]:
         else:
             out.append(name)
     return out
+
+
+# The line that says when a message was sent, as the model reads it after
+# the message. It is the clock's, so a test that reads a prompt to the letter
+# reads it without.
+_SENT = re.compile(r"\n\n\(Sent [^()\n]*\.\)")
+
+
+def unsent(messages: list[dict]) -> list[dict]:
+    """A prompt without the lines that say when each message was sent."""
+    return [{**m, "content": _SENT.sub("", m["content"])} for m in messages]
 
 
 def only(stream: list[tuple[str, Any]], name: str) -> list[Any]:

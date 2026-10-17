@@ -157,7 +157,7 @@ async def main() -> None:
         db.write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
     # 3. Right-to-left, oldest so it sorts last.
-    cid = conversations.create("explainer", "ما هو النموذج اللغوي؟")
+    cid = conversations.create("ما هو النموذج اللغوي؟")
     conversations.add_message(cid, "user", "ما هو النموذج اللغوي؟")
     conversations.add_message(
         cid, "assistant",
@@ -166,7 +166,7 @@ async def main() -> None:
     )
 
     # 2. A long question, and every kind of markdown.
-    cid = conversations.create("concise", LONG_QUESTION)
+    cid = conversations.create(LONG_QUESTION)
     conversations.add_message(cid, "user", LONG_QUESTION)
     conversations.add_message(
         cid, "assistant", MARKDOWN_ANSWER,
@@ -175,7 +175,7 @@ async def main() -> None:
 
     # 1. Every card.
     question = "Show me every figure a tool can draw."
-    cid = conversations.create("agent", question)
+    cid = conversations.create(question)
     conversations.add_message(cid, "user", question)
     calls: list[str] = []
 

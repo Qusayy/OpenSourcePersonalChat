@@ -21,7 +21,7 @@ DAY = 86400.0
 class StepStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.settings = support.temp_database(self)
-        self.cid = conversations.create("agent", "Do I need a coat in Paris")
+        self.cid = conversations.create("Do I need a coat in Paris")
 
     def add(self, run: str = "run-1", idx: int = 0, kind: str = "answer", **more):
         return runs.add_step(run, self.cid, idx, kind, **more)
@@ -88,7 +88,7 @@ class StepStorageTests(unittest.TestCase):
         self.assertEqual({r["message_id"] for r in runs.run_steps("run-2")}, {None})
 
     def test_deleting_a_conversation_deletes_its_steps_and_nobody_elses(self) -> None:
-        other = conversations.create("agent", "Another")
+        other = conversations.create("Another")
         self.add("run-1")
         runs.add_step("run-2", other, 0, "answer")
         conversations.delete(self.cid)
@@ -179,7 +179,7 @@ class MigrationTests(unittest.TestCase):
         db.close()
         db.init()  # and again: it is added once
         self.addCleanup(db.close)
-        cid = conversations.create("explainer", "Hi")
+        cid = conversations.create("Hi")
         mid = conversations.add_message(cid, "assistant", "Hello", correction="Not in what was looked up: 5.")
         stored = conversations.get(cid)["messages"]
         self.assertEqual([(m["id"], m["correction"]) for m in stored],

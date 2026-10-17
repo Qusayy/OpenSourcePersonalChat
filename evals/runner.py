@@ -31,8 +31,6 @@ from typing import Any, Iterable
 
 from app import agent
 from app.agent.context import Turn as Sent
-from app.agent.personas import get_persona
-from app.agent.skills import get_skill
 from app.config import settings
 from app.llm import Engine
 from app.store import db
@@ -118,7 +116,6 @@ async def run_task(
     decides, as on the site.
     """
     began = time.perf_counter()
-    persona = get_persona(get_skill(task.skill).persona if get_skill(task.skill) else task.persona)
     history: list[dict] = []
     sent: list[Sent] = []
     turns: list[Turn] = []
@@ -128,7 +125,7 @@ async def run_task(
             events = [
                 event
                 async for event in agent.run(
-                    text, persona=persona, skill=get_skill(task.skill), history=list(history),
+                    text, history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
                     loop=True if task.loop else loop, context=list(sent),
                     scope=f"task:{task.id}",

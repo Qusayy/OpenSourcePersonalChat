@@ -25,25 +25,24 @@ def make_title(text: str, words: int = 6) -> str:
     return (title + "…") if len(parts) < len(clean.split(" ")) else title
 
 
-def create(persona: str, first_message: str) -> str:
+# What a conversation's persona column holds now that there is one agent.
+# Older rows keep the persona they were made under; nothing reads it.
+AGENT = "agent"
+
+
+def create(first_message: str) -> str:
     cid = uuid.uuid4().hex
     now = time.time()
     db.write(
         "INSERT INTO conversations (id, title, persona, created_at, updated_at)"
         " VALUES (?, ?, ?, ?, ?)",
-        (cid, make_title(first_message), persona, now, now),
+        (cid, make_title(first_message), AGENT, now, now),
     )
     return cid
 
 
-def touch(cid: str, persona: str | None = None) -> None:
-    if persona:
-        db.write(
-            "UPDATE conversations SET updated_at = ?, persona = ? WHERE id = ?",
-            (time.time(), persona, cid),
-        )
-    else:
-        db.write("UPDATE conversations SET updated_at = ? WHERE id = ?", (time.time(), cid))
+def touch(cid: str) -> None:
+    db.write("UPDATE conversations SET updated_at = ? WHERE id = ?", (time.time(), cid))
 
 
 def listing(limit: int = 60) -> list[dict]:

@@ -13,8 +13,7 @@ from pydantic import BaseModel, Field
 
 from .. import agent
 from ..agent.context import turns_from
-from ..agent.personas import get_persona
-from ..agent.skills import get_skill
+from ..agent.style import style_for
 from ..store import conversations
 from . import deps
 from .keeper import Keeper
@@ -24,25 +23,25 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
+    """A message. Anything else a page sends with it (an older page sends a
+    persona and a skill) is ignored."""
+
     message: str = Field(min_length=1, max_length=8000)
     conversation_id: str | None = None
-    persona: str | None = None
-    skill: str | None = None
 
 
 @router.post("/api/chat")
 async def api_chat(payload: ChatRequest):
     engine = deps.engine
     user_text = payload.message.strip()
-    skill = get_skill(payload.skill)
-    persona = get_persona(skill.persona if skill else payload.persona)
+    style = style_for(user_text)
 
     cid = payload.conversation_id
     created = False
     if cid and conversations.head(cid) is None:
         cid = None
     if not cid:
-        cid = conversations.create(persona.id, user_text)
+        cid = conversations.create(user_text)
         created = True
 
     # What was said, which decides which addresses the visitor gave, and what
@@ -51,7 +50,7 @@ async def api_chat(payload: ChatRequest):
     history = [{"role": m["role"], "content": m["content"]} for m in messages]
     context = turns_from(messages, records)
     question_id = conversations.add_message(cid, "user", user_text)
-    conversations.touch(cid, persona.id)
+    conversations.touch(cid)
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex
@@ -67,16 +66,14 @@ async def api_chat(payload: ChatRequest):
                     "id": cid,
                     "title": convo["title"] if convo else "",
                     "created": created,
-                    "skill": skill.id if skill else None,
-                    "persona": persona.id,
                     "request_id": run_id,
                 },
             )
 
             trace = agent.Trace(run_id=run_id)
-            keeper = Keeper(cid, persona.id, trace, question_id)
+            keeper = Keeper(cid, trace, question_id, label=style.id)
             run = agent.run(
-                user_text, persona=persona, skill=skill, history=history, trace=trace,
+                user_text, style=style, history=history, trace=trace,
                 engine=engine, request_id=run_id, context=context, scope=cid,
             )
             try:

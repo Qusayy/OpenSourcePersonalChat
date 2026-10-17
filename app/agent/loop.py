@@ -21,7 +21,9 @@ import asyncio
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import cached_property
+from zoneinfo import ZoneInfo
 from typing import AsyncIterator, Awaitable, Callable
 
 from ..config import settings
@@ -30,11 +32,9 @@ from ..llm.usage import blank
 from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import CALL, CallContext, Rejection, ToolResult, available, fresh_for, untrusted
-from ..tools.grammar import args_ceiling, args_to_gbnf
 from .context import (
     RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
 )
-from .personas import Persona
 from .policy import call_key, refusal, users_words
 from .route import (
     URL_RE,
@@ -42,13 +42,13 @@ from .route import (
     ToolCall,
     decision_grammar,
     decision_limit,
-    fill_request,
     free_route,
     parse_action,
 )
-from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered, prompt_parts
+from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered
+from .style import Style, style_for
 from .trace import Step, Trace, pass_ms, total
-from .transcript import Transcript, system_for
+from .transcript import CUE_PLAIN, CUE_WITH_DATA, Transcript, sent_at, system_for
 from .verify import caption, note, scalars
 from .verify import check as check_figures
 
@@ -83,9 +83,8 @@ def what_happened(result: ToolResult) -> str:
 def run(
     message: str,
     *,
-    persona: Persona,
-    skill: Skill | None = None,
     history: list[dict],
+    style: Style | None = None,
     trace: Trace | None = None,
     engine: Engine | None = None,
     call_tool: ToolCaller | None = None,
@@ -95,6 +94,7 @@ def run(
     loop: bool | None = None,
     context: list[Turn] | None = None,
     scope: str | None = None,
+    now: datetime | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -120,6 +120,10 @@ def run(
     ``scope`` is the conversation the run belongs to: the one whose notes a
     note tool keeps and reads.
 
+    ``style`` is how the answer is written; left unset, it is read from the
+    message (``style.style_for``). ``now`` is when the message was sent, as
+    the model is told it; left unset, it is now, in the site's timezone.
+
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
     """
@@ -128,8 +132,7 @@ def run(
         trace.run_id = request_id
     return _Run(
         message=message,
-        persona=persona,
-        skill=skill,
+        style=style if style is not None else style_for(message),
         history=history,
         trace=trace,
         engine=engine if engine is not None else default_engine,
@@ -140,6 +143,7 @@ def run(
         loop=settings.agent_loop if loop is None else loop,
         turns=context,
         scope=scope,
+        now=now if now is not None else datetime.now(ZoneInfo(settings.timezone)),
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -149,8 +153,7 @@ def run(
 @dataclass
 class _Run:
     message: str
-    persona: Persona
-    skill: Skill | None
+    style: Style
     history: list[dict]
     trace: Trace
     engine: Engine
@@ -196,17 +199,14 @@ class _Run:
     cut: bool = False
     trim: dict | None = None
     trim_told: bool = False
-    # Set while the run holds the slot for every pass it makes, outside the
-    # loop: a skill whose inputs the model filled in.
-    holding: bool = False
     # The conversation the run belongs to, whose notes it may keep and read.
     scope: str | None = None
     # Set once the run has read text somebody other than the user wrote: a
     # page, an article, notes others kept. From then on it writes nothing the
     # model chose to write.
     tainted: bool = False
-    # What was sent to have them filled in, and what the model wrote.
-    filled: list[Part] | None = None
+    # When the message was sent, as the model is told it.
+    now: datetime | None = None
 
     def __post_init__(self) -> None:
         self.said = self.said or self.message
@@ -249,65 +249,55 @@ class _Run:
             if part.kind in ("data", "observation") for tool in part.tools if tool in REGISTRY
         )
         self.said, self.cut = self._cap()
-        try:
-            # What costs nothing comes first: a skill, a command, a pattern.
-            async for event in self._free():
-                yield event
-            # What is left is the model's to decide, where the persona has tools.
-            tools = available() if (self.persona.tools and not self.routed) else []
-            if tools:
-                async with aclosing(self._looping(offered(tools))) as events:
-                    async for event in events:
-                        yield event
-                return
-            for index, call in enumerate(self.calls):
-                if self.stop.is_set():
-                    break
-                # A run holding the slot lends it out while a tool is away.
-                acting = self._lookup(index, call) if self.holding else self._act(index, call)
-                async for event in acting:
-                    yield event
-            if self.stop.is_set():
-                yield self._stopped()
-                return
-            system, now = self._system(), self._prompt()
-            window = self._window(system, now, run=False)
-            if self._trimmed(window):
-                yield "trimmed", self.trim
-            self._sending(system, now)
-            async with aclosing(
-                self._answer(window.messages, parts=window.parts, held=self.holding)
-            ) as events:
+        # What costs nothing comes first: a command or a pattern.
+        async for event in self._free():
+            yield event
+        # What is left is the model's to decide.
+        tools = available() if (self.tools_enabled and not self.routed) else []
+        if tools:
+            async with aclosing(self._looping(offered(tools))) as events:
                 async for event in events:
                     yield event
-        finally:
-            if self.holding:
-                self.engine.give_slot(self.request_id)
+            return
+        for index, call in enumerate(self.calls):
+            if self.stop.is_set():
+                break
+            async for event in self._act(index, call):
+                yield event
+        if self.stop.is_set():
+            yield self._stopped()
+            return
+        system, prompt = self._system(), self._prompt()
+        window = self._window(system, prompt, run=False)
+        if self._trimmed(window):
+            yield "trimmed", self.trim
+        self._sending(system, prompt)
+        async with aclosing(self._answer(window.messages, parts=window.parts)) as events:
+            async for event in events:
+                yield event
 
     # ------------------------------------------------------------ the window --
 
     def _system(self) -> str:
-        """The system text of every pass of this run. A persona with tools
-        reads the same one whether the model chooses or something else did,
-        so a conversation keeps one system text from message to message."""
-        tools = available() if self.persona.tools and self.tools_enabled else []
-        return system_for(self.persona, offered(tools)) if tools else self.persona.system
+        """The system text of every pass of this run. It is the same whether
+        the model chooses or something else did, so a conversation keeps one
+        system text from message to message."""
+        return system_for(offered(available()) if self.tools_enabled else [])
 
     def _room(self, *, run: bool) -> int:
         """Tokens the prompt may take: the window, less the reply and the
         headroom above it, and less the room for a run's own additions where
         ``run`` says there is one."""
         cfg = self.engine.cfg
-        return cfg.n_ctx - self.persona.max_tokens - cfg.reply_headroom - (RUN_ROOM if run else 0)
+        return cfg.n_ctx - self.style.max_tokens - cfg.reply_headroom - (RUN_ROOM if run else 0)
 
     def _cap(self) -> tuple[str, bool]:
         """The message cut to what the window can give it beside the system
-        text, a summary of older turns and, for a persona with tools, the
-        room for a run, if it is longer. Counted only when it might be: no
-        message has more tokens than bytes."""
+        text, a summary of older turns and, where there are tools, the room
+        for a run, if it is longer. Counted only when it might be: no message
+        has more tokens than bytes."""
         system = self._system()
-        tools = system != self.persona.system
-        limit = self._room(run=tools) - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        limit = self._room(run=self.tools_enabled) - self.engine.count_tokens(system) - SUMMARY_TOKENS
         if len(self.message.encode("utf-8")) <= limit:
             return self.message, False
         return cap(self.message, max(1, limit), self.engine.count_tokens)
@@ -382,111 +372,22 @@ class _Run:
     # ------------------------------------------------------------ routing --
 
     async def _free(self) -> AsyncIterator[Event]:
-        """The choices that cost nothing. Sets ``routed`` if one of them was
-        made, or if there is no choosing to do at all."""
-        if self.skill is not None:
-            self.routed = True
-            values = self.skill.read(self.message)
-            closing = {
-                "id": "route", "kind": "route", "status": "ok",
-                "label": self.skill.name, "detail": "skill",
-                "glyph": self.skill.glyph, "tool": self.skill.id, "ms": 0,
-            }
-            if self._fillable(values):
-                # The slot is taken once for the fill, the lookups and the
-                # answer, so the answer is written on from what the fill read.
-                self.holding = True
-                async for event in self._take():
-                    yield event
-                if self.stop.is_set():
-                    return
-                # A pass is about to be made, so one is announced.
-                yield "step", {
-                    "id": "route", "kind": "route", "status": "running",
-                    "label": self.skill.name, "glyph": self.skill.glyph,
-                }
-                window = self._window(self._system(), self._fill_parts(), run=False)
-                if self._trimmed(window):
-                    yield "trimmed", self.trim
-                values, said = await self._fill(window.messages, values)
-                if self.stop.is_set():
-                    yield "step", {**closing, "status": "stopped", "ms": round(said.ms, 1)}
-                    return
-                closing.update(
-                    ms=round(said.ms, 1), tokens_in=said.prompt_tokens,
-                    tokens_out=said.completion_tokens,
-                )
-            self.calls = self.skill.calls(values)
-            self.trace.steps.append(Step(
-                "route", name=self.skill.id, via="skill",
-                input={"calls": [{"tool": c.name, "args": c.args} for c in self.calls]},
-            ))
-            yield "step", closing
-            return
+        """The choices that cost nothing: a command, a pattern, or a message
+        that needs no looking up at all. Sets ``routed`` if one of them was
+        made, or if there is no choosing to do."""
         if not self.tools_enabled:
             self.routed = True
             return
-
-        # A command works for every persona; a pattern only where the persona
-        # has tools.
-        call, tier = free_route(self.message, tools_enabled=self.persona.tools)
-        if call is not None:
-            self.routed = True
-            self.calls = [call]
-            self.trace.steps.append(Step(
-                "route", name=call.name, via=tier, input=call.args, output=call.note,
-            ))
-            yield "step", self._routed(call, tier, ms=0)
-
-    def _fillable(self, values: dict[str, str]) -> bool:
-        """Whether to ask the model for the inputs a visitor's skill did not
-        find in their message. Only where the skill has a pattern that missed:
-        the whole message is the one input of a skill without one. Never for
-        an address, which the model may not supply."""
-        missing = self.skill.missing(values)
-        return bool(
-            missing and self.skill.find is not None and self.said.strip()
-            and not all(arg.quoted for arg in missing)
-        )
-
-    def _fill_parts(self) -> list[Part]:
-        """The message, and the request for the skill's inputs after it."""
-        return [
-            Part("user", "question", self.said),
-            Part("user", "instruction", fill_request(self.skill.name, self.skill.inputs)),
-        ]
-
-    async def _fill(
-        self, messages: list[dict], values: dict[str, str]
-    ) -> tuple[dict[str, str], Completion]:
-        """One short pass for the skill's inputs, held to a grammar of them.
-
-        What it says is checked like a call: of the right kind, each one
-        there, and an address only if the user wrote it. If it holds, it is
-        what the skill runs with, and the answer is written on from it; if
-        not, the skill runs with what its pattern found, or the whole
-        message.
-        """
-        inputs = self.skill.inputs
-        said = await self.engine.complete_json(
-            messages, args_to_gbnf(inputs), args_ceiling(inputs),
-            request_id=self.request_id, seed=self.seed, held=True,
-        )
-        clean: dict[str, str] = {}
-        if said.parsed is None:
-            reasons: tuple[str, ...] = ("the reply was not a complete JSON object",)
-        else:
-            clean, rejection = check_inputs(self.skill, said.parsed, self.theirs)
-            reasons = rejection.reasons if rejection else ()
-        stopped = said.cancelled or self.stop.is_set()
-        error = "stopped" if stopped else (said.error or ("; ".join(reasons) or None))
-        self.trace.steps.append(self._passed(
-            "fill", said, name=self.skill.id, given={"text": self.said}, error=error,
+        call, tier = free_route(self.message)
+        if tier is None:
+            return
+        self.routed = True
+        self.calls = [call] if call is not None else []
+        self.trace.steps.append(Step(
+            "route", name=call.name if call else None, via=tier,
+            input=call.args if call else None, output=call.note if call else None,
         ))
-        if error is not None:
-            return values, said
-        self.filled = [*self._fill_parts(), Part("assistant", "action", said.raw)]
-        return clean, said
+        yield "step", self._routed(call, tier, ms=0)
 
     def _passed(
         self, kind: str, said: Completion, *, name: str | None, given: dict, error: str | None
@@ -652,7 +553,7 @@ class _Run:
             if self.stop.is_set():
                 yield self._stopped()
                 return
-            transcript.answer_cue(note, own)
+            transcript.answer_cue(note, own, style=self.style.cue)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
             async with aclosing(
                 self._answer(transcript.messages(), parts=transcript.parts(), held=True)
@@ -695,11 +596,9 @@ class _Run:
     def _transcript(self, tools: list) -> Transcript:
         """The run's one prompt, with as much of the conversation as leaves
         room for the run. What had to give for it is kept in ``trim``."""
-        window = self._window(
-            system_for(self.persona, tools), [Part("user", "question", self.said)], run=True
-        )
+        window = self._window(system_for(tools), self._message(), run=True)
         self._trimmed(window)
-        return Transcript.fitted(window.parts)
+        return Transcript.fitted(window.parts, own=2)
 
     async def _take(self) -> AsyncIterator[Event]:
         """Take the slot for the whole run, passing on the notices of its
@@ -900,15 +799,15 @@ class _Run:
         An address says where to look, not what to look for."""
         return " ".join(URL_RE.sub(" ", self.message).split())
 
+    def _message(self) -> list[Part]:
+        """This message as the model reads it: what was said, then when."""
+        return [Part("user", "question", self.said), sent_at(self.now)]
+
     def _prompt(self) -> list[Part]:
         """What this message is read as, after the conversation so far: the
         message, what was looked up for it and how to use that, as parts."""
-        question = Part("user", "question", self.said)
-        if self.skill is not None:
-            return [*(self.filled or ()), *prompt_parts(
-                self.skill, self.said, self.summaries, self.failures,
-                tuple(dict.fromkeys(self.found + self.lost)),
-            )]
+        message = self._message()
+        style = self.style.cue
         if self.summaries:
             # The tool output goes inside the user turn, not into a second
             # system message. A 1.5B model barely attends to a trailing system
@@ -917,31 +816,26 @@ class _Run:
             # card beside it shows today's temperature. Stated as part of the
             # question, it complies.
             facts = "\n".join(f"- {s}" for s in self.summaries)
-            parts = [question, Part(
+            parts = [*message, Part(
                 "user", "data", f"Live data, retrieved just now by a tool:\n{facts}",
                 tuple(dict.fromkeys(self.found)),
             )]
+            instruction = CUE_WITH_DATA
             if self.failures:
                 parts.append(Part(
                     "user", "failed",
                     "A lookup was also tried and did not work:\n" + did_not_work(self.failures),
                     tuple(dict.fromkeys(self.lost)),
                 ))
-            instruction = (
-                "Answer the question using only the data above. It is "
-                "current and correct. Do not say you lack real-time "
-                "access, and do not recalculate any figure."
-            )
-            if self.failures:
                 instruction += " " + SAY_SO
-            return [*parts, Part("user", "instruction", instruction)]
+            return [*parts, Part("user", "instruction", f"{instruction} {style}")]
         if self.failures:
-            return [question, Part(
+            return [*message, Part(
                 "user", "failed",
                 "A lookup was tried for this and did not work:\n" + did_not_work(self.failures),
                 tuple(dict.fromkeys(self.lost)),
-            ), Part("user", "instruction", SAY_SO)]
-        return [question]
+            ), Part("user", "instruction", f"{SAY_SO} {style}")]
+        return [*message, Part("user", "instruction", f"{CUE_PLAIN} {style}")]
 
     # ---------------------------------------------------------- the check --
 
@@ -992,7 +886,7 @@ class _Run:
         """The pass that writes the answer, from ``messages``. ``parts`` are
         the same prompt with what each piece is, so the answer can be checked
         against what was looked up for it."""
-        sampling = self.persona.sampling()
+        sampling = self.style.sampling(looked_up=bool(self.found))
         # Fitted to the window already. The engine's own fitting is kept as
         # the last guard: a run that added more than the room it was given.
         fitted, _, dropped = self.engine.fit_context(messages, sampling["max_tokens"])

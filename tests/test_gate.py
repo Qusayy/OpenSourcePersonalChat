@@ -89,7 +89,7 @@ class GateCase(unittest.TestCase):
         quick_gate(self)
         with_settings(self, gate="on", gate_verifier=verifier_for(CHAIN))
 
-        self.conversation = conversations.create("explainer", TITLE)
+        self.conversation = conversations.create(TITLE)
         # No `with`: the lifespan would open the real database and start
         # loading the model.
         self.client = TestClient(main.app)

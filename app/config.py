@@ -58,6 +58,9 @@ class Settings(BaseSettings):
         "Aurora/2.0 (+https://github.com/topics/llama-cpp; self-hosted llama.cpp chat)"
     )
     route_max_tokens: int = 96
+    # The zone the model is told a message was sent in ("Sent Sat 17 Oct
+    # 2026, 14:03 BST."), an IANA name.
+    timezone: str = "UTC"
 
     # the loop
     # Off, a message that reaches the model makes one choice of tool and then

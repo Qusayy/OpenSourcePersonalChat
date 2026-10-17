@@ -15,7 +15,6 @@ import hashlib
 import unittest
 
 try:
-    from app.agent.personas import get_persona
     from app.agent.route import decision_grammar
     from app.agent.skills import offered
     from app.agent.transcript import system_for
@@ -24,7 +23,7 @@ try:
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
-SYSTEM_SHA = "b114f20715e84358"
+SYSTEM_SHA = "5eff94be9cb23104"
 GRAMMAR_SHA = "7355a17fe12d36ae"
 MENU = [
     "calculator", "clock", "convert_units", "text_stats", "wikipedia", "weather",
@@ -45,7 +44,7 @@ class GoldenPromptTests(unittest.TestCase):
         self.assertEqual([choice.name for choice in self.menu], MENU)
 
     def test_the_system_text_is_the_one_pinned(self) -> None:
-        self.assertEqual(short_hash(system_for(get_persona("agent"), self.menu)), SYSTEM_SHA)
+        self.assertEqual(short_hash(system_for(self.menu)), SYSTEM_SHA)
 
     def test_the_choice_grammar_is_the_one_pinned(self) -> None:
         self.assertEqual(short_hash(decision_grammar(self.menu)), GRAMMAR_SHA)

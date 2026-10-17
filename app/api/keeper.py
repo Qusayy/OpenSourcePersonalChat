@@ -15,9 +15,12 @@ class Keeper:
     page answers by asking for the conversation list.
     """
 
-    def __init__(self, cid: str, persona_id: str, trace: agent.Trace, question_id: str) -> None:
+    def __init__(
+        self, cid: str, trace: agent.Trace, question_id: str, *, label: str | None = None
+    ) -> None:
         self.cid = cid
-        self.persona_id = persona_id
+        # What the answer's figures are filed under: the style it was written in.
+        self.label = label
         self.trace = trace
         self.question_id = question_id
         self.call_ids: list[str] = []
@@ -77,7 +80,7 @@ class Keeper:
             return
         runs.add_run(
             "chat",
-            label=self.persona_id,
+            label=self.label,
             prompt_tokens=usage.get("prompt_tokens"),
             gen_tokens=usage.get("completion_tokens"),
             ttft_ms=usage.get("ttft_ms"),

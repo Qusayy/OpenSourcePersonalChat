@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ..agent.personas import DEFAULT_PERSONA, persona_list
-from ..agent.skills import skill_list
 from ..config import settings
 from ..ops import telemetry
 from ..store import runs
@@ -50,13 +48,3 @@ async def api_tools():
         "enabled": settings.tools_enabled,
         "outbound": settings.allow_outbound,
     }
-
-
-@router.get("/api/skills")
-async def api_skills():
-    return {"skills": skill_list()}
-
-
-@router.get("/api/personas")
-async def api_personas():
-    return {"personas": persona_list(), "default": DEFAULT_PERSONA}

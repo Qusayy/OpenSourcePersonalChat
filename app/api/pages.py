@@ -12,8 +12,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
-from ..agent.personas import DEFAULT_PERSONA, persona_list
-from ..agent.skills import skill_list
 from ..ops import telemetry
 from ..store import conversations
 from ..tools.base import available as available_tools
@@ -36,9 +34,6 @@ def bootstrap() -> dict:
         "version": __version__,
         "info": deps.engine.info(),
         "system": telemetry.snapshot(),
-        "personas": persona_list(),
-        "defaultPersona": DEFAULT_PERSONA,
-        "skills": skill_list(),
         "tools": [t.as_dict() for t in available_tools()],
         "conversations": conversations.listing(),
         "bench": bench_static(),

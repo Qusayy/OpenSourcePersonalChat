@@ -3,7 +3,7 @@
 One JSON object per line in ``tasks.jsonl``, so a task can be added by hand and
 a change to one shows up as one line in a diff::
 
-    {"id": "pattern-weather", "category": "free-path", "persona": "agent",
+    {"id": "pattern-weather", "category": "free-path",
      "turns": ["weather in Lisbon?"],
      "tools": {"weather": "weather_lisbon.json"},
      "script": ["Light rain, 18 degrees."],
@@ -34,7 +34,7 @@ TASKS = Path(__file__).resolve().parent / "tasks.jsonl"
 # expectation is an expectation that silently never fails.
 EXPECTATIONS = {
     "route",                # {"tool": name or null, "via": tier, "args": {...}}; any part may be left out
-    "skill",                # the skill the run ran, whoever chose it; null for none
+    "skill",                # the skill the model chose and the run ran; null for none
     "calls",                # the tools called, in order
     "max_steps",            # at most this many tool calls
     "max_model_passes",     # at most this many passes through the model
@@ -45,8 +45,8 @@ EXPECTATIONS = {
     "answer_contains",      # each of these is in the answer, whatever its case
     "answer_not_contains",
 }
-FIELDS = {"id", "category", "persona", "skill", "turns", "tools", "script", "scripted_only",
-          "loop", "expect", "pending"}
+FIELDS = {"id", "category", "turns", "tools", "script", "scripted_only", "loop", "expect",
+          "pending"}
 
 
 @dataclass(frozen=True)
@@ -55,8 +55,6 @@ class Task:
     category: str
     # What the visitor sends, message by message. Expectations are about the last.
     turns: tuple[str, ...]
-    persona: str = "agent"
-    skill: str | None = None
     # tool -> fixture file, or a list of them in call order
     tools: dict[str, Any] = field(default_factory=dict)
     script: tuple[str, ...] | None = None
@@ -115,8 +113,6 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
             id=raw["id"],
             category=raw["category"],
             turns=tuple(raw["turns"]),
-            persona=raw.get("persona") or "agent",
-            skill=raw.get("skill"),
             tools=raw.get("tools") or {},
             script=tuple(raw["script"]) if raw.get("script") is not None else None,
             scripted_only=bool(raw.get("scripted_only")),

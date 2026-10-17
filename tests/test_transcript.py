@@ -13,8 +13,8 @@ import unittest
 
 try:
     from app.agent.context import merged
-    from app.agent.personas import get_persona
     from app.agent.transcript import (
+        SYSTEM,
         CUE_NOTHING_FOUND,
         CUE_PLAIN,
         CUE_WITH_DATA,
@@ -42,10 +42,10 @@ class SystemTextTests(unittest.TestCase):
     def setUp(self) -> None:
         support.with_settings(self, allow_outbound=True)
 
-    def test_it_is_the_personas_rules_then_how_to_choose_and_from_what(self) -> None:
-        persona, tools = get_persona("agent"), available()
-        text = system_for(persona, tools)
-        self.assertTrue(text.startswith(persona.system + "\n\nBefore you answer you may look things up"))
+    def test_it_is_who_the_model_is_then_how_to_choose_and_from_what(self) -> None:
+        tools = available()
+        text = system_for(tools)
+        self.assertTrue(text.startswith(SYSTEM + "\n\nBefore you answer you may look things up"))
         self.assertIn("Tools:\n" + tool_menu(tools) + "\n", text)
         self.assertIn('reply {"tool": "none"}. You are then asked for the answer.', text)
         self.assertIn('reply {"tool": "ask", "args": {"question": "..."}} with one short question.', text)
@@ -54,14 +54,12 @@ class SystemTextTests(unittest.TestCase):
         ))
 
     def test_it_is_the_same_characters_every_time(self) -> None:
-        persona = get_persona("agent")
-        self.assertEqual(system_for(persona, available()), system_for(persona, available()))
+        self.assertEqual(system_for(available()), system_for(available()))
 
     def test_it_changes_only_with_what_is_on_offer(self) -> None:
-        persona = get_persona("agent")
-        everything = system_for(persona, available())
+        everything = system_for(available())
         support.with_settings(self, allow_outbound=False)
-        local = system_for(persona, available())
+        local = system_for(available())
         self.assertNotEqual(everything, local)
         self.assertNotIn("- weather(", local)
         self.assertIn("- calculator(", local)

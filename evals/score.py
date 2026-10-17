@@ -51,12 +51,9 @@ def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
 
 
 def skill_of(turn: Turn) -> str | None:
-    """The skill a turn ran, whoever chose it: the visitor, by its button, or
-    the model, by the last choice it made that held. None for none."""
+    """The skill a turn ran: the last choice the model made that held. None
+    for none."""
     steps = turn.trace.steps
-    armed = next((s for s in steps if s.kind == "route" and s.via == "skill"), None)
-    if armed is not None:
-        return armed.name
     chose = [s.name for s in steps
              if s.model and s.kind in ("route", "decide", "repair") and s.ok and s.name in SKILLS]
     return chose[-1] if chose else None

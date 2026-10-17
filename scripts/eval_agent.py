@@ -38,7 +38,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import agent  # noqa: E402
 from app.agent.context import Turn  # noqa: E402
-from app.agent.personas import get_persona  # noqa: E402
 from app.agent.route import decision_grammar, decision_limit  # noqa: E402
 from app.agent.transcript import Transcript, system_for  # noqa: E402
 from app.config import settings  # noqa: E402
@@ -71,7 +70,7 @@ async def probe_routing(engine, seed: int | None) -> dict:
     """
     with fixtures.recorded({}):
         tools = available()
-        system = system_for(get_persona("agent"), tools)
+        system = system_for(tools)
         messages = Transcript(system, [], "Do I need a coat in Paris today?").messages()
         grammar, limit = decision_grammar(tools), decision_limit(tools)
     out = {}
@@ -89,14 +88,13 @@ async def probe_routing(engine, seed: int | None) -> dict:
 
 
 # A conversation of three turns that no pattern answers, so every turn is the
-# model's, played once with a persona that never looks anything up and once
-# with the one that can.
+# model's, played once with the tools off and once with them on.
 PROBE_TURNS = (
     "Give me one fact about octopuses, in a sentence.",
     "And one about their eyes?",
     "Which of those two surprised scientists more?",
 )
-PROBE_PERSONAS = ("explainer", "agent")
+PROBE_RUNS = (("off", False), ("on", True))
 
 
 async def probe_cache(engine, seed: int | None) -> list[dict]:
@@ -134,15 +132,15 @@ async def probe_cache(engine, seed: int | None) -> list[dict]:
     engine.stream_chat = recording
     try:
         with fixtures.recorded({}):
-            for persona in PROBE_PERSONAS:
+            for label, tools_on in PROBE_RUNS:
                 history: list[dict] = []
                 sent: list[Turn] = []
                 for turn, text in enumerate(PROBE_TURNS, start=1):
-                    current.update(persona=persona, turn=turn)
+                    current.update(tools=label, turn=turn)
                     trace = agent.Trace()
                     async for _ in agent.run(
-                        text, persona=get_persona(persona), history=list(history), trace=trace,
-                        engine=engine, tools_enabled=True, seed=seed, context=list(sent),
+                        text, history=list(history), trace=trace,
+                        engine=engine, tools_enabled=tools_on, seed=seed, context=list(sent),
                     ):
                         pass
                     # Each turn is read with the ones before it, as the site
@@ -164,10 +162,10 @@ def show_probe(rows: list[dict], file=None) -> None:
     def cell(value) -> str:
         return "-" if value is None else str(value)
 
-    print(f"\n{'persona':<10} {'turn':>4} {'pass':<7} {'counted':>8} {'server':>7} "
+    print(f"\n{'tools':<10} {'turn':>4} {'pass':<7} {'counted':>8} {'server':>7} "
           f"{'read':>6} {'cached':>7} {'first token s':>14}", file=file)
     for r in rows:
-        print(f"{r['persona']:<10} {r['turn']:>4} {r['pass']:<7} {cell(r['counted']):>8} "
+        print(f"{r['tools']:<10} {r['turn']:>4} {r['pass']:<7} {cell(r['counted']):>8} "
               f"{cell(r['server']):>7} {cell(r['read']):>6} {cell(r['cached']):>7} "
               f"{cell(r['first_token_s']):>14}", file=file)
     if all(r["read"] is None for r in rows):

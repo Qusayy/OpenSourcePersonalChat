@@ -11,7 +11,6 @@ from pathlib import Path
 
 try:
     from app.agent import transcript
-    from app.agent.personas import get_persona
     from app.agent.skills import SKILLS, offered
     from app.agent.transcript import system_for
     from app.tools.base import REGISTRY, available
@@ -36,10 +35,10 @@ class WordingFileTests(unittest.TestCase):
 
     def test_lines_that_name_a_text_replace_it_and_the_rest_are_the_rules(self) -> None:
         wording = load(self.write(
-            "@persona agent: Be brief.\n@tool clock: The time.\n@skill compare: Two things.\n\n"
+            "@system: Be brief.\n@tool clock: The time.\n@skill compare: Two things.\n\n"
             'Choose.\nTools:\n{menu}\nReply {"tool": "none"} when no tool is needed.\n\n'
         ))
-        self.assertEqual(wording.personas, {"agent": "Be brief."})
+        self.assertEqual(wording.system, "Be brief.")
         self.assertEqual(wording.tools, {"clock": "The time."})
         self.assertEqual(wording.skills, {"compare": "Two things."})
         self.assertEqual(
@@ -48,7 +47,7 @@ class WordingFileTests(unittest.TestCase):
         )
 
     def test_a_text_can_be_emptied(self) -> None:
-        self.assertEqual(load(self.write("@persona agent:\n")).personas, {"agent": ""})
+        self.assertEqual(load(self.write("@system:\n")).system, "")
 
     def test_a_file_of_overrides_alone_keeps_the_rules(self) -> None:
         self.assertIsNone(load(self.write("@tool clock: The time.\n")).rules)
@@ -69,22 +68,22 @@ class AppliedTests(unittest.TestCase):
         support.with_settings(self, allow_outbound=True)
 
     def test_inside_the_model_reads_the_new_texts_and_after_it_the_old(self) -> None:
-        before = system_for(get_persona("agent"), offered(available()))
+        before = system_for(offered(available()))
         wording = load(RULES / "default-none.txt")
         with applied(wording):
-            inside = system_for(get_persona("agent"), offered(available()))
-            self.assertTrue(inside.startswith(get_persona("agent").system + "\n\nMost messages need no tool."))
+            inside = system_for(offered(available()))
+            self.assertTrue(inside.startswith(transcript.SYSTEM + "\n\nMost messages need no tool."))
             self.assertIn("- clock(timezone_name?): " + wording.tools["clock"], inside)
             self.assertIn('reply {"tool": "none"}', inside)
-        self.assertEqual(system_for(get_persona("agent"), offered(available())), before)
+        self.assertEqual(system_for(offered(available())), before)
         self.assertEqual(transcript.LOOP_RULES.count("{menu}"), 1)
 
-    def test_a_persona_and_a_skill_are_replaced_and_put_back(self) -> None:
+    def test_the_system_text_is_replaced_and_put_back(self) -> None:
         wording = load(RULES / "old-framing.txt")
-        system = get_persona("agent").system
+        system = transcript.SYSTEM
         with applied(wording):
-            self.assertEqual(get_persona("agent").system, "")
-        self.assertEqual(get_persona("agent").system, system)
+            self.assertEqual(transcript.SYSTEM, "")
+        self.assertEqual(transcript.SYSTEM, system)
 
     def test_a_name_that_is_not_there_is_refused_before_anything_changes(self) -> None:
         folder = tempfile.TemporaryDirectory()
@@ -99,7 +98,7 @@ class AppliedTests(unittest.TestCase):
         for path in sorted(RULES.glob("*.txt")):
             with self.subTest(path.name), applied(load(path)):
                 menu = tool_menu(offered(available()))
-                text = system_for(get_persona("agent"), offered(available()))
+                text = system_for(offered(available()))
                 self.assertIn(menu, text)
                 for tool in available():
                     self.assertEqual(text.count(f"- {tool.name}("), 1)

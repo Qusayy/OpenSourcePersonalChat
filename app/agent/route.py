@@ -5,11 +5,12 @@ Ordered cheapest-first, because a routing pass on 2 vCPU costs seconds:
 1. **Slash command** — the user said exactly what they wanted. Free, certain.
 2. **Heuristics** — a pasted URL, an arithmetic expression, "convert 100 km to
    miles", "weather in Paris". Regex, free, and far more reliable than a 1.5B
-   model's judgement.
-3. **Grammar pass** — only when the persona enables tools and nothing above
-   fired. Constrained by GBNF so the output cannot be malformed. The pass
-   itself is made by whoever is running the message, from the run's own
-   transcript; what is here is what it is held to and how its reply is read.
+   model's judgement. A greeting or a thank-you is caught here too, as a
+   message that needs nothing looked up.
+3. **Grammar pass** — when nothing above fired. Constrained by GBNF so the
+   output cannot be malformed. The pass itself is made by whoever is running
+   the message, from the run's own transcript; what is here is what it is
+   held to and how its reply is read.
 
 Anything the heuristics catch is a model call that never happens, which on this
 hardware is the difference between an instant answer and a five-second wait.
@@ -125,7 +126,19 @@ def _args_from_free_text(tool_name: str, rest: str) -> dict | None:
 # ------------------------------------------------------------- heuristics ---
 
 _STOP_WIKI = re.compile(
-    r"\b(best|how|why|should|could|would|difference|better|worse|opinion|think)\b", re.I
+    r"\b(best|how|why|should|could|would|difference|better|worse|opinion|think|"
+    r"latest|current|currently|today|tonight|now|news|headlines|price|prices|score|"
+    r"weather|happening)\b", re.I
+)
+
+# A message that needs nothing looked up and is answered as said: a greeting,
+# thanks, a goodbye. Whole, so that "thanks, now what is 2+2" is not one.
+SMALL_TALK = re.compile(
+    r"^(?:hi|hello|hey|hiya|yo|good (?:morning|afternoon|evening|night)|thanks?(?: you)?|"
+    r"thank you(?: so much| very much)?|cheers|ok(?:ay)?|cool|great|nice|bye|goodbye|"
+    r"see you|how are you(?: doing)?|what'?s up)(?:\s+(?:there|again|mate|friend))?"
+    r"[\s!.?,:)]*$",
+    re.I,
 )
 
 
@@ -229,19 +242,6 @@ def heuristic(text: str) -> ToolCall | None:
 # Whether the model is offered the choice of asking the user a question.
 ASK = True
 
-# What a pass that fills in a skill's inputs is asked, after the message.
-FILL = (
-    "The user chose “{name}” for the message above. Before the answer, reply with "
-    "one JSON object and nothing else, giving what it needs from that message:\n{fields}"
-)
-
-
-def fill_request(name: str, inputs) -> str:
-    """The line that asks for a skill's inputs: what the skill is called, and
-    each input with what it is."""
-    fields = "\n".join(f"- {arg.name}: {arg.description}" for arg in inputs)
-    return FILL.format(name=name, fields=fields)
-
 
 @dataclass
 class Action:
@@ -268,20 +268,18 @@ def ask_reply(question: str) -> str:
     return json.dumps({"tool": "ask", "args": {"question": question}}, ensure_ascii=False)
 
 
-def free_route(text: str, *, tools_enabled: bool) -> tuple[ToolCall | None, str | None]:
-    """The two tiers that cost nothing. Returns ``(call, tier)``.
-
-    A command is honoured for everyone. A pattern is only tried where tools
-    are on, which is the persona's choice.
-    """
+def free_route(text: str) -> tuple[ToolCall | None, str | None]:
+    """The tiers that cost nothing. Returns ``(call, tier)``: a call and the
+    tier that found it; no call and ``"chat"`` for a message that needs
+    nothing looked up; or ``(None, None)``, left for the model to decide."""
     call, _ = parse_slash(text)
     if call is not None:
         return call, "slash"
-    if not tools_enabled:
-        return None, None
     call = heuristic(text)
     if call is not None:
         return call, "heuristic"
+    if SMALL_TALK.match(text.strip()):
+        return None, "chat"
     return None, None
 
 

@@ -19,6 +19,7 @@ try:
     from fastapi.testclient import TestClient
 
     from app import main
+    from app.agent.transcript import SYSTEM
     from app.api import frontend, pages
     from app.llm import Engine
     from app.store import db
@@ -195,21 +196,20 @@ class AppRoutingTests(unittest.TestCase):
         data = embedded(self.client.get("/").text)
         self.assertEqual(
             set(data),
-            {"version", "info", "system", "personas", "defaultPersona", "skills", "tools", "conversations", "bench"},
+            {"version", "info", "system", "tools", "conversations", "bench"},
         )
         self.assertEqual(set(data["bench"]), {"cases", "reference", "budget", "larger", "latest"})
         # The dev server's page asks for the same thing over the API.
         api = self.client.get("/api/bootstrap").json()
         self.assertEqual(set(api), set(data))
-        for key in ("version", "personas", "defaultPersona", "skills", "tools", "conversations"):
+        for key in ("version", "tools", "conversations"):
             with self.subTest(key=key):
                 self.assertEqual(api[key], data[key])
 
     def test_the_bootstrap_carries_no_prompts_and_no_paths(self) -> None:
         text = self.client.get("/").text
-        data = embedded(text)
-        for persona in data["personas"]:
-            self.assertEqual(set(persona), {"id", "name", "blurb"})
+        embedded(text)
+        self.assertNotIn(SYSTEM, text)
         self.assertNotIn(str(REPO), text)
         self.assertNotIn(str(REPO).replace("\\", "\\\\"), text)
         self.assertNotIn(".gguf", text)

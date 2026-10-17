@@ -25,13 +25,25 @@ That only holds while the beginning never changes, by a single character. So:
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from ..chatml import render_chatml
 from ..tools.base import Tool
 from ..tools.grammar import tool_menu
 from .context import Part, merged
-from .personas import Persona
 from .skills import SAY_SO
+
+# Who the model is, at the top of every pass of every run. With the tools on
+# it is followed by the rules for choosing them.
+SYSTEM = (
+    "You are an assistant connected to live tools. Data supplied to you was fetched "
+    "seconds ago and is correct — state it as fact. Never claim you lack real-time "
+    "access, and never invent a figure no tool returned."
+)
+# The same, for a site that runs with its tools turned off.
+SYSTEM_WITHOUT_TOOLS = (
+    "You are a helpful assistant. Answer accurately, and say plainly when you do not know."
+)
 
 # What the model is told about choosing, once, at the top of every pass of a
 # run. The menu goes in the middle. Braces are doubled for `format`.
@@ -63,11 +75,21 @@ _OUR_TAGS = re.compile(r"<\s*/?\s*data\b(?:[^<>\n]{0,80}>)?", re.I)
 _CONTROL = re.compile(r"<\|[^|>\n]{0,40}\|>")
 
 
-def system_for(persona: Persona, tools: list[Tool]) -> str:
-    """The system text of a looping run: the persona's rules, then how to
-    choose and what there is to choose from. The same characters every time
-    the same tools are on offer."""
-    return persona.system + "\n\n" + LOOP_RULES.format(menu=tool_menu(tools))
+def system_for(tools: list[Tool]) -> str:
+    """The system text of every run: who the model is, then how to choose and
+    what there is to choose from. The same characters every time the same
+    tools are on offer; without any, who the model is and nothing more."""
+    if not tools:
+        return SYSTEM_WITHOUT_TOOLS
+    return SYSTEM + "\n\n" + LOOP_RULES.format(menu=tool_menu(tools))
+
+
+def sent_at(when: datetime) -> Part:
+    """When the message was sent, said after it, so that "today", "latest" and
+    "this year" mean the date they mean. It is in the message's own turn and
+    not in the system text, which may never change."""
+    zone = when.tzname() or "UTC"
+    return Part("user", "now", f"(Sent {when:%a %d %b %Y, %H:%M} {zone}.)")
 
 
 def data(tool: str, text: str, *, ok: bool = True) -> str:
@@ -100,18 +122,18 @@ class Transcript:
         self._begin(parts)
 
     @classmethod
-    def fitted(cls, parts: list[Part]) -> "Transcript":
+    def fitted(cls, parts: list[Part], own: int = 1) -> "Transcript":
         """A transcript that begins with a prompt already fitted to the
         window: the system text, the conversation so far, and last of all
-        this message."""
+        this message, which is the last ``own`` parts."""
         transcript = cls.__new__(cls)
-        transcript._begin(list(parts))
+        transcript._begin(list(parts), own)
         return transcript
 
-    def _begin(self, parts: list[Part]) -> None:
+    def _begin(self, parts: list[Part], own: int = 1) -> None:
         self._parts = parts
         # Where this message, and so this run's own part, begins.
-        self._start = len(parts) - 1
+        self._start = len(parts) - own
         self._found = 0
         self._failed = 0
 
@@ -138,17 +160,22 @@ class Transcript:
             "Reply with one JSON object only."
         )))
 
-    def answer_cue(self, note: str | None = None, own: str | None = None) -> None:
+    def answer_cue(
+        self, note: str | None = None, own: str | None = None, style: str | None = None
+    ) -> None:
         """Ask for the answer. ``note`` is one plain line about how the
         looking-up ended, when it did not end by the model's own choice.
         ``own`` is how a skill the model chose asks for its answer, in place
-        of the usual line, where something was found."""
+        of the usual line, where something was found. ``style`` is the line
+        on the shape of the answer, where a skill has not set one."""
         if self._found:
             cue = (own or CUE_WITH_DATA) + (" " + SAY_SO if self._failed else "")
         elif self._failed:
             cue = CUE_NOTHING_FOUND
         else:
             cue = CUE_PLAIN
+        if style and not (own and self._found):
+            cue += " " + style
         self._add(Part("user", "cue", cue + (" " + note if note else "")))
 
     # -- reading it --------------------------------------------------------

@@ -267,11 +267,12 @@ def memory_budget(n_ctx: int) -> list[dict]:
     """An estimate of what a loaded model takes, part by part.
 
     Arithmetic, not a measurement: the weights are the file's size, the KV
-    cache follows from the model's shape (Qwen2.5-1.5B: 28 layers, 2 KV heads,
-    128 head dim, f16 => 28 KiB per token), and the last two are round figures.
-    The pages label it as an estimate and print the measured resident size of
-    the process beside it."""
-    kv_mb = round(28 * 2 * 128 * 2 * 2 * n_ctx / (1024 * 1024))
+    cache follows from the model's shape (``AURORA_KV_KIB_PER_TOKEN``; for
+    Qwen2.5-1.5B, 28 layers, 2 KV heads, 128 head dim, f16 => 28 KiB per
+    token), and the last two are round figures. The pages label it as an
+    estimate and print the measured resident size of the process beside it."""
+    per_token = getattr(engine.cfg, "kv_kib_per_token", 28)
+    kv_mb = round(per_token * 1024 * n_ctx / (1024 * 1024))
     weights, on_disk = weights_mb()
     return [
         {
@@ -280,7 +281,7 @@ def memory_budget(n_ctx: int) -> list[dict]:
             "note": "read once per token" if on_disk else "typical size; no model file on this server",
             "on_disk": on_disk,
         },
-        {"name": f"KV cache @ {n_ctx} ctx (f16)", "mb": kv_mb, "note": "28 KiB per token"},
+        {"name": f"KV cache @ {n_ctx} ctx (f16)", "mb": kv_mb, "note": f"{per_token} KiB per token"},
         {"name": "Compute buffers", "mb": 200, "note": "scales with n_batch"},
         {"name": "Python + FastAPI + uvicorn", "mb": 120, "note": "one worker"},
     ]

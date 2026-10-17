@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # there instead, which deploy/aurora-llm.service runs from this same file.
     llm_url: str = ""
     n_ctx: int = 4096
+    # What the KV cache holds per token of context, in KiB, for the memory
+    # estimate on the Benchmark page: Qwen2.5-1.5B's 28 (28 layers, 2 KV
+    # heads of 128, f16). LFM2.5-1.2B keeps a cache in 6 of its 16 layers,
+    # 8 KV heads of 64: 12.
+    kv_kib_per_token: int = 28
     # 0 is every CPU this process may use, measured at startup (affinity and
     # cgroup quota). A number pins it. A server resized from 2 cores to 4 kept
     # an old "2" and ran on half the machine; the measured default cannot.

@@ -33,7 +33,7 @@ from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import CALL, CallContext, Rejection, ToolResult, available, fresh_for, untrusted
 from .context import (
-    RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
+    SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history,
 )
 from .policy import call_key, refusal, users_words
 from .route import (
@@ -211,6 +211,12 @@ class _Run:
     def __post_init__(self) -> None:
         self.said = self.said or self.message
 
+    @property
+    def run_room(self) -> int:
+        """What the run may add to its prompt: its choices and what its tools
+        return. More in a larger window."""
+        return run_room(self.engine.cfg.n_ctx)
+
     @cached_property
     def theirs(self) -> list[str]:
         """What the user has written, this message last: where an address the
@@ -289,7 +295,7 @@ class _Run:
         headroom above it, and less the room for a run's own additions where
         ``run`` says there is one."""
         cfg = self.engine.cfg
-        return cfg.n_ctx - self.style.max_tokens - cfg.reply_headroom - (RUN_ROOM if run else 0)
+        return cfg.n_ctx - self.style.max_tokens - cfg.reply_headroom - (self.run_room if run else 0)
 
     def _cap(self) -> tuple[str, bool]:
         """The message cut to what the window can give it beside the system
@@ -536,7 +542,7 @@ class _Run:
                 self.calls.append(action.call)
                 # An even share of the room the run has left, so that the
                 # last lookup it may make has as much to read as the first.
-                left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+                left = self.run_room - (estimate(transcript.rendered()) - start)
                 share = max(LEAST_SHARE, left // (1 if single else self.max_steps - steps))
                 async for event in self._lookup(steps, action.call, budget=share):
                     yield event
@@ -581,7 +587,7 @@ class _Run:
                 continue
             made.add(key)
             self.calls.append(call)
-            left = RUN_ROOM - (estimate(transcript.rendered()) - start)
+            left = self.run_room - (estimate(transcript.rendered()) - start)
             lookups = len(skill.steps) if single else max(1, self.max_steps - steps)
             share = max(LEAST_SHARE, left // lookups)
             async for event in self._lookup(steps, call, budget=share):

@@ -43,8 +43,16 @@ TURN_ROOM = 800
 # Tokens kept free, when a looping run's conversation is fitted to the window,
 # for what the run itself will add: its choices and what its tools return.
 # With that room left at the start, the beginning of the prompt does not have
-# to change part-way through the run.
+# to change part-way through the run. The least of it; a larger window gives a
+# run more (``run_room``), so a search can be read at length.
 RUN_ROOM = 600
+RUN_ROOM_MOST = 2000
+
+
+def run_room(n_ctx: int) -> int:
+    """The room a run is given in a window of ``n_ctx`` tokens: an eighth of
+    it, and never less than ``RUN_ROOM`` or more than ``RUN_ROOM_MOST``."""
+    return max(RUN_ROOM, min(RUN_ROOM_MOST, n_ctx // 8))
 # Old turns are dropped in blocks of about this many tokens, never fewer.
 TRIM_STEP = 600
 

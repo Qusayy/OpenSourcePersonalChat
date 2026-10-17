@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from .. import agent
 from ..agent.context import turns_from
-from ..agent.style import style_for
 from ..store import conversations, projects
 from ..tools import REGISTRY
 from ..tools.results import links_of
@@ -54,7 +53,6 @@ async def api_chat(payload: ChatRequest):
     conversations.touch(cid)
     links = last_links(cid)
     project = projects.manifest(cid)
-    style = style_for(user_text, project=bool(project))
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex
@@ -75,9 +73,9 @@ async def api_chat(payload: ChatRequest):
             )
 
             trace = agent.Trace(run_id=run_id)
-            keeper = Keeper(cid, trace, question_id, label=style.id)
+            keeper = Keeper(cid, trace, question_id)
             run = agent.run(
-                user_text, style=style, history=history, trace=trace,
+                user_text, history=history, trace=trace,
                 engine=engine, request_id=run_id, context=context, scope=cid, links=links,
                 project=project,
             )

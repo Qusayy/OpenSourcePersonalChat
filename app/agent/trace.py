@@ -60,6 +60,9 @@ class Trace:
 
     # The run's name: what it is stopped by, and what its steps are filed under.
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # How the answer was written: "answer", or "files" where the model chose
+    # to write a project.
+    style: str = "answer"
     # Everything the run did, in order.
     steps: list[Step] = field(default_factory=list)
     # Every tool call that finished, in order, with what it returned.

@@ -1,4 +1,4 @@
-"""How an answer is written: read from the message, never asked of the model.
+"""How an answer is written: shaped by the model, sampled and held here.
 
 Needs the app's own requirements; without them the whole module is skipped.
 """
@@ -10,39 +10,28 @@ from datetime import datetime, timedelta, timezone
 
 try:
     from app.agent.context import Part
-    from app.agent.style import LOOKED_UP_TEMPERATURE, STYLES, style_for
-    from app.agent.transcript import Transcript, sent_at, system_for
+    from app.agent.style import LOOKED_UP_TEMPERATURE, STYLES
+    from app.agent.transcript import SHAPE, Transcript, sent_at, system_for
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
 
 class StyleTests(unittest.TestCase):
-    def test_each_message_is_answered_in_the_shape_it_asks_for(self) -> None:
-        for message, style in (
-            ("how do I reverse a list in python", "code"),
-            ("write a function that sorts a list", "code"),
-            ("fix this: TypeError: 'NoneType' object is not subscriptable", "code"),
-            ("```js\nconsole.log(1)\n``` why does this print twice?", "code"),
-            ("build me a small flask todo app", "project"),
-            ("make a website for my bakery", "project"),
-            ("give me 5 ideas for a birthday party", "list"),
-            ("suggest names for my boat", "list"),
-            ("what is the capital of France", "concise"),
-            ("who won the 2022 world cup", "concise"),
-            ("briefly, what is DNS?", "concise"),
-            ("hi", "concise"),
-            ("why is the sky blue", "explain"),
-            ("explain quantum entanglement to me", "explain"),
-            ("how does a hash map work", "explain"),
-        ):
-            with self.subTest(message):
-                self.assertEqual(style_for(message).id, style)
+    def test_nothing_here_reads_the_message(self) -> None:
+        # The model shapes its own answer from the system text; the one
+        # choice of style it makes is to write files.
+        import app.agent.style as style
 
-    def test_words_that_only_look_like_code_do_not_make_it_code(self) -> None:
-        for message in ("how to go to Paris by train", "I love listening to Swift",
-                        "explain the class system in India"):
-            with self.subTest(message):
-                self.assertNotEqual(style_for(message).id, "code")
+        self.assertFalse(hasattr(style, "style_for"))
+        self.assertEqual(set(STYLES), {"answer", "files"})
+        self.assertEqual(STYLES["answer"].cue, "")
+        self.assertIn(SHAPE, system_for([]))
+
+    def test_files_are_held_to_their_grammar_and_nothing_else_is(self) -> None:
+        from app.projects.parse import GRAMMAR
+
+        self.assertEqual(STYLES["files"].grammar, GRAMMAR)
+        self.assertIsNone(STYLES["answer"].grammar)
 
     def test_an_answer_from_a_lookup_is_held_cooler_whatever_its_style(self) -> None:
         for style in STYLES.values():
@@ -54,7 +43,8 @@ class StyleTests(unittest.TestCase):
     def test_the_style_never_reaches_the_system_text(self) -> None:
         for style in STYLES.values():
             with self.subTest(style.id):
-                self.assertNotIn(style.cue, system_for([]))
+                if style.cue:
+                    self.assertNotIn(style.cue, system_for([]))
 
 
 class SentTests(unittest.TestCase):

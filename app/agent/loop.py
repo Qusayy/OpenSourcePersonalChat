@@ -18,7 +18,6 @@ Two things this module deliberately does not do:
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -43,23 +42,20 @@ from .context import (
 )
 from .policy import call_key, refusal, users_words
 from .route import (
-    NEWS,
     URL_RE,
     Action,
     ToolCall,
     decision_grammar,
     decision_limit,
     free_route,
-    news_topic,
     parse_action,
     program_of,
-    search_query,
 )
 from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered
-from .style import Style, style_for
+from .style import DEFAULT_STYLE, STYLES, Style
 from .trace import Step, Trace, pass_ms, total
 from .transcript import CUE_PLAIN, CUE_WITH_DATA, Transcript, sent_at, system_for
-from .verify import caption, denies_access, note, scalars
+from .verify import caption, note, scalars
 from .verify import check as check_figures
 
 Event = tuple[str, dict]
@@ -78,9 +74,10 @@ ALREADY_LOOKED_UP = (
 # left: a line.
 LEAST_SHARE = 40
 
-# How much of an answer is watched for a claim that it cannot look anything
-# up, in characters. Such a claim comes first; past this, the answer stands.
-WATCHED = 400
+
+def _with(instruction: str, style: str) -> str:
+    """An instruction and the line on the shape of the answer, where there is one."""
+    return f"{instruction} {style}" if style else instruction
 
 
 def what_happened(result: ToolResult) -> str:
@@ -142,9 +139,10 @@ def run(
     ``project`` is the conversation's project as it stands, file by file
     (``store.projects.manifest``): what the model is told is there.
 
-    ``style`` is how the answer is written; left unset, it is read from the
-    message (``style.style_for``). ``now`` is when the message was sent, as
-    the model is told it; left unset, it is now, in the site's timezone.
+    ``style`` is how the answer is written; left unset, it is an answer,
+    and the model may choose to write files instead. ``now`` is when the
+    message was sent, as the model is told it; left unset, it is now, in the
+    site's timezone.
 
     The last event is always ``run``: how it ended, how many steps and passes
     it took, and what they cost together.
@@ -154,7 +152,7 @@ def run(
         trace.run_id = request_id
     return _Run(
         message=message,
-        style=style if style is not None else style_for(message),
+        style=style if style is not None else STYLES[DEFAULT_STYLE],
         history=history,
         trace=trace,
         engine=engine if engine is not None else default_engine,
@@ -192,7 +190,7 @@ class _Run:
     max_decisions: int = 3
     max_seconds: float = 90.0
     # Set once the tools for this message have been chosen without the model:
-    # by a skill, a command or a pattern.
+    # by the user's own command.
     routed: bool = False
     # What the last tool call came to; None if it was stopped. And what the
     # model reads of it, when it worked.
@@ -231,9 +229,6 @@ class _Run:
     tainted: bool = False
     # When the message was sent, as the model is told it.
     now: datetime | None = None
-    # What an answer wrote before it was taken back for saying it could not
-    # look something up; None while no answer has been.
-    retracted: str | None = None
     # The conversation's project as it stands: each file's path and size.
     project: list[dict] = field(default_factory=list)
     # The last list of results the model was shown: the pages it may ask to
@@ -329,12 +324,22 @@ class _Run:
         system text from message to message."""
         return system_for(offered(available()) if self.tools_enabled else [])
 
+    def _reply_room(self, run: bool) -> int:
+        """The room kept for the reply. A run the model chooses in may end in
+        files, which take the most; the window is fitted for them before the
+        choice is made, as it cannot be fitted again after, up to a quarter
+        of the window. Past that the engine's own fitting makes the room."""
+        room = self.style.max_tokens
+        if run and self.style.id == DEFAULT_STYLE:
+            room = max(room, min(STYLES["files"].max_tokens, self.engine.cfg.n_ctx // 4))
+        return room
+
     def _room(self, *, run: bool) -> int:
         """Tokens the prompt may take: the window, less the reply and the
         headroom above it, and less the room for a run's own additions where
         ``run`` says there is one."""
         cfg = self.engine.cfg
-        return cfg.n_ctx - self.style.max_tokens - cfg.reply_headroom - (self.run_room if run else 0)
+        return cfg.n_ctx - self._reply_room(run) - cfg.reply_headroom - (self.run_room if run else 0)
 
     def _cap(self) -> tuple[str, bool]:
         """The message cut to what the window can give it beside the system
@@ -468,9 +473,12 @@ class _Run:
     async def _choose(
         self, kind: str, messages: list[dict], tools: list, given: dict, *, held: bool = False
     ) -> tuple[Action, Completion]:
-        """One pass that chooses, read as an action and written down whole."""
+        """One pass that chooses, read as an action and written down whole.
+        A tool for a project is on the menu but not in the grammar of a
+        conversation that has none."""
+        choices = [c for c in tools if self.project or not getattr(c, "project", False)]
         said = await self.engine.complete_json(
-            messages, decision_grammar(tools), decision_limit(tools),
+            messages, decision_grammar(choices), decision_limit(choices),
             request_id=self.request_id, seed=self.seed, held=held,
         )
         action = parse_action(said, {c.name: c.skill for c in tools if isinstance(c, Offer)})
@@ -571,6 +579,10 @@ class _Run:
                                                            steps, start, single):
                         yield event
                     break  # a skill's lookups are all it looks up
+                if action.kind == "files":
+                    # The answer is the project, written as files.
+                    self.style = STYLES["files"]
+                    break
                 if action.kind != "tool":
                     break  # the model has what it needs
                 key = call_key(action.call)
@@ -606,14 +618,10 @@ class _Run:
             transcript.answer_cue(note, own, style=self.style.cue)
             self._sending(transcript.parts()[0].content, transcript.run_parts())
             async with aclosing(self._answer(
-                transcript.messages(), parts=transcript.parts(), held=True, watch=self._watch(),
+                transcript.messages(), parts=transcript.parts(), held=True,
             )) as events:
                 async for event in events:
                     yield event
-            if self.retracted is not None and not self.stop.is_set():
-                async with aclosing(self._guard(transcript, steps, start)) as events:
-                    async for event in events:
-                        yield event
         finally:
             # On every way out, however it ends. If a pass of this run is
             # still inside the model the slot goes back when it leaves.
@@ -666,52 +674,6 @@ class _Run:
             "ms": round(said.ms, 1), "tokens_in": said.prompt_tokens,
             "tokens_out": said.completion_tokens,
         }
-
-    def _watch(self) -> Callable[[str], bool] | None:
-        """What the answer is watched for, where it is: a claim that there is
-        no live data to be had, from a run that looked nothing up and could
-        have. None where there is nothing a lookup could add."""
-        if self.found or self.lost or self.tainted or self.retracted is not None:
-            return None
-        return denies_access if self._guard_call() is not None else None
-
-    def _guard_call(self) -> ToolCall | None:
-        """The lookup an answer that denied having live data is replaced by:
-        the headlines for news, a search for anything else."""
-        tools = {t.name for t in available()} if self.tools_enabled else set()
-        if NEWS.search(self.message) and "news" in tools:
-            topic = news_topic(self.message)
-            return ToolCall("news", {"topic": topic} if topic else {}, via="guard")
-        query = search_query(self.message)
-        if "web_search" in tools and query:
-            return ToolCall("web_search", {"query": query}, via="guard")
-        return None
-
-    async def _guard(self, transcript: Transcript, steps: int, start: int) -> AsyncIterator[Event]:
-        """The answer said it could not look anything up, and it can. What it
-        wrote is taken back, the lookup it said it could not make is made,
-        and the answer is written again from what came back. Once a run."""
-        call = self._guard_call()
-        if call is None:
-            return
-        transcript.action(json.dumps({"tool": call.name, "args": call.args}, ensure_ascii=False))
-        self.calls.append(call)
-        share = max(LEAST_SHARE, self.run_room - (estimate(transcript.rendered()) - start))
-        async for event in self._lookup(steps, call, budget=share):
-            yield event
-        if self.last is None or self.stop.is_set():
-            yield self._stopped()
-            return
-        transcript.observation(
-            call.name, self.seen if self.last.ok else what_happened(self.last), ok=self.last.ok,
-        )
-        transcript.answer_cue(style=self.style.cue)
-        self._sending(transcript.parts()[0].content, transcript.run_parts())
-        async with aclosing(
-            self._answer(transcript.messages(), parts=transcript.parts(), held=True)
-        ) as events:
-            async for event in events:
-                yield event
 
     async def _skill_lookups(
         self, skill: Skill, values: dict, transcript: Transcript, made: set[str],
@@ -992,14 +954,14 @@ class _Run:
                     tuple(dict.fromkeys(self.lost)),
                 ))
                 instruction += " " + SAY_SO
-            return [*parts, Part("user", "instruction", f"{instruction} {style}")]
+            return [*parts, Part("user", "instruction", _with(instruction, style))]
         if self.failures:
             return [*message, Part(
                 "user", "failed",
                 "A lookup was tried for this and did not work:\n" + did_not_work(self.failures),
                 tuple(dict.fromkeys(self.lost)),
-            ), Part("user", "instruction", f"{SAY_SO} {style}")]
-        return [*message, Part("user", "instruction", f"{CUE_PLAIN} {style}")]
+            ), Part("user", "instruction", _with(SAY_SO, style))]
+        return [*message, Part("user", "instruction", _with(CUE_PLAIN, style))]
 
     # ---------------------------------------------------------- the check --
 
@@ -1046,16 +1008,11 @@ class _Run:
 
     async def _answer(
         self, messages: list[dict], *, parts: list[Part] = (), held: bool = False,
-        watch: Callable[[str], bool] | None = None,
     ) -> AsyncIterator[Event]:
         """The pass that writes the answer, from ``messages``. ``parts`` are
         the same prompt with what each piece is, so the answer can be checked
-        against what was looked up for it.
-
-        ``watch``, where given, is held against the start of the answer as it
-        is written. If it holds, the pass is stopped, the page is told to take
-        back what it showed (``retract``), and ``retracted`` keeps what was
-        written; the run decides what follows."""
+        against what was looked up for it."""
+        self.trace.style = self.style.id
         sampling = self.style.sampling(looked_up=bool(self.found))
         # Fitted to the window already. The engine's own fitting is kept as
         # the last guard: a run that added more than the room it was given.
@@ -1074,30 +1031,15 @@ class _Run:
         self.trace.prompt = fitted
         waited, self.slot_wait = self.slot_wait, 0.0
         async with aclosing(
-            self.engine.stream_chat(fitted, sampling, self.request_id, seed=self.seed, held=held)
+            self.engine.stream_chat(fitted, sampling, self.request_id, grammar=self.style.grammar,
+                                    seed=self.seed, held=held)
         ) as stream:
-            began = time.perf_counter()
-            written = ""
             blocks = FileBlocks()
             async for event, data in stream:
                 if event == "token":
                     yield event, data
                     for found in blocks.feed(data.get("t", "")):
                         yield "file", self._filed(found)
-                    if watch is None:
-                        continue
-                    written += data.get("t", "")
-                    if watch(written):
-                        self.retracted = written
-                        self.trace.steps.append(Step(
-                            "answer", model=True, input=trimmed, output=written,
-                            total_ms=(time.perf_counter() - began) * 1000 + waited,
-                            ok=False, error="retracted: it said it could not look this up",
-                        ))
-                        yield "retract", {"reason": "It said it could not look this up, so it will."}
-                        return
-                    if len(written) > WATCHED:
-                        watch = None
                     continue
                 if event == "error":
                     self.trace.steps.append(Step(

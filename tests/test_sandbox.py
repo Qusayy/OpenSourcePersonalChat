@@ -180,7 +180,7 @@ class ProgramPassTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace.calls[0][1].error, "no program")
 
     async def test_a_program_the_user_gave_is_run_as_they_gave_it(self) -> None:
-        for message in ("/python print(6 * 7)", "run this:\n```python\nprint(6 * 7)\n```"):
+        for message in ("/python print(6 * 7)", "/python\n```python\nprint(6 * 7)\n```"):
             with self.subTest(message=message):
                 self.fake.programs.clear()
                 call, tier = free_route(message)

@@ -1,9 +1,9 @@
-"""Which tool a message is sent to, and by which of the three tiers.
+"""How a message's tools are chosen: by the user's own command, or by the model.
 
 Needs the app's own requirements; without them the whole module is skipped.
-The first two tiers are plain functions over text. The third is a pass through
-the model, which is made elsewhere; what is tested here is what that pass is
-given to read and how its reply is read.
+A command is read from the text. The model's choice is a pass made
+elsewhere; what is tested here is what that pass is held to and how its
+reply is read.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ try:
         decision_grammar,
         decision_limit,
         free_route,
-        heuristic,
         parse_action,
         parse_slash,
     )
@@ -51,29 +50,6 @@ COMMANDS = (
 NOT_COMMANDS = ("/foo bar", "/calc", "/wiki", "/weather", "/convert ten km", "/fx usd eur",
                 "calc 2+2", "2+2 /calc")
 
-# (what was typed, the tool, its arguments, why)
-PATTERNS = (
-    ("https://example.com/a read this", "read_url", {"url": "https://example.com/a"},
-     "found a link"),
-    ("15% of 200", "calculator", {"expression": "15/100*200"}, "looks like arithmetic"),
-    ("1247 * 89", "calculator", {"expression": "1247 * 89"}, "looks like arithmetic"),
-    ("what is 12*12?", "calculator", {"expression": "12*12"}, "looks like arithmetic"),
-    ("100 EUR to USD", "currency",
-     {"amount": 100.0, "from_currency": "EUR", "to_currency": "USD"}, "currency pair"),
-    ("10 km to miles", "convert_units", {"value": 10.0, "from_unit": "km", "to_unit": "mi"},
-     "unit conversion"),
-    ("weather in Paris?", "weather", {"location": "Paris"}, "weather query"),
-    ("what time is it in Tokyo", "clock", {"timezone_name": "Tokyo"}, "time query"),
-    ("what is the time", "clock", {"timezone_name": "UTC"}, "time query"),
-    ("who is Ada Lovelace?", "wikipedia", {"query": "Ada Lovelace"}, "factual lookup"),
-)
-
-# Close to a pattern, and deliberately left for the model.
-NOT_PATTERNS = ("", "   ", "what is the best language", "the weather", "12", "hello there",
-                "who is the best tennis player of all time ever",
-                "Suggest a name for my boat")
-
-
 class SlashTests(unittest.TestCase):
     def test_each_command_names_its_tool_and_fills_its_arguments(self) -> None:
         for text, tool, args in COMMANDS:
@@ -88,57 +64,19 @@ class SlashTests(unittest.TestCase):
                 self.assertIsNone(parse_slash(text)[0])
 
 
-class HeuristicTests(unittest.TestCase):
-    def test_each_pattern_names_its_tool_and_fills_its_arguments(self) -> None:
-        for text, tool, args, note in PATTERNS:
-            with self.subTest(text=text):
-                call = heuristic(text)
-                self.assertIsNotNone(call)
-                self.assertEqual(
-                    (call.name, call.args, call.via, call.note), (tool, args, "heuristic", note)
-                )
-
-    def test_a_near_miss_is_left_for_the_model(self) -> None:
-        for text in NOT_PATTERNS:
-            with self.subTest(text=text):
-                self.assertIsNone(heuristic(text))
-
-    def test_a_currency_pair_is_not_mistaken_for_a_unit_conversion(self) -> None:
-        self.assertEqual(heuristic("250 gbp in eur").name, "currency")
-        self.assertEqual(heuristic("250 kg in lb").name, "convert_units")
-
-
 class FreeRouteTests(unittest.TestCase):
-    """The tiers that cost nothing, in order."""
+    """What is decided without the model: only what the user named."""
 
     def test_a_command_is_routed(self) -> None:
         call, tier = free_route("/calc 2+2")
         self.assertEqual((call.name, call.via, tier), ("calculator", "slash", "slash"))
 
-    def test_a_pattern_is_tried_after_a_command(self) -> None:
-        call, tier = free_route("15% of 200")
-        self.assertEqual((call.name, call.via, tier), ("calculator", "heuristic", "heuristic"))
-
-    def test_a_command_is_tried_before_a_pattern(self) -> None:
-        call, tier = free_route("/wiki 15% of 200")
-        self.assertEqual((call.name, tier), ("wikipedia", "slash"))
-
-    def test_a_command_nobody_defined_can_still_match_a_pattern(self) -> None:
-        call, tier = free_route("/foo https://example.org/x")
-        self.assertEqual((call.name, tier), ("read_url", "heuristic"))
-
-    def test_a_greeting_or_thanks_needs_nothing_looked_up(self) -> None:
-        for text in ("Hi", "hello there!", "Thanks!", "thank you so much", "good morning", "ok"):
-            with self.subTest(text=text):
-                self.assertEqual(free_route(text), (None, "chat"))
-
-    def test_a_greeting_with_a_question_after_it_is_not_small_talk(self) -> None:
-        for text in ("Hi what are the latest news", "thanks, now what is a quark"):
-            with self.subTest(text=text):
-                self.assertNotEqual(free_route(text)[1], "chat")
-
-    def test_what_neither_catches_is_left_for_the_model(self) -> None:
-        for text in ("Suggest a name for my boat", "/foo bar", "the weather"):
+    def test_everything_else_is_the_models_to_decide(self) -> None:
+        # Arithmetic, a link, a greeting, a question about the news: none of
+        # them is read for a word that would pick a tool.
+        for text in ("15% of 200", "https://example.org/x read this", "Hi", "Thanks!",
+                     "Hi what are the latest news", "weather in Paris?", "who is Ada Lovelace?",
+                     "/foo https://example.org/x", "Suggest a name for my boat"):
             with self.subTest(text=text):
                 self.assertEqual(free_route(text), (None, None))
 
@@ -168,6 +106,13 @@ class DecisionTests(unittest.TestCase):
 
     def test_asking_the_user_is_on_offer(self) -> None:
         self.assertIn("t-ask", decision_grammar(available()))
+
+    def test_writing_files_is_on_offer(self) -> None:
+        from tests.gbnf import Grammar
+
+        grammar = Grammar(decision_grammar(available()))
+        self.assertTrue(grammar.accepts('{"tool": "write_files"}'))
+        self.assertLessEqual(len('{"tool": "write_files"}'), decision_limit(available()))
 
     def test_the_question_is_written_back_as_the_grammar_has_the_model_write_it(self) -> None:
         from tests.gbnf import Grammar
@@ -215,6 +160,11 @@ class ParseActionTests(unittest.TestCase):
             (action.call.name, action.call.args, action.call.via, action.call.ms, action.call.raw),
             ("weather", {"location": "Paris"}, "model", 12.5, raw),
         )
+
+    def test_write_files_is_an_answer_written_as_files(self) -> None:
+        action = parse_action(said('{"tool": "write_files"}'))
+        self.assertEqual(action.kind, "files")
+        self.assertIsNone(action.call)
 
     def test_none_is_the_end_of_choosing(self) -> None:
         action = parse_action(said('{"tool": "none"}'))

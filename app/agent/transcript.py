@@ -33,24 +33,38 @@ from ..tools.grammar import tool_menu
 from .context import Part, merged
 from .skills import SAY_SO
 
+# How an answer is shaped. The model decides it from the message, as a
+# person would; nothing else does.
+SHAPE = (
+    "Fit the answer to the message: a sentence or two for a greeting or a quick fact, "
+    "a numbered list when asked for ideas or options, code in a fenced block with its "
+    "language, and a fuller explanation only when the question calls for one."
+)
 # Who the model is, at the top of every pass of every run. With the tools on
 # it is followed by the rules for choosing them.
 SYSTEM = (
     "You are an assistant connected to live tools. Data supplied to you was fetched "
     "seconds ago and is correct — state it as fact. Never claim you lack real-time "
-    "access, and never invent a figure no tool returned."
+    "access, and never invent a figure no tool returned.\n" + SHAPE
 )
 # The same, for a site that runs with its tools turned off.
 SYSTEM_WITHOUT_TOOLS = (
-    "You are a helpful assistant. Answer accurately, and say plainly when you do not know."
+    "You are a helpful assistant. Answer accurately, and say plainly when you do not "
+    "know.\n" + SHAPE
 )
 
 # What the model is told about choosing, once, at the top of every pass of a
 # run. The menu goes in the middle. Braces are doubled for `format`.
 LOOP_RULES = (
-    "Before you answer you may look things up, one tool at a time. To use a tool, "
-    "reply with one JSON object and nothing else.\n"
+    "Before you answer you may use tools, one at a time. To use one, reply with one "
+    "JSON object and nothing else.\n"
     "Tools:\n{menu}\n"
+    "Use a tool whenever it gives a better answer than memory: anything that may have "
+    "changed since you were trained (news, prices, scores, releases, who holds a post), "
+    "an exact figure, a page or a file that is named. Each message says when it was sent.\n"
+    "When the answer is code to keep as files (an app, a project, a script to save, or a "
+    'change to the project in this conversation), reply {{"tool": "write_files"}}. '
+    "You are then asked to write the files.\n"
     'When you need no tool, or no more of them, reply {{"tool": "none"}}. '
     "You are then asked for the answer.\n"
     "If a tool is needed and the message leaves out something it must be given, "

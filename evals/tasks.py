@@ -3,13 +3,14 @@
 One JSON object per line in ``tasks.jsonl``, so a task can be added by hand and
 a change to one shows up as one line in a diff::
 
-    {"id": "pattern-weather", "category": "free-path",
+    {"id": "weather-is-looked-up", "category": "single-tool",
      "turns": ["weather in Lisbon?"],
      "tools": {"weather": "weather_lisbon.json"},
-     "script": ["Light rain, 18 degrees."],
-     "expect": {"route": {"tool": "weather", "via": "heuristic",
+     "script": ["{\"tool\": \"weather\", \"args\": {\"location\": \"Lisbon\"}}",
+                "{\"tool\": \"none\"}", "Light rain, 18 degrees."],
+     "expect": {"route": {"tool": "weather", "via": "model",
                           "args": {"location": "Lisbon"}},
-                "max_model_passes": 1}}
+                "max_model_passes": 3}}
 
 ``script`` is what the model says, pass by pass, when the task is run without
 one. A task with no script can only be run against the real model. ``expect``
@@ -39,6 +40,7 @@ EXPECTATIONS = {
     "max_steps",            # at most this many tool calls
     "max_model_passes",     # at most this many passes through the model
     "outcome",              # answered | asked | stopped | failed; "answered" if left out
+    "style",                # how the answer was written: "answer", or "files" where the model chose to
     "prompt_contains",      # each of these is somewhere in the prompt the answer pass read
     "prompt_not_contains",
     "corrected",            # whether the answer drew a correction: a figure nothing returned

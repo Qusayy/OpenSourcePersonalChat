@@ -17,11 +17,11 @@ from pathlib import Path
 
 try:
     from app import agent
-    from app.agent.style import STYLES, style_for
+    from app.agent.style import STYLES
     from app.agent.verify import check
     from app.projects import paths
-    from app.projects.parse import FileBlocks, files_in
-    from app.store import projects
+    from app.projects.parse import GRAMMAR, FileBlocks, files_in
+    from app.store import projects, runs
     from app.tools import REGISTRY
     from app.tools.base import CALL, CallContext, call_tool
     from evals.scripted import ScriptedEngine
@@ -39,6 +39,40 @@ ANSWER = (
     "Here is the app.\n\n### app.py\n```python\nfrom flask import Flask\napp = Flask(__name__)\n```\n\n"
     "### templates/index.html\n```html\n<h1>Todo</h1>\n```\n\nRun it with `flask run`."
 )
+
+
+class GrammarTests(unittest.TestCase):
+    """What an answer the model chose to write as files is held to."""
+
+    def setUp(self) -> None:
+        from tests.gbnf import Grammar
+
+        self.grammar = Grammar(GRAMMAR)
+
+    def test_files_with_a_line_before_between_and_after_are_allowed(self) -> None:
+        from app.llm.mock import MOCK_PROJECT
+
+        for answer in (
+            ANSWER, MOCK_PROJECT, "### a.py\n```python\nprint(1)\n```\n",
+            "### a.py\n```python\ndef f():\n\n    return 1\n```\n\nNow its test:\n"
+            "### test_a.py\n```python\nimport a\n```\n\nRun it.\n\nThen open it.",
+        ):
+            with self.subTest(answer[:30]):
+                self.assertTrue(self.grammar.accepts(answer))
+                self.assertTrue(files_in(answer))
+
+    def test_what_a_small_model_wrote_instead_of_files_is_not(self) -> None:
+        for answer in (
+            # What the live site was given: the whole answer in one fence, and
+            # a description under each path.
+            "```text\n### app/main.py\nThis is the main application file.\n```\n",
+            "### app/main.py\nThis is the main application file.\n",
+            "Here:\n\n```python\nprint(1)\n```\n",
+            "What should the project do?",
+            "### app.py (the main file)\n```python\nx\n```\n",
+        ):
+            with self.subTest(answer[:30]):
+                self.assertFalse(self.grammar.accepts(answer))
 
 
 class ReadingTests(unittest.TestCase):
@@ -108,7 +142,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         support.with_settings(self, tools_enabled=True, allow_outbound=True, agent_loop=True)
 
     async def test_the_answer_says_each_file_as_it_is_written(self) -> None:
-        engine = ScriptedEngine([ANSWER])
+        engine = ScriptedEngine(["{\"tool\": \"write_files\"}", ANSWER])
         self.addAsyncCleanup(engine.settled)
         trace = agent.Trace()
         stream = await collect(agent.run("build me a small flask todo app", history=[],
@@ -118,38 +152,27 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
                          ["open", "close", "open", "close"])
         self.assertEqual([f["path"] for f in trace.files], ["app.py", "templates/index.html"])
         self.assertEqual(trace.files[0]["content"], "from flask import Flask\napp = Flask(__name__)\n")
-        # The project style asked for it, and the tokens are the answer as written.
-        self.assertIn(STYLES["project"].cue, engine.passes[0].prompt)
+        # The model chose to write files: the answer was asked for as files,
+        # held to their grammar, and the tokens are the answer as written.
+        self.assertIn(STYLES["files"].cue, engine.passes[1].prompt)
+        self.assertEqual(engine.passes[1].grammar, GRAMMAR)
+        self.assertEqual(trace.style, "files")
         self.assertEqual(trace.answer, ANSWER)
 
-    async def test_a_new_project_is_written_without_choosing_a_tool(self) -> None:
-        # Offered the menu, a small model chose the calculator for "I want to
-        # create a python project", and a pattern hears "a weather app" as a
-        # question about the weather.
-        for message in ("I want to create a python project", "build me a weather app in flask"):
-            with self.subTest(message):
-                engine = ScriptedEngine([ANSWER])
-                self.addAsyncCleanup(engine.settled)
-                trace = agent.Trace()
-                await collect(agent.run(message, history=[], trace=trace, engine=engine))
-                self.assertEqual(len(engine.passes), 1)
-                self.assertIsNone(engine.passes[0].grammar)
-                self.assertEqual([(s.kind, s.via) for s in trace.steps][0], ("route", "chat"))
-                self.assertEqual([f["path"] for f in trace.files], ["app.py", "templates/index.html"])
-
-    async def test_a_command_still_runs_in_a_project_message(self) -> None:
-        engine = ScriptedEngine(["Four."])
+    async def test_an_answer_the_model_did_not_choose_to_write_as_files_is_free(self) -> None:
+        engine = ScriptedEngine(["{\"tool\": \"none\"}", "A closure keeps its scope."])
         self.addAsyncCleanup(engine.settled)
         trace = agent.Trace()
-        await collect(agent.run("/calc 2+2", history=[], trace=trace, engine=engine,
-                                style=STYLES["project"]))
-        self.assertEqual(trace.steps[0].name, "calculator")
+        await collect(agent.run("what is a closure", history=[], trace=trace, engine=engine))
+        self.assertIsNone(engine.passes[1].grammar)
+        self.assertEqual(trace.style, "answer")
 
     async def test_the_tools_for_a_project_are_chosen_only_where_there_is_one(self) -> None:
         engine = ScriptedEngine(["{\"tool\": \"none\"}", "Fine."])
         self.addAsyncCleanup(engine.settled)
         await collect(agent.run("Suggest a name for my boat", history=[], engine=engine))
         self.assertNotIn("read_file", engine.passes[0].grammar)
+        self.assertIn("write_files", engine.passes[0].grammar)
         # Still on the menu, which every conversation shares, so the system
         # text, and the cache of it, is the same with a project or without.
         self.assertIn("read_file", engine.passes[0].messages[0]["content"])
@@ -202,25 +225,14 @@ class ChatTests(ChatCase):
         self.assertEqual(projects.latest(cid), {})
         self.assertEqual(self.client.get(f"/api/conversations/{cid}/project.zip").status_code, 404)
 
-    def test_a_conversation_with_a_project_writes_changes_as_a_project(self) -> None:
-        self.use_engine(PlayedEngine(ANSWER))
+    def test_a_change_the_model_writes_as_files_is_told_the_project_so_far(self) -> None:
+        self.use_engine(PlayedEngine(ANSWER, {"tool": "write_files"}))
         cid = only(self.chat("my todo app please"), "conversation")[0]["id"]
         self.chat("add a delete button", conversation_id=cid)
-        self.assertIn(STYLES["project"].cue, self.engine.answer_prompts[-1][-1]["content"])
+        self.assertIn(STYLES["files"].cue, self.engine.answer_prompts[-1][-1]["content"])
         self.assertIn("The project so far: app.py (2 lines), templates/index.html (1 line).",
                       "\n".join(m["content"] for m in self.engine.answer_prompts[-1]))
-        self.assertEqual(style_for("add a delete button", project=True).id, "project")
-
-    def test_a_project_asked_for_goes_on_until_it_is_written(self) -> None:
-        # The conversation that did not become a project: asked for, then the
-        # details, then the files.
-        self.use_engine(PlayedEngine("What should it do?"))
-        cid = only(self.chat("I want to create a python project"), "conversation")[0]["id"]
-        for message in ("first init a new basic hello world fastapi",
-                        "can you create the files and write to them"):
-            with self.subTest(message):
-                self.chat(message, conversation_id=cid)
-                self.assertIn(STYLES["project"].cue, self.engine.answer_prompts[-1][-1]["content"])
+        self.assertEqual(runs.recent_runs("chat")[0]["label"], "files")
 
 
 class ReadFileTests(unittest.IsolatedAsyncioTestCase):

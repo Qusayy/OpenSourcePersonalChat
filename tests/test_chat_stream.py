@@ -13,7 +13,7 @@ from unittest import mock
 
 try:
     from app.agent.skills import offered
-    from app.agent.style import STYLES, style_for
+    from app.agent.style import STYLES
     from app.agent.transcript import (
         CUE_PLAIN, CUE_WITH_DATA, SYSTEM_WITHOUT_TOOLS, data, system_for,
     )
@@ -55,13 +55,12 @@ def agent_system() -> str:
 
 def with_data(question: str, *facts: str) -> str:
     lines = "\n".join(f"- {fact}" for fact in facts)
-    return (f"{question}\n\nLive data, retrieved just now by a tool:\n{lines}\n\n{INSTRUCTION} "
-            + style_for(question).cue)
+    return f"{question}\n\nLive data, retrieved just now by a tool:\n{lines}\n\n{INSTRUCTION}"
 
 
 def plain(question: str) -> str:
     """A message as the model reads it when nothing was looked up for it."""
-    return f"{question}\n\n{CUE_PLAIN} {style_for(question).cue}"
+    return f"{question}\n\n{CUE_PLAIN}"
 
 
 class PlainAnswerTests(ChatCase):
@@ -82,7 +81,7 @@ class PlainAnswerTests(ChatCase):
                 {"role": "user", "content": plain("Why is the sky blue?")},
             ]],
         )
-        self.assertEqual(self.engine.samplings, [STYLES["explain"].sampling()])
+        self.assertEqual(self.engine.samplings, [STYLES["answer"].sampling()])
 
     def test_the_first_event_names_the_conversation(self) -> None:
         stream = self.chat("Why is the sky blue?")
@@ -182,7 +181,7 @@ class PlainAnswerTests(ChatCase):
         done = only(stream, "done")[0]
         rows = runs.recent_runs("chat")
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["label"], "explain")
+        self.assertEqual(rows[0]["label"], "answer")
         self.assertEqual(rows[0]["gen_tokens"], done["completion_tokens"])
         self.assertEqual(rows[0]["prefill_tps"], done["prefill_tps"])
 
@@ -298,7 +297,7 @@ class SlashCommandTests(ChatCase):
         self.assertEqual(
             [m["content"] for m in support.unsent(self.engine.answer_prompts[1][1:])],
             [with_data("/calc 2+2", "calculator: 2+2 = 4"), "A short answer.", "Why?",
-             '{"tool": "none"}', f"{CUE_PLAIN} {STYLES['concise'].cue}"],
+             '{"tool": "none"}', CUE_PLAIN],
         )
         # The first prompt, then its answer, then the new message.
         self.assertEqual(self.engine.answer_prompts[1][:2], self.engine.answer_prompts[0])
@@ -326,11 +325,11 @@ class SlashCommandTests(ChatCase):
 
 
 class AgentRoutingTests(ChatCase):
-    """Routing: a command or a pattern first, then the model."""
+    """Routing: the user's own command, or else the model."""
 
-    def test_a_pattern_match_costs_no_pass_and_none_is_announced(self) -> None:
-        stream = self.chat("15% of 200")
-        # Nothing is "being chosen": the pattern decided before anything was said.
+    def test_a_command_costs_no_pass_and_none_is_announced(self) -> None:
+        stream = self.chat("/calc 15/100*200")
+        # Nothing is "being chosen": the user named the tool.
         self.assertEqual(
             shape(stream),
             ["conversation", "step:route:ok", "step:tool-0:running", "step:tool-0:ok", "card",
@@ -340,17 +339,17 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(
             step(stream, "route", "ok"),
             {"id": "route", "kind": "route", "status": "ok", "label": "Calculator",
-             "detail": "heuristic", "glyph": "⚡", "tool": "calculator", "ms": 0},
+             "detail": "slash", "glyph": "⚡", "tool": "calculator", "ms": 0},
         )
         self.assertEqual(
             support.unsent(self.engine.answer_prompts[0])[-1]["content"],
-            with_data("15% of 200", "calculator: 15/100*200 = 30"),
+            with_data("/calc 15/100*200", "calculator: 15/100*200 = 30"),
         )
         # There is one system text, whoever chose the tool.
         self.assertEqual(self.engine.answer_prompts[0][0]["content"], agent_system())
-        self.assertEqual(self.conversation(stream)["messages"][1]["tool_calls"][0]["via"], "heuristic")
+        self.assertEqual(self.conversation(stream)["messages"][1]["tool_calls"][0]["via"], "slash")
 
-    def test_with_no_pattern_the_model_is_asked_and_may_say_none(self) -> None:
+    def test_without_a_command_the_model_is_asked_and_may_say_none(self) -> None:
         stream = self.chat("Suggest a name for my boat")
         self.assertEqual(
             shape(stream), ["conversation", "step:route:running", "step:route:ok", *ANSWER]
@@ -375,7 +374,7 @@ class AgentRoutingTests(ChatCase):
                 {"role": "system", "content": agent_system()},
                 {"role": "user", "content": "Suggest a name for my boat"},
                 {"role": "assistant", "content": '{"tool": "none"}'},
-                {"role": "user", "content": f"{CUE_PLAIN} {STYLES['list'].cue}"},
+                {"role": "user", "content": CUE_PLAIN},
             ],
         )
 
@@ -400,7 +399,7 @@ class AgentRoutingTests(ChatCase):
         self.chat("Something shorter", conversation_id=cid)
         self.assertEqual(
             [m["content"] for m in support.unsent(self.engine.route_prompts[1][1:])],
-            ["Suggest a name for my boat", '{"tool": "none"}', f"{CUE_PLAIN} {STYLES['list'].cue}", "A short answer.",
+            ["Suggest a name for my boat", '{"tool": "none"}', CUE_PLAIN, "A short answer.",
              "Something shorter"],
         )
 
@@ -423,7 +422,7 @@ class AgentRoutingTests(ChatCase):
         self.assertEqual(asked["weather"], [{"location": "Paris"}])
         told = [m["content"] for m in self.engine.answer_prompts[0]]
         self.assertEqual(told[-3:], [data("weather", WEATHER.summary), '{"tool": "none"}',
-                                     f"{CUE_WITH_DATA} {STYLES['concise'].cue}"])
+                                     CUE_WITH_DATA])
         call = self.conversation(stream)["messages"][1]["tool_calls"][0]
         self.assertEqual(call["via"], "model")
         self.assertEqual(call["data"], WEATHER.data)
@@ -527,8 +526,7 @@ class FailedToolTests(ChatCase):
             "/calc 1/0\n\n"
             "A lookup was tried for this and did not work:\n"
             "- calculator: That is not something this calculator handles.\n\n"
-            "Say plainly what could not be looked up, and do not guess at it. "
-            + STYLES["concise"].cue,
+            "Say plainly what could not be looked up, and do not guess at it.",
         )
 
     def test_the_model_is_told_what_happened_and_not_what_to_try(self) -> None:
@@ -615,10 +613,9 @@ class StoredTraceTests(ChatCase):
     def test_every_message_stores_steps_in_order_that_sum_to_the_run_total(self) -> None:
         support.played_tools(self, {"weather": WEATHER})
         cases = (
-            ("small talk", "Hello there", {}, None, ["route", "answer"]),
+            ("a greeting", "Hello there", {}, ['{"tool": "none"}', "Hi."], ["route", "answer"]),
             ("a command", "/calc 2+2", {}, None,
              ["route", "tool", "answer"]),
-            ("a pattern", "15% of 200", {}, None, ["route", "tool", "answer"]),
             ("the model declining", "Suggest a name for my boat", {},
              ['{"tool": "none"}', "Wren."], ["route", "answer"]),
             ("the model's choice", "Do I need a coat in Paris", {},
@@ -656,7 +653,9 @@ class StoredTraceTests(ChatCase):
              "writing_ms", "tools_ms", "wall_ms"},
         )
         # A greeting is routed for nothing, then answered in one pass.
-        self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (2, 1))
+        # A greeting is the model's to answer like anything else: it chooses
+        # no tool, and answers.
+        self.assertEqual((stream[-1][1]["steps"], stream[-1][1]["passes"]), (2, 2))
 
     def test_the_steps_of_an_answered_run_hang_off_its_answer(self) -> None:
         stream = self.chat("/calc 2+2")
@@ -800,21 +799,18 @@ class LoopOverHttpTests(ChatCase):
         read = [m["content"] for m in support.unsent(engine.passes[3].messages[1:])]
         self.assertEqual(read, [
             "Do I need a coat in Paris", self.PARIS, data("weather", WEATHER.summary),
-            '{"tool": "none"}', f"{CUE_WITH_DATA} {STYLES['concise'].cue}", "Overcast.",
+            '{"tool": "none"}', CUE_WITH_DATA, "Overcast.",
             "And tomorrow?",
         ])
         self.assertTrue(engine.free)
         self.assertEqual(engine.most_at_once, 1)
 
-    def test_a_command_and_small_talk_are_untouched_by_the_setting(self) -> None:
-        for message, kinds in (("/calc 2+2", ["route", "tool", "answer"]),
-                               ("Hello there", ["route", "answer"])):
-            with self.subTest(message=message):
-                self.use_engine(PlayedEngine())
-                stream = self.chat(message)
-                rows = runs.run_steps(only(stream, "conversation")[0]["request_id"])
-                self.assertEqual([r["kind"] for r in rows], kinds)
-                self.assertEqual(self.engine.route_prompts, [])
+    def test_a_command_is_untouched_by_the_setting(self) -> None:
+        self.use_engine(PlayedEngine())
+        stream = self.chat("/calc 2+2")
+        rows = runs.run_steps(only(stream, "conversation")[0]["request_id"])
+        self.assertEqual([r["kind"] for r in rows], ["route", "tool", "answer"])
+        self.assertEqual(self.engine.route_prompts, [])
 
 
 class LedgerTests(ChatCase):
@@ -915,9 +911,8 @@ class ReplayTests(ChatCase):
         cases = (
             # (name, the loop, script, first message, then, how, the last pass
             # of the first message, the first pass of the second)
-            ("small talk", True, ["One.", self.NONE, "Two."], "Hello", "And?", agent_, 0, 1),
+            ("a greeting", True, [self.NONE, "One.", self.NONE, "Two."], "Hello", "And?", agent_, 1, 2),
             ("a command", True, ["Four.", self.NONE, "Because."], "/calc 2+2", "Why?", agent_, 0, 1),
-            ("a pattern", True, ["Thirty.", self.NONE, "Because."], "15% of 200", "Why?", agent_, 0, 1),
             ("the loop", True, [self.PARIS, self.NONE, "Overcast.", self.NONE, "Milder."],
              "Do I need a coat in Paris", "And tomorrow?", agent_, 2, 3),
             ("one choice", False, [self.PARIS, "Overcast.", self.NONE, "Milder."],
@@ -954,7 +949,7 @@ class ReplayTests(ChatCase):
         self.client.delete(f"/api/conversations/{cid}")
         self.assertEqual(conversations.record(cid), ([], []))
         # And it is not cleared out with the steps.
-        cid = self.two(ScriptedEngine(["One.", self.NONE, "Two."]), "Hello", "And?")
+        cid = self.two(ScriptedEngine([self.NONE, "One.", self.NONE, "Two."]), "Hello", "And?")
         runs.prune_steps(keep_days=0)
         self.assertEqual(len(conversations.record(cid)[1]), 2)
 

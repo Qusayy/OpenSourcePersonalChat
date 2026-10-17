@@ -58,7 +58,9 @@ class EngineState:
     started_at: float = field(default_factory=time.time)
 
 
-SAMPLING_KEYS = ("temperature", "top_p", "top_k", "repeat_penalty", "max_tokens")
+SAMPLING_KEYS = (
+    "temperature", "top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty", "max_tokens",
+)
 
 # What llama-cpp-python uses for a sampling setting a pass does not name. A
 # llama-server has defaults of its own (repeat_penalty 1.1, temperature 0.8),

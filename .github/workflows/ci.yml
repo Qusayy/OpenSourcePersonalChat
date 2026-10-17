@@ -62,6 +62,8 @@ jobs:
       - run: |
           grep -v '^llama-cpp-python' requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
+          # What reads deploy/templates/*.jinja in the tests, as llama-server will.
+          pip install jinja2
       - run: python -m unittest discover -s tests -t .
 
   sandbox:

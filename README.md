@@ -19,13 +19,15 @@ app/                     the server (Python, FastAPI)
   api/           the routes: pages · chat (SSE) and what a run leaves behind · conversations · system · bench
                  frontend.py serves the built interface and writes its first values into the page
   agent/         one message, question to answer: loop · route (slash -> heuristics -> grammar)
-                 skills · transcript · context (the window) · verify · personas
-  llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server)
-  store/         SQLite (WAL): conversations, messages, tool_calls, steps, runs, notes
-  tools/         base (registry + GBNF), then one module per tool; read_url carries the SSRF guard
+                 policy (what a chosen call may do) · trace · skills · transcript · context (the window)
+                 verify · personas
+  llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server); mock
+  store/         SQLite (WAL): db (the connection) · conversations · runs (steps and figures) · notes
+  tools/         base (registry, arguments, dispatch) · grammar (the menu + GBNF), then one module per tool;
+                 read_url carries the SSRF guard
   ops/           telemetry (usable CPUs, per-core load, memory, cgroup limits) · bench (the suite + reference data)
   gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
-  config.py · text.py · ledger.py   settings · token estimates and excerpts · what a run cost
+  config.py · text.py · chatml.py · ledger.py   settings · token estimates and excerpts · the chat format · what a run cost
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)

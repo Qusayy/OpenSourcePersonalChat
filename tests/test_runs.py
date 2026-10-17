@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 try:
-    from app import db
+    from app.store import db, runs
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -30,26 +30,26 @@ class RunStorageTests(unittest.TestCase):
         self.addCleanup(db.close)
 
     def add(self, kind: str = "bench") -> None:
-        db.add_run(kind, label="short", prompt_tokens=32, gen_tokens=128, ttft_ms=85.0, prefill_tps=780.0, gen_tps=11.7, rss_mb=57.0)
+        runs.add_run(kind, label="short", prompt_tokens=32, gen_tokens=128, ttft_ms=85.0, prefill_tps=780.0, gen_tps=11.7, rss_mb=57.0)
 
     def test_a_real_run_is_stored(self) -> None:
         self.add("bench")
         self.add("chat")
-        self.assertEqual(len(db.recent_runs("bench")), 1)
-        self.assertEqual(len(db.recent_runs("chat")), 1)
-        self.assertEqual(db.recent_runs("bench")[0]["gen_tps"], 11.7)
+        self.assertEqual(len(runs.recent_runs("bench")), 1)
+        self.assertEqual(len(runs.recent_runs("chat")), 1)
+        self.assertEqual(runs.recent_runs("bench")[0]["gen_tps"], 11.7)
 
     def test_mock_mode_stores_neither_benchmark_nor_chat_runs(self) -> None:
         self.settings.mock = True
         self.add("bench")
         self.add("chat")
-        self.assertEqual(db.recent_runs(), [])
+        self.assertEqual(runs.recent_runs(), [])
 
     def test_mock_mode_leaves_existing_rows_alone(self) -> None:
         self.add("bench")
         self.settings.mock = True
         self.add("bench")
-        rows = db.recent_runs("bench")
+        rows = runs.recent_runs("bench")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["label"], "short")
 

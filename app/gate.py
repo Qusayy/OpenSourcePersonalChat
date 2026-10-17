@@ -44,8 +44,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
-from . import db, web
+from .api import frontend
 from .config import settings
+from .store import db
 
 log = logging.getLogger("aurora.gate")
 
@@ -190,11 +191,10 @@ _made_on: sqlite3.Connection | None = None
 
 def _tables() -> None:
     global _made_on
-    conn = db._db()
+    conn = db.connection()
     if _made_on is not conn:
-        with db._lock:
-            conn.executescript(SCHEMA)
-            conn.commit()
+        with db.transaction() as held:
+            held.executescript(SCHEMA)
         _made_on = conn
 
 
@@ -204,11 +204,11 @@ def _hashed(token: str) -> str:
 
 def _count(lane: str, who: str | None, since: float) -> int:
     if who is None:
-        rows = db._rows(
+        rows = db.rows(
             "SELECT COUNT(*) AS n FROM gate_attempts WHERE lane = ? AND at > ?", (lane, since)
         )
     else:
-        rows = db._rows(
+        rows = db.rows(
             "SELECT COUNT(*) AS n FROM gate_attempts WHERE lane = ? AND who = ? AND at > ?",
             (lane, who, since),
         )
@@ -222,7 +222,7 @@ def admit(address: str, device: str | None, now: float) -> int | None:
     writes nothing, so the table cannot be grown by being refused.
     """
     _tables()
-    db._write("DELETE FROM gate_attempts WHERE at < ?", (now - DAY,))
+    db.write("DELETE FROM gate_attempts WHERE at < ?", (now - DAY,))
     if device:
         lane, who, each, everyone = "device", device, DEVICE_EACH, DEVICE_ALL
     else:
@@ -232,27 +232,26 @@ def admit(address: str, device: str | None, now: float) -> int | None:
             return None
     if _count(lane, None, now - everyone[1]) >= everyone[0]:
         return None
-    with db._lock:
-        cursor = db._db().execute(
+    with db.transaction() as conn:
+        cursor = conn.execute(
             "INSERT INTO gate_attempts (at, lane, who) VALUES (?, ?, ?)", (now, lane, who)
         )
-        db._db().commit()
-        return cursor.lastrowid
+    return cursor.lastrowid
 
 
 def forgive(attempt: int) -> None:
     """A guess that was right is not held against the one who made it."""
-    db._write("DELETE FROM gate_attempts WHERE id = ?", (attempt,))
+    db.write("DELETE FROM gate_attempts WHERE id = ?", (attempt,))
 
 
 def open_session(verifier: Verifier, now: float) -> str:
     """Start a session and return the value its cookie carries."""
     _tables()
-    db._write(
+    db.write(
         "DELETE FROM gate_sessions WHERE opened < ?", (now - settings.gate_session_hours * 3600,)
     )
     token = secrets.token_urlsafe(32)
-    db._write(
+    db.write(
         "INSERT INTO gate_sessions (token, verifier, opened, seen) VALUES (?, ?, ?, ?)",
         (_hashed(token), verifier.mark, now, now),
     )
@@ -264,7 +263,7 @@ def session_open(token: str | None, verifier: Verifier, now: float) -> bool:
         return False
     _tables()
     key = _hashed(token)
-    rows = db._rows("SELECT verifier, opened, seen FROM gate_sessions WHERE token = ?", (key,))
+    rows = db.rows("SELECT verifier, opened, seen FROM gate_sessions WHERE token = ?", (key,))
     if not rows:
         return False
     row = rows[0]
@@ -275,7 +274,7 @@ def session_open(token: str | None, verifier: Verifier, now: float) -> bool:
     if now - row["seen"] > settings.gate_idle_minutes * 60:
         return False
     if now - row["seen"] > SEEN_EVERY:
-        db._write("UPDATE gate_sessions SET seen = ? WHERE token = ?", (now, key))
+        db.write("UPDATE gate_sessions SET seen = ? WHERE token = ?", (now, key))
     return True
 
 
@@ -285,28 +284,28 @@ def known_device(token: str | None) -> str | None:
         return None
     _tables()
     key = _hashed(token)
-    return key if db._rows("SELECT 1 FROM gate_devices WHERE token = ?", (key,)) else None
+    return key if db.rows("SELECT 1 FROM gate_devices WHERE token = ?", (key,)) else None
 
 
 def new_device(now: float) -> str:
     _tables()
-    db._write("DELETE FROM gate_devices WHERE since < ?", (now - DEVICE_DAYS * DAY,))
+    db.write("DELETE FROM gate_devices WHERE since < ?", (now - DEVICE_DAYS * DAY,))
     token = secrets.token_urlsafe(32)
-    db._write("INSERT INTO gate_devices (token, since) VALUES (?, ?)", (_hashed(token), now))
+    db.write("INSERT INTO gate_devices (token, since) VALUES (?, ?)", (_hashed(token), now))
     return token
 
 
 def revoke_all() -> int:
     _tables()
-    count = int(db._rows("SELECT COUNT(*) AS n FROM gate_sessions")[0]["n"])
-    db._write("DELETE FROM gate_sessions")
+    count = int(db.rows("SELECT COUNT(*) AS n FROM gate_sessions")[0]["n"])
+    db.write("DELETE FROM gate_sessions")
     return count
 
 
 def forget_attempts() -> int:
     _tables()
-    count = int(db._rows("SELECT COUNT(*) AS n FROM gate_attempts")[0]["n"])
-    db._write("DELETE FROM gate_attempts")
+    count = int(db.rows("SELECT COUNT(*) AS n FROM gate_attempts")[0]["n"])
+    db.write("DELETE FROM gate_attempts")
     return count
 
 
@@ -340,7 +339,7 @@ class Cover:
         self._page: tuple[float, bytes] | None = None
 
     def body(self) -> bytes:
-        path = (self.dist or web.DIST) / "cover.html"
+        path = (self.dist or frontend.DIST) / "cover.html"
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -650,7 +649,7 @@ def status() -> str:
     now = time.time()
     verifier = parse_verifier(settings.gate_verifier)
     lines = [f"gate: {mode()}"]
-    sessions = db._rows("SELECT verifier, opened, seen FROM gate_sessions ORDER BY opened DESC")
+    sessions = db.rows("SELECT verifier, opened, seen FROM gate_sessions ORDER BY opened DESC")
     live = [
         row
         for row in sessions
@@ -666,7 +665,7 @@ def status() -> str:
     for lane, (limit, window) in (("stranger", STRANGER_ALL), ("device", DEVICE_ALL)):
         used = _count(lane, None, now - window)
         lines.append(f"wrong guesses in the last day, {lane}s: {used} of {limit}")
-    devices = int(db._rows("SELECT COUNT(*) AS n FROM gate_devices")[0]["n"])
+    devices = int(db.rows("SELECT COUNT(*) AS n FROM gate_devices")[0]["n"])
     lines.append(f"browsers that have opened it: {devices}")
     return "\n".join(lines)
 

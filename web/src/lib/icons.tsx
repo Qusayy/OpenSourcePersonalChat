@@ -39,19 +39,17 @@ const SHAPES = {
     P("M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"),
   ],
 
+  search: [P("M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15z"), P("M16 16l5 5")],
+  file: [P("M6 3h8l4 4v14H6z"), P("M14 3v4h4", ".6")],
+  python: [P("M8 7l-5 5 5 5M16 7l5 5-5 5"), P("M13.5 5l-3 14", ".6")],
+  news: [
+    P("M4 5h13v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"),
+    P("M17 9h3v10a1 1 0 0 1-2 0"),
+    P("M7 9h7M7 13h7M7 17h4", ".6"),
+  ],
+
   // skills
-  summarise_link: [
-    P("M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z"),
-    P("M14 3v4h4M9 12h6M9 16h4"),
-  ],
-  fact_check: [P("M12 4v16M6 8h12"), P("M6 8l-3 6h6zM18 8l-3 6h6z"), P("M9 20h6", ".6")],
   compare: [P("M4 5h7v14H4zM13 5h7v14h-7z"), P("M11 12h2", ".6")],
-  weather_brief: [
-    P("M7 17h10a4 4 0 0 0 .2-8A6 6 0 0 0 6 8a4.5 4.5 0 0 0 1 9z"),
-    P("M9 21h2M14 21h2", ".7"),
-  ],
-  do_maths: [P("M13 2 4 14h7l-1 8 9-12h-7z")],
-  explain_code: [P("M9 8l-4 4 4 4M15 8l4 4-4 4")],
 
   // pipeline / timeline
   route: [P("M6 4v6a4 4 0 0 0 4 4h8"), P("M15 11l3 3-3 3")],
@@ -74,6 +72,9 @@ const SHAPES = {
 const ALIAS = {
   convert_units: "convert",
   read_url: "url",
+  open_result: "url",
+  web_search: "search",
+  code: "python",
   text_stats: "textstats",
   remember: "note",
   recall: "note",

@@ -11,6 +11,42 @@ const draw = (card: CardKind, data: CardData, meta?: { label?: string; ms?: numb
 const words = (el: Element) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
 
 const FULL: Record<Exclude<CardKind, "error">, CardData> = {
+  file: { path: "app.py", version: 2, lang: "python", lines: 40, content: "print(1)\n" },
+  python: {
+    task: "two to the tenth",
+    code: "print(2 ** 10)\n",
+    stdout: "1024\n",
+    stderr: "",
+    exit_code: 0,
+    timed_out: false,
+    ms: 41,
+    truncated: false,
+  },
+  search: {
+    query: "python release",
+    answer: "Python 3.14 is the latest release.",
+    items: [
+      {
+        title: "Download Python",
+        url: "https://www.python.org/downloads/",
+        source: "python.org",
+        published: "2026-10-07T00:00:00+00:00",
+        snippet: "The official home of the Python programming language.",
+      },
+      { title: "What is new", url: "https://docs.python.org/3/", source: "docs.python.org" },
+    ],
+  },
+  news: {
+    topic: "",
+    items: [
+      {
+        title: "Budget passes after late vote",
+        url: "https://news.google.com/rss/articles/one",
+        source: "Reuters",
+        published: "not a date",
+      },
+    ],
+  },
   note: {
     action: "recall",
     query: "bike",
@@ -167,6 +203,52 @@ describe("each kind of card, with everything the tool can send", () => {
     ]);
     const none = draw("note", { action: "recall", query: "boat", notes: [] });
     expect(words(none)).toContain("No note matches “boat”.");
+  });
+
+  it("a search lists its pages numbered, each linking out, under the engine's answer", () => {
+    const el = draw("search", FULL.search);
+    expect(words(el)).toContain("Web search“python release”");
+    expect(words(el)).toContain("Python 3.14 is the latest release.");
+    const links = [...el.querySelectorAll("li a")];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "https://www.python.org/downloads/",
+      "https://docs.python.org/3/",
+    ]);
+    expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect([...el.querySelectorAll("li")].map((li) => li.textContent?.slice(0, 2))).toEqual([
+      "1.",
+      "2.",
+    ]);
+    expect(words(el)).toContain("The official home");
+  });
+
+  it("the news names each headline's publisher and leaves out a date it cannot read", () => {
+    const el = draw("news", FULL.news);
+    expect(words(el)).toContain("Newstop stories");
+    expect(words(el)).toContain("1.Budget passes after late voteReuters");
+    expect(words(el)).not.toContain("NaN");
+  });
+
+  it("a program is shown as it was run, then what it printed, with a Copy for the code", () => {
+    const el = draw("python", FULL.python);
+    expect(words(el)).toContain("Pythonexited 0");
+    expect(el.querySelector(".codeblock")?.getAttribute("data-code")).toBe("print(2 ** 10)\n");
+    expect(el.querySelector("[data-copy]")).not.toBeNull();
+    expect(words(el)).toContain("1024");
+  });
+
+  it("a program that failed keeps the end of its traceback, in the fault colour", () => {
+    const el = draw("python", {
+      code: "1/0",
+      stdout: "",
+      stderr: "Traceback (most recent call last):\nZeroDivisionError: division by zero",
+      exit_code: 1,
+    });
+    expect(words(el)).toContain("exited 1");
+    expect(el.querySelector("pre.text-fault")?.textContent).toContain("ZeroDivisionError");
+    expect(draw("python", { code: "while 1: pass", timed_out: true }).textContent).toContain(
+      "stopped: out of time",
+    );
   });
 
   it("text stats scale each term's bar to the commonest term", () => {

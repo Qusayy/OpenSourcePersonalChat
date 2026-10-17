@@ -156,15 +156,6 @@ components:
     typography: "{typography.caption}"
     padding: "4px max(24px, (100vw - 76rem) / 2)"
     height: "2.5rem"
-  palette:
-    backgroundColor: "{colors.sheet}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.r-2}"
-    padding: "4px"
-  palette-row-selected:
-    backgroundColor: "{colors.sheet-2}"
-    rounded: "{rounded.r-1}"
-    height: "36px"
   toast:
     backgroundColor: "{colors.ink}"
     textColor: "{colors.sheet}"
@@ -185,7 +176,7 @@ components:
 
 **Creative North Star: "The Sheet and the Status Line"**
 
-Aurora is a plain sheet you write on. The page is three rows and nothing beside them: a top bar, the sheet, and one status line pinned to the bottom edge. There is no sidebar of chats, no centred column of bubbles and no dashboard column of metric cards. History opens on demand as a dialog, and every fact about the machine lives once, in the status line, which comes alive while the model writes.
+Aurora is a plain sheet you write on. The page is three rows: a top bar, the sheet, and one status line pinned to the bottom edge. Only a code project, once an answer writes one, stands beside the thread. There is no sidebar of chats, no centred column of bubbles and no dashboard column of metric cards. History opens on demand as a dialog, and every fact about the machine lives once, in the status line, which comes alive while the model writes.
 
 The material is paper and ink. A near-white sheet tinted toward green-grey, two inks, hairline rules and 4px corners. Structure is drawn with rules and space, never with boxes around text. Colour is almost absent, so that the one aurora green can mean a single thing: this is happening right now. Type is one family, Recursive, proportional for words and switched to its fixed-width cut for numerals, so a figure that ticks sits in a sentence without changing voice or shifting its neighbours.
 
@@ -194,7 +185,7 @@ The system refuses gradients, glass and backdrop blur, glow, pills, message bubb
 There is one exception to the first and third of those, and it has a name: the aurora. It comes in two forms. The curtains hang from the top bar over the head of a page at rest, and go when a conversation starts. The strip rises from the status line while an answer is being produced. The user asked for the strip first, as one live generation effect, and for the curtains later, so that the site would feel like the aurora it is named for. They are the only luminous things on any page.
 
 **Key Characteristics:**
-- Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
+- Three rows: top bar (56px), sheet, status line. Nothing sits beside them but a conversation's project: at 1024px and wider the sheet becomes two columns, the thread and the composer in the first, the project (at least 24rem, 44% at most) in the second under a hairline, with no fill or shadow of its own. Narrower, the project is a drawer from the right like History, opened from the top bar.
 - Everything is centred: the top bar, the reading column and the status line share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
@@ -272,18 +263,18 @@ Everything is centred. The top bar's content and the status line's sit in one co
 
 Spacing is a nine-step scale: 4, 8, 12, 16, 24, 32, 48, 64, 96px. Sections on the long-form pages are parted by 64px; a question takes 48px above and 12px below, like any heading.
 
-The chat page has two views. Empty: headline, one paragraph, the composer directly under them, then the skills, all scrolling as one sheet. Thread: the composer sits above the status line under a hairline and the thread scrolls above it. DOM order is visual order in both, so tab order never disagrees with the screen.
+The chat page has two views. Empty: headline, one paragraph and the composer directly under them, all scrolling as one sheet. Thread: the composer sits above the status line under a hairline and the thread scrolls above it. DOM order is visual order in both, so tab order never disagrees with the screen.
 
-Responsive behaviour is by need rather than by device. Below 1264px, where the window is narrower than the container, the chat page's status line gives the conversation a row of its own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go and the status line's small bars go with them, leaving the figures. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, skill rows stack, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
+Responsive behaviour is by need rather than by device. Below 1264px, where the window is narrower than the container, the chat page's status line gives the conversation a row of its own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go and the status line's small bars go with them, leaving the figures. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
 
-**The One Axis Rule.** The top bar, the column, the composer and the status line are centred on one axis, with equal margins left and right. The top bar and the status line share a container and so share both edges. Nothing hangs from a left edge of its own.
+**The One Axis Rule.** The top bar, the column, the composer and the status line are centred on one axis, with equal margins left and right. The top bar and the status line share a container and so share both edges. Nothing hangs from a left edge of its own. With a project open beside the thread, the column and the composer keep one axis of their own, the centre of the first column.
 
 ## Elevation & Depth
 
 Flat. Surfaces are the sheet and one tint of it; separation is a hairline. There is exactly one shadow (`--sh-pop`), and it belongs to things that float over the sheet.
 
 ### Shadow Vocabulary
-- **Pop** (`box-shadow: 0 1px 2px oklch(22% 0.015 150 / 0.08), 0 12px 32px -8px oklch(22% 0.015 150 / 0.22)`; in dark, `0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6)`): the command palette, the history dialog, toasts.
+- **Pop** (`box-shadow: 0 1px 2px oklch(22% 0.015 150 / 0.08), 0 12px 32px -8px oklch(22% 0.015 150 / 0.22)`; in dark, `0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6)`): the history dialog, toasts.
 
 Layers are five: the aurora's two forms, the curtains and the strip (-1, behind everything that sits in the sheet), status line (10), popovers (30), toasts (60), the skip link (200).
 
@@ -293,9 +284,9 @@ Layers are five: the aurora's two forms, the curtains and the strip (-1, behind 
 
 ## Shapes
 
-Hairlines and small corners. The default radius is 4px (`r-1`): buttons, hover fills, code blocks, the focus outline, the data end of a bar. 8px (`r-2`) is used once, on the floating command palette. Circles are reserved for dots: the state dot, the newest sample on a trace, a measured value's ring. Nothing is a pill.
+Hairlines and small corners. The default radius is 4px (`r-1`): buttons, hover fills, code blocks, the focus outline, the data end of a bar. 8px (`r-2`) is kept for a floating panel; none floats today. Circles are reserved for dots: the state dot, the newest sample on a trace, a measured value's ring. Nothing is a pill.
 
-Rules are 1px in `rule`. Two get more: the 2px ink rule under the input, which is its only boundary, and the 2px ink underline that marks the current page or the chosen persona. A table head and a quotation take a 1px rule in the second ink.
+Rules are 1px in `rule`. Two get more: the 2px ink rule under the input, which is its only boundary, and the 2px ink underline that marks the current page. A table head and a quotation take a 1px rule in the second ink.
 
 Focus is a 2px ink outline, offset 2px. The input, which has no box to ring, thickens its rule by 1px instead.
 
@@ -317,7 +308,7 @@ Controls are words first. A box appears only where position alone would not say 
 ### Inputs / Fields
 - **Style:** a borderless textarea on a 2px ink rule, with Send at the right end of the same rule. No box, no fill. 17px in a thread, 20px on the empty sheet, never under 16px. Grows to 208px, then scrolls.
 - **Focus:** the rule thickens by 1px; the caret is the live colour.
-- **Beneath it:** personas as plain words, the chosen one inked with a 2px underline at the same weight so choosing never shifts its neighbours; a `/` keyboard hint; a character count that turns fault-coloured at the limit.
+- **Beneath it:** nothing to choose: the agent decides for itself which tool a message needs and how to write the answer. A keyboard hint for a new line, and a character count that turns fault-coloured at the limit.
 
 ### Navigation
 - **Top bar:** the wordmark (17px, 700) at the container's left edge, three page links in the second ink at 15px, then the page's word buttons at the right. The current page is inked with a 2px underline offset 7px. No filled tab.
@@ -325,9 +316,9 @@ Controls are words first. A box appears only where position alone would not say 
 - **Contents list:** on long-form pages, a wrapped row of second-ink links under the page head.
 
 ### Lists and rows
-- **Skill rows:** six ruled rows, not six cards: a name at 600, what it does in the second ink, and the tools it runs through at 13px. Hover tints the row and extends 12px past the text on both sides so the row reads as one target.
 - **Fact lists:** term in the second ink at the left, value at the right, a hairline under each, the full width of the column. The headline figures of a benchmark run are the same list with the numeral given weight.
-- **Command palette:** the one floating panel (8px corners, hairline border, pop shadow). Rows are a fixed 36px (48px on touch), the list snaps to whole rows, and the highlighted command's description is set in full beneath the list.
+- **Project files:** ruled rows, the folder in the second ink before the name; the file shown has a sheet-2 fill and its name at 600. A file being written says so in the live colour, with a dot that breathes. Under the list, the file in the same code block an answer uses, with its path, version and Copy.
+- **A file in an answer:** a ruled row, not the code: its path at 600 and its lines in the second ink (the live colour while it is written). Clicking it opens the file in the project.
 
 ### Cards / Containers
 There are none. A **panel** is a block with 16px above it and a hairline on top. A **caveat** is a ruled note: a caution-coloured mark, then words in ink.
@@ -373,7 +364,7 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 A strip of light in the live colour, turning violet where it reaches highest, that rises from the top edge of the status line, across the full width of the window, while this visitor's request is being read or written. At no other time is it on the page.
 
 - **What drives it:** the same phase the status word shows, from the same call, so the two cannot disagree. Only two phases light it: reading, when the model has the prompt, and writing. The moment before that, when the request is sent and the server has not yet said whether it is running or queued, lights nothing, and neither does queued, which is someone else's work. While the model reads it holds a low, slow swell. Once tokens arrive its brightness and reach follow the measured tokens per second as a share of the fastest steady rate this page has seen (never less than 1 tok/s), so a machine writing at its own full speed is at full brightness whether that is six tokens a second or sixty; a rate counts as steady once an answer has been writing for 2.5 seconds, and until then the rate is measured against itself. Each token adds a small lift. When the answer ends it fades over about two seconds and the element is hidden, not left transparent, and stops asking for frames.
-- **Where it sits:** fixed to the window, 14rem tall (10rem below 620px), a child of the body behind everything: under the thread, the composer and the palette, over nothing but the sheet's own colour. It cannot cover a control or take a pointer event.
+- **Where it sits:** fixed to the window, 14rem tall (10rem below 620px), a child of the body behind everything: under the thread and the composer, over nothing but the sheet's own colour. It cannot cover a control or take a pointer event.
 - **Ceiling:** no pixel carries more than 24% of the live colour, on either sheet; the shader clamps to it after dithering. Composited at that ceiling the second ink reads 4.88:1 on the light sheet and 4.60:1 on the dark one, and the Stop label 4.76:1 and 4.61:1. The violet at the same ceiling leaves more contrast than the green on both sheets: the second ink reads 4.90:1 and 4.98:1 over it, and the Stop label 4.79:1 and 5.02:1. On the dark sheet the range below the ceiling is lifted (a power of 0.55), because a faint green on near-black is close to no green at all; the ceiling itself does not move.
 - **How it is drawn:** a WebGL2 fragment shader on a transparent canvas, at half resolution with the pixel ratio capped at 1.5, eased by elapsed time so it runs the same at 60 and 120 frames a second. The light is broad curtains, not bands: its noise takes each lattice value from integer arithmetic, so neighbouring pixels never differ by more than two or three levels in 255. The shader compiles when the page is idle, never on the first send. Without WebGL2, or until the shader is ready, a CSS strip of the same colour and ceiling whose opacity is the same energy. Under reduced motion, a still, faint tint for as long as the request runs.
 
@@ -403,8 +394,8 @@ Motion explains a change, acknowledges an action or reports work in progress; no
 - **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
 - **Between pages.** The top bar and the status line are the same on every page, so they hold still and only the sheet between them changes. Moving between pages does not reload the document: the router changes the sheet inside a view transition, in which the bar and the line each carry a `view-transition-name` of their own and so are not part of the cross-fade. A browser without view transitions simply changes page.
 - **The status line.** The state word slides when the state changes: the old word leaves upward, the new one comes up from below. Core columns and meters ease between samples. The dot breathes while waiting.
-- **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
-- **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
+- **Sending.** Send becomes Stop with the word seen to change.
+- **Lists.** History rows arrive one after another, once per opening.
 - **In flight.** The rate eases between measurements, its trace scrolls, and the aurora rises with the rate (see The status line and The aurora). These run on one shared frame loop that exists only while something is subscribed to it.
 - **At rest.** The curtains sway and breathe over the head of the page, drawn at most about thirty times a second. They are the only thing that asks for frames at rest, and they stop when the tab is hidden, when the page is scrolled past them and when a conversation starts.
 - **The thread.** Questions enter from 6px below over 200ms; route steps and tool figures from 8px over 240ms. An answer is inked in: each stretch of text fades up from nothing over 280ms as it arrives, opacity only, so nothing shifts the line it lands in. The block being written is rebuilt ten times a second, so the fade is carried across rebuilds rather than restarted, and across the final clean render too: the last words finish fading before their wrappers are removed.
@@ -489,7 +480,7 @@ React draws the page. It does not draw each frame of something that moves. The s
 - **Don't** add a third ink, or set anything below 13px.
 - **Don't** use `live` as a brand, selection, success or emphasis colour.
 - **Don't** use `c1`..`c4` outside the memory budget, or give a single series a hue.
-- **Don't** box running text, or add a sidebar of chats, a centred bubble column or a column of metric cards.
+- **Don't** box running text, or add a sidebar of chats, a centred bubble column or a column of metric cards. The project panel is the one thing beside the thread, and only while a conversation has a project.
 - **Don't** add a theme switch; the scheme follows the OS.
 - **Don't** repeat the cost figures in the status line once a reply has finished.
 - **Don't** put a shadow on anything that sits in the sheet.

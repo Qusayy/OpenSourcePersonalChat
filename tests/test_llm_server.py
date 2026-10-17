@@ -13,7 +13,7 @@ import unittest
 try:
     import httpx
 
-    from app.llm_server import LlamaServer, Reading, ServerError
+    from app.llm.server import LlamaServer, Reading, ServerError
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 

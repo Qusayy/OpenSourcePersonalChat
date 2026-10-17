@@ -13,12 +13,13 @@ import unittest
 from unittest import mock
 
 try:
+    from app.text import estimate
     from app.tools import base
-    from app.tools.base import (
-        Arg, Tool, ToolResult, args_ceiling, args_to_gbnf, call_tool, check, check_args,
-        decision_ceiling, tool_menu, tools_to_gbnf, was_given,
+    from app.tools.base import Arg, Tool, ToolResult, call_tool, check, check_args, was_given
+    from app.tools.grammar import (
+        ASK, DEFAULT_MAX_LEN, args_ceiling, args_to_gbnf, decision_ceiling, tool_menu,
+        tools_to_gbnf,
     )
-    from app.excerpt import estimate
     from evals import fixtures
     from tests import support
     from tests.gbnf import Grammar
@@ -345,7 +346,7 @@ class CheckTests(unittest.TestCase):
                 self.assertNotRegex(reason.lower(), r"\b(try|please|should|retry|again)\b")
 
     def test_every_real_tool_accepts_the_arguments_its_own_command_produces(self) -> None:
-        from app.router import parse_slash
+        from app.agent.route import parse_slash
 
         for text in ("/calc 2+2", "/clock", "/time Asia/Tokyo", "/convert 10 km to mi",
                      "/stats one two", "/wiki Ada Lovelace", "/weather Lisbon",
@@ -389,7 +390,8 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual(
             self.rules()["root"],
             "t-calculator | t-clock | t-convert-units | t-text-stats | t-wikipedia | "
-            "t-weather | t-currency | t-read-url | t-remember | t-recall | t-ask | t-none",
+            "t-weather | t-currency | t-web-search | t-news | t-read-url | t-open-result | "
+            "t-read-file | t-remember | t-recall | t-ask | t-none",
         )
 
     def test_with_notes_off_neither_note_tool_is_offered(self) -> None:
@@ -398,9 +400,9 @@ class GrammarTests(unittest.TestCase):
         self.assertNotIn("t-remember", root)
         self.assertNotIn("t-recall", root)
 
-    def test_every_registered_tool_has_a_rule(self) -> None:
+    def test_every_tool_on_offer_has_a_rule(self) -> None:
         rules = self.rules()
-        for name in base.REGISTRY:
+        for name in (tool.name for tool in base.available()):
             with self.subTest(tool=name):
                 self.assertIn("t-" + name.replace("_", "-"), rules)
 
@@ -408,8 +410,8 @@ class GrammarTests(unittest.TestCase):
         support.with_settings(self, allow_outbound=False)
         self.assertEqual(
             self.rules()["root"],
-            "t-calculator | t-clock | t-convert-units | t-text-stats | t-remember | t-recall | "
-            "t-ask | t-none",
+            "t-calculator | t-clock | t-convert-units | t-text-stats | t-read-file | t-remember | "
+            "t-recall | t-ask | t-none",
         )
         self.assertNotIn("weather", tool_menu())
 
@@ -497,7 +499,7 @@ class GrammarTests(unittest.TestCase):
         rules = self.rules()
         self.assertNotIn("string", rules)
         texts = {name: body for name, body in rules.items() if name.startswith("text-")}
-        self.assertEqual(set(texts), {"text-40", "text-60", "text-80", "text-120", "text-200"})
+        self.assertEqual(set(texts), {"text-40", "text-60", "text-80", "text-100", "text-120", "text-160", "text-200"})
         for name, body in texts.items():
             with self.subTest(rule=name):
                 self.assertEqual(body, r'"\"" char{1,' + name[5:] + r'} "\""')
@@ -506,7 +508,7 @@ class GrammarTests(unittest.TestCase):
             for arg in tool.args:
                 if arg.type == "string":
                     with self.subTest(tool=tool.name, arg=arg.name):
-                        self.assertTrue(arg.choices or (arg.max_len or base.DEFAULT_MAX_LEN) <= 200)
+                        self.assertTrue(arg.choices or (arg.max_len or DEFAULT_MAX_LEN) <= 200)
         self.assertTrue(self.grammar.accepts(call("weather", location="x" * 60)))
         self.assertFalse(self.grammar.accepts(call("weather", location="x" * 61)))
         self.assertFalse(self.grammar.accepts(call("weather", location="")))
@@ -695,13 +697,13 @@ class CeilingTests(unittest.TestCase):
             elif arg.choices:
                 args[arg.name] = max(arg.choices, key=lambda c: len(json.dumps(c, ensure_ascii=False).encode()))
             else:
-                args[arg.name] = "\U0001F600" * (arg.max_len or base.DEFAULT_MAX_LEN)  # four bytes each
+                args[arg.name] = "\U0001F600" * (arg.max_len or DEFAULT_MAX_LEN)  # four bytes each
         return call(tool.name, **args).replace("null", "-" + "9" * 16 + "." + "9" * 6)
 
     def test_the_longest_call_to_each_tool_is_allowed_and_fits_under_the_ceiling(self) -> None:
         grammar = Grammar(tools_to_gbnf())
         ceiling = decision_ceiling()
-        for tool in [*base.available(), Tool("ask", "", "", "", (base.ASK,), None, "")]:
+        for tool in [*base.available(), Tool("ask", "", "", "", (ASK,), None, "")]:
             with self.subTest(tool=tool.name):
                 said = self.longest(tool)
                 self.assertTrue(grammar.accepts(said))

@@ -6,7 +6,6 @@ import {
   ask,
   CONVERSATION,
   fakeChat,
-  options,
   push,
   question,
   START,
@@ -44,7 +43,7 @@ test.describe("with motion", () => {
     await page.goto("/");
     // Arriving from outside: the page introduces itself.
     await expect(page.locator("html")).toHaveClass(/intro/);
-    expect(await moving(page, "#hero, #composer, #skills")).toBeGreaterThan(0);
+    expect(await moving(page, "#hero, #composer")).toBeGreaterThan(0);
     await expect(page.locator("html")).not.toHaveClass(/intro/, { timeout: 4000 });
 
     await ask(page, "hello");
@@ -52,7 +51,7 @@ test.describe("with motion", () => {
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
     await page.locator("#new-chat").click();
     await expect(page.locator("#hero")).toBeVisible();
-    expect(await moving(page, "#hero, #skills")).toBe(0);
+    expect(await moving(page, "#hero")).toBe(0);
   });
 
   test("the curtains hang over the empty sheet, go with the first question and come back for a new chat", async ({
@@ -77,17 +76,6 @@ test.describe("with motion", () => {
     const name = await question(page).evaluate((el) => getComputedStyle(el).animationName);
     expect(name).toBe("msg-in");
   });
-
-  test("the palette arrives; its rows do not re-enter on every keystroke", async ({ page }) => {
-    await page.goto("/");
-    await page.locator("#input").pressSequentially("/");
-    await expect(options(page).first()).toBeVisible();
-    expect(await moving(page, "#palette")).toBe(1);
-    await expect.poll(() => moving(page, "#palette")).toBe(0);
-    await page.locator("#input").pressSequentially("c");
-    await expect(options(page).first()).toBeVisible();
-    expect(await moving(page, "#palette")).toBe(0);
-  });
 });
 
 test.describe("with reduced motion", () => {
@@ -96,7 +84,7 @@ test.describe("with reduced motion", () => {
   test("the sheet is simply there on arrival", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("#hero h1")).toBeVisible();
-    expect(await moving(page, "#hero, #composer, #skills")).toBe(0);
+    expect(await moving(page, "#hero, #composer")).toBe(0);
     // The curtains are a still tint, there at once.
     await expect(page.locator("#curtains")).toHaveAttribute("data-mode", "still");
     await expect(page.locator("#curtains")).toBeVisible();
@@ -136,13 +124,8 @@ test.describe("with reduced motion", () => {
     await expect(page.locator("#b-state")).toHaveText("writing");
   });
 
-  test("the palette and the history appear in place", async ({ page }) => {
+  test("the history appears in place", async ({ page }) => {
     await page.goto("/");
-    await page.locator("#input").pressSequentially("/");
-    await expect(options(page).first()).toBeVisible();
-    expect(await moving(page, "#palette")).toBe(0);
-    await page.locator("#input").press("Escape");
-
     await page.locator("#menu-btn").click();
     await expect(page.locator("#rail")).toBeVisible();
     await expect(page.locator("#convo-list [data-id]")).toHaveCount(3);

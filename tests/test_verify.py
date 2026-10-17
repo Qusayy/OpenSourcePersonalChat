@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from app.verify import Check, caption, check, denies_access, figures, note, scalars
+from app.agent.verify import Check, caption, check, denies_access, figures, note, scalars
 
 # What the tools write, as they write it.
 WEATHER = "Paris, France: overcast, 17.9°C (feels 17.2°C), wind 9.4 km/h."

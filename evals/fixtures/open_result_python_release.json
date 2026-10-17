@@ -1,0 +1,24 @@
+{
+  "tool": "open_result",
+  "args": {
+    "number": "1"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Page “Python 3.14.0 is now available” (python.org): Python 3.14.0 is the newest major release of the Python programming language. It contains many new features and optimizations.",
+    "card": "url",
+    "data": {
+      "url": "https://www.python.org/downloads/release/python-3140/",
+      "domain": "python.org",
+      "title": "Python 3.14.0 is now available",
+      "text": "Python 3.14.0 is the newest major release of the Python programming language. It contains many new features and optimizations, among them free-threaded builds and template strings.",
+      "lede": "Python 3.14.0 is the newest major release of the Python programming language.",
+      "words": 30,
+      "reading_minutes": 0.2,
+      "truncated": false
+    },
+    "error": null
+  }
+}

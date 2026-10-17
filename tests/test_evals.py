@@ -280,7 +280,7 @@ class ScoreTests(unittest.TestCase):
             ["answer: does not contain 'Porto'", "answer: contains 'i cannot'"],
         )
 
-    def test_the_skill_that_ran_is_the_visitors_or_the_last_the_model_chose_that_held(self) -> None:
+    def test_the_skill_that_ran_is_the_last_the_model_chose_that_held(self) -> None:
         from evals.score import skill_of
 
         def ran(*steps) -> Turn:
@@ -288,11 +288,9 @@ class ScoreTests(unittest.TestCase):
             trace.steps = list(steps)
             return Turn(user="x", events=[], trace=trace)
 
-        armed = agent.Step("route", name="compare", via="skill")
         chose = agent.Step("route", model=True, name="compare", via="model")
         refused = agent.Step("route", model=True, name="compare", via="model", ok=False)
         tool = agent.Step("route", model=True, name="wikipedia", via="model")
-        self.assertEqual(skill_of(ran(armed)), "compare")
         self.assertEqual(skill_of(ran(chose)), "compare")
         self.assertIsNone(skill_of(ran(refused)))
         self.assertIsNone(skill_of(ran(tool)))
@@ -377,7 +375,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["tasks"][0]["failures"], ["outcome: 'failed', expected 'answered'"])
 
     async def test_a_known_gap_that_starts_passing_is_reported_and_is_not_a_pass(self) -> None:
-        closed = Task(id="closed", category="c", persona="explainer", turns=("/calc 2+2",),
+        closed = Task(id="closed", category="c", turns=("/calc 2+2",),
                       script=("Four.",), expect={"calls": ["calculator"]},
                       pending="thought to be broken")
         report = await run_suite([closed], engine_kind="scripted")
@@ -443,9 +441,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(summarise([some], timed=True)["read_tokens"])
 
     async def test_only_the_categories_asked_for_are_run(self) -> None:
-        report = await run_suite(load_tasks(), engine_kind="scripted", categories=["skill"])
-        self.assertEqual({row["category"] for row in report["tasks"]}, {"skill"})
-        self.assertEqual(report["summary"]["tasks"], 12)
+        report = await run_suite(load_tasks(), engine_kind="scripted", categories=["skill-choice"])
+        self.assertEqual({row["category"] for row in report["tasks"]}, {"skill-choice"})
+        self.assertEqual(report["summary"]["tasks"], 6)
 
     async def test_the_seed_reaches_every_pass(self) -> None:
         from evals.runner import run_task
@@ -461,15 +459,15 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         from evals.runner import run_task
         from evals.scripted import ScriptedEngine
 
-        engine = ScriptedEngine(["First answer.", "Second answer."])
+        engine = ScriptedEngine([NONE, "First answer.", NONE, "Second answer."])
         self.addAsyncCleanup(engine.settled)
-        outcome = await run_task(
-            Task(id="two", category="c", persona="explainer", turns=("One?", "Two?")),
-            engine=engine,
-        )
-        self.assertEqual(
-            [m["content"] for m in outcome.last.prompt[1:]], ["One?", "First answer.", "Two?"]
-        )
+        outcome = await run_task(Task(id="two", category="c", turns=("One?", "Two?")), engine=engine)
+        prompt = outcome.last.prompt[1:]
+        self.assertEqual([m["role"] for m in prompt],
+                         ["user", "assistant", "user", "assistant", "user", "assistant", "user"])
+        self.assertTrue(prompt[0]["content"].startswith("One?"))
+        self.assertEqual(prompt[3]["content"], "First answer.")
+        self.assertTrue(prompt[4]["content"].startswith("Two?"))
 
     async def test_a_real_run_needs_an_engine_and_a_known_kind(self) -> None:
         with self.assertRaises(ValueError):
@@ -517,7 +515,7 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tasks = Path(tmp) / "tasks.jsonl"
             tasks.write_text(json.dumps({
-                "id": "wrong", "category": "c", "persona": "explainer", "turns": ["/calc 2+2"],
+                "id": "wrong", "category": "c", "turns": ["/calc 2+2"],
                 "script": ["Four."], "expect": {"route": {"tool": "clock"}},
             }) + "\n", encoding="utf-8")
             status, said = self.run_command("--tasks", str(tasks), "--out", str(Path(tmp) / "r.json"))
@@ -565,10 +563,10 @@ class CacheProbeTests(unittest.IsolatedAsyncioTestCase):
         rows = await eval_agent.probe_cache(engine, seed=0)
 
         self.assertEqual(
-            [(r["persona"], r["turn"], r["pass"]) for r in rows],
-            [("explainer", 1, "answer"), ("explainer", 2, "answer"), ("explainer", 3, "answer"),
-             ("agent", 1, "choice"), ("agent", 1, "answer"), ("agent", 2, "choice"),
-             ("agent", 2, "answer"), ("agent", 3, "choice"), ("agent", 3, "answer")],
+            [(r["tools"], r["turn"], r["pass"]) for r in rows],
+            [("off", 1, "answer"), ("off", 2, "answer"), ("off", 3, "answer"),
+             ("on", 1, "choice"), ("on", 1, "answer"), ("on", 2, "choice"),
+             ("on", 2, "answer"), ("on", 3, "choice"), ("on", 3, "answer")],
         )
         for row in rows:
             self.assertEqual(row["read"], 9)

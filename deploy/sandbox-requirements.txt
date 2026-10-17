@@ -1,0 +1,7 @@
+# What the agent's Python sandbox can import beside the standard library.
+# Installed by deploy/build-sandbox.sh into /opt/aurora-sandbox/venv, a venv of
+# its own that the app's code never imports from. Pinned, so a run behaves
+# the same until the pins are moved on purpose.
+numpy==2.1.3
+pandas==2.2.3
+sympy==1.13.3

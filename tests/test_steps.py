@@ -10,7 +10,7 @@ import time
 import unittest
 
 try:
-    from app import db
+    from app.store import conversations, db, runs
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
@@ -21,23 +21,23 @@ DAY = 86400.0
 class StepStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.settings = support.temp_database(self)
-        self.cid = db.create_conversation("agent", "Do I need a coat in Paris")
+        self.cid = conversations.create("Do I need a coat in Paris")
 
     def add(self, run: str = "run-1", idx: int = 0, kind: str = "answer", **more):
-        return db.add_step(run, self.cid, idx, kind, **more)
+        return runs.add_step(run, self.cid, idx, kind, **more)
 
     def test_the_steps_of_a_run_come_back_in_the_order_they_happened(self) -> None:
         self.add(idx=2, kind="answer")
         self.add(idx=0, kind="route")
         self.add(idx=1, kind="tool")
-        self.assertEqual([r["kind"] for r in db.run_steps("run-1")], ["route", "tool", "answer"])
-        self.assertEqual([r["idx"] for r in db.run_steps("run-1")], [0, 1, 2])
+        self.assertEqual([r["kind"] for r in runs.run_steps("run-1")], ["route", "tool", "answer"])
+        self.assertEqual([r["idx"] for r in runs.run_steps("run-1")], [0, 1, 2])
 
     def test_one_run_does_not_see_the_steps_of_another(self) -> None:
         self.add("run-1", kind="route")
         self.add("run-2", kind="answer")
-        self.assertEqual([r["kind"] for r in db.run_steps("run-1")], ["route"])
-        self.assertEqual(db.run_steps("no-such-run"), [])
+        self.assertEqual([r["kind"] for r in runs.run_steps("run-1")], ["route"])
+        self.assertEqual(runs.run_steps("no-such-run"), [])
 
     def test_every_figure_a_step_carries_is_kept(self) -> None:
         sid = self.add(
@@ -46,7 +46,7 @@ class StepStorageTests(unittest.TestCase):
             prompt_tokens=255, output_tokens=18, queue_ms=120.5, first_token_ms=4100.0,
             total_ms=6200.25, ok=True, created_at=1_800_000_000.0,
         )
-        (row,) = db.run_steps("run-1")
+        (row,) = runs.run_steps("run-1")
         self.assertEqual(row["id"], sid)
         self.assertEqual(row["conversation_id"], self.cid)
         self.assertEqual((row["name"], row["via"]), ("weather", "model"))
@@ -62,19 +62,19 @@ class StepStorageTests(unittest.TestCase):
 
     def test_tokens_nobody_measured_are_stored_as_unknown_and_not_as_zero(self) -> None:
         self.add(kind="answer", prompt_tokens=300)
-        self.assertIsNone(db.run_steps("run-1")[0]["new_tokens"])
+        self.assertIsNone(runs.run_steps("run-1")[0]["new_tokens"])
 
     def test_what_a_step_was_given_survives_as_it_was(self) -> None:
         given = {"location": "São Paulo", "calls": [{"tool": "weather", "args": {"n": 1.5}}]}
         self.add(idx=0, kind="tool", input=given)
         self.add(idx=1, kind="answer")
-        first, second = db.run_steps("run-1")
+        first, second = runs.run_steps("run-1")
         self.assertEqual(first["input"], given)
         self.assertIsNone(second["input"])
 
     def test_a_step_that_failed_says_so_and_why(self) -> None:
         self.add(kind="tool", name="calculator", ok=False, error="division by zero")
-        (row,) = db.run_steps("run-1")
+        (row,) = runs.run_steps("run-1")
         self.assertIs(row["ok"], False)
         self.assertEqual(row["error"], "division by zero")
 
@@ -82,60 +82,60 @@ class StepStorageTests(unittest.TestCase):
         self.add("run-1", 0, "route")
         self.add("run-1", 1, "answer")
         self.add("run-2", 0, "answer")
-        mid = db.add_message(self.cid, "assistant", "Take a coat.")
-        db.attach_steps(mid, "run-1")
-        self.assertEqual({r["message_id"] for r in db.run_steps("run-1")}, {mid})
-        self.assertEqual({r["message_id"] for r in db.run_steps("run-2")}, {None})
+        mid = conversations.add_message(self.cid, "assistant", "Take a coat.")
+        runs.attach_steps(mid, "run-1")
+        self.assertEqual({r["message_id"] for r in runs.run_steps("run-1")}, {mid})
+        self.assertEqual({r["message_id"] for r in runs.run_steps("run-2")}, {None})
 
     def test_deleting_a_conversation_deletes_its_steps_and_nobody_elses(self) -> None:
-        other = db.create_conversation("agent", "Another")
+        other = conversations.create("Another")
         self.add("run-1")
-        db.add_step("run-2", other, 0, "answer")
-        db.delete_conversation(self.cid)
-        self.assertEqual(db.run_steps("run-1"), [])
-        self.assertEqual(len(db.run_steps("run-2")), 1)
+        runs.add_step("run-2", other, 0, "answer")
+        conversations.delete(self.cid)
+        self.assertEqual(runs.run_steps("run-1"), [])
+        self.assertEqual(len(runs.run_steps("run-2")), 1)
 
     def test_steps_older_than_the_retention_are_forgotten(self) -> None:
         self.add("old", created_at=time.time() - 31 * DAY)
         self.add("new", created_at=time.time() - 29 * DAY)
-        db.prune_steps()
-        self.assertEqual(db.run_steps("old"), [])
-        self.assertEqual(len(db.run_steps("new")), 1)
+        runs.prune_steps()
+        self.assertEqual(runs.run_steps("old"), [])
+        self.assertEqual(len(runs.run_steps("new")), 1)
 
     def test_the_retention_is_the_setting_when_there_is_one(self) -> None:
         self.settings.steps_keep_days = 2
         self.add("old", created_at=time.time() - 3 * DAY)
         self.add("new", created_at=time.time() - 1 * DAY)
-        db.prune_steps()
-        self.assertEqual(db.run_steps("old"), [])
-        self.assertEqual(len(db.run_steps("new")), 1)
+        runs.prune_steps()
+        self.assertEqual(runs.run_steps("old"), [])
+        self.assertEqual(len(runs.run_steps("new")), 1)
 
     def test_old_steps_are_cleared_out_when_the_server_starts(self) -> None:
         self.add("old", created_at=time.time() - 31 * DAY)
         db.close()
         db.init()
-        self.assertEqual(db.run_steps("old"), [])
+        self.assertEqual(runs.run_steps("old"), [])
 
     def test_a_server_that_runs_for_days_still_clears_them_out(self) -> None:
         self.add("old", created_at=time.time() - 31 * DAY)
-        self.assertEqual(len(db.run_steps("old")), 1)
+        self.assertEqual(len(runs.run_steps("old")), 1)
         # As if the last clear-out were more than an hour ago.
-        db._pruned_at = time.time() - db.PRUNE_EVERY - 1  # noqa: SLF001 - the clock is the thing under test
+        runs._pruned_at = time.time() - runs.PRUNE_EVERY - 1  # noqa: SLF001 - the clock is the thing under test
         self.add("new")
-        self.assertEqual(db.run_steps("old"), [])
-        self.assertEqual(len(db.run_steps("new")), 1)
+        self.assertEqual(runs.run_steps("old"), [])
+        self.assertEqual(len(runs.run_steps("new")), 1)
 
     def test_a_retention_of_zero_stores_nothing_at_all(self) -> None:
         self.settings.steps_keep_days = 0
         self.assertIsNone(self.add())
-        self.assertEqual(db.run_steps("run-1"), [])
+        self.assertEqual(runs.run_steps("run-1"), [])
 
     def test_a_step_written_by_a_server_without_a_model_is_marked(self) -> None:
         self.add("real")
         self.settings.mock = True
         self.add("mock")
-        self.assertIs(db.run_steps("real")[0]["mock"], False)
-        self.assertIs(db.run_steps("mock")[0]["mock"], True)
+        self.assertIs(runs.run_steps("real")[0]["mock"], False)
+        self.assertIs(runs.run_steps("mock")[0]["mock"], True)
 
 
 class PruneTests(unittest.TestCase):
@@ -145,12 +145,12 @@ class PruneTests(unittest.TestCase):
     def test_a_run_is_kept_or_forgotten_whole(self) -> None:
         old, new = time.time() - 40 * 86400, time.time()
         # A run whose first step is past the retention and whose last is not.
-        db.add_step("straddles", "c1", 0, "route", created_at=old)
-        db.add_step("straddles", "c1", 1, "answer", created_at=new)
-        db.add_step("gone", "c1", 0, "answer", created_at=old)
-        db.prune_steps(keep_days=30)
-        self.assertEqual([r["idx"] for r in db.run_steps("straddles")], [0, 1])
-        self.assertEqual(db.run_steps("gone"), [])
+        runs.add_step("straddles", "c1", 0, "route", created_at=old)
+        runs.add_step("straddles", "c1", 1, "answer", created_at=new)
+        runs.add_step("gone", "c1", 0, "answer", created_at=old)
+        runs.prune_steps(keep_days=30)
+        self.assertEqual([r["idx"] for r in runs.run_steps("straddles")], [0, 1])
+        self.assertEqual(runs.run_steps("gone"), [])
 
 
 class MigrationTests(unittest.TestCase):
@@ -179,9 +179,9 @@ class MigrationTests(unittest.TestCase):
         db.close()
         db.init()  # and again: it is added once
         self.addCleanup(db.close)
-        cid = db.create_conversation("explainer", "Hi")
-        mid = db.add_message(cid, "assistant", "Hello", correction="Not in what was looked up: 5.")
-        stored = db.get_conversation(cid)["messages"]
+        cid = conversations.create("Hi")
+        mid = conversations.add_message(cid, "assistant", "Hello", correction="Not in what was looked up: 5.")
+        stored = conversations.get(cid)["messages"]
         self.assertEqual([(m["id"], m["correction"]) for m in stored],
                          [(mid, "Not in what was looked up: 5.")])
 

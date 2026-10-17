@@ -1,0 +1,32 @@
+[Unit]
+Description=Aurora — SearXNG, the web search the agent asks (loopback only)
+# Used only when the app's .env sets AURORA_SEARX_URL=http://127.0.0.1:8888.
+# Without it the app searches DuckDuckGo's HTML page and this can stay off.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=searxng
+Group=searxng
+WorkingDirectory=/opt/searxng/src
+Environment=SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+# Flask's own server: one caller, on loopback, is all it is asked to serve.
+ExecStart=/opt/searxng/venv/bin/python -m searx.webapp
+
+# Its engines are asked in parallel and it keeps their answers in memory for a
+# while; this keeps a bad day from reaching the model's memory.
+MemoryMax=512M
+MemoryHigh=400M
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

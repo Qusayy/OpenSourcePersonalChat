@@ -1,11 +1,11 @@
 /* The chat page's rules that are not about the DOM: what counts as a long
  * message, what a wait is called, which steps of an answer's route are worth
- * a line, what the slash palette lists. Pure, so each can be tested by value.
+ * a line. Pure, so each can be tested by value.
  */
 
 import { fmt, fmtInt, fmtMs } from "@/lib/format";
 import { hasIcon } from "@/lib/icons";
-import type { EngineInfo, LedgerStep, Skill, StepEvent, StoredRun, Tool } from "@/lib/types";
+import type { EngineInfo, LedgerStep, StepEvent, StoredRun } from "@/lib/types";
 
 /* ------------------------------------------------------------- composer -- */
 
@@ -108,15 +108,17 @@ export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] 
   // nothing: there is nothing about it left to say.
   if (status === "stopped") return rows.filter((row) => row.id !== data.id);
   const over = status !== "running";
-  if (over && (data.kind === "tool" || (data.kind === "route" && data.detail === "slash"))) {
+  // A command and a greeting decided nothing worth showing: the visitor knows
+  // what they asked for.
+  const said = data.kind === "route" && (data.detail === "slash" || data.detail === "chat");
+  if (over && (data.kind === "tool" || said)) {
     return rows.filter((row) => row.id !== data.id);
   }
   let icon = data.tool && hasIcon(data.tool) ? data.tool : "tool";
   let label = data.label || "";
   if (data.kind === "route") {
     icon = "route";
-    if (data.detail === "skill") label = `Skill: ${data.label}`;
-    else if (data.tool && data.detail && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
+    if (data.tool && data.detail && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
   }
   const row: StepRow = {
     id: data.id,
@@ -150,12 +152,15 @@ export interface LedgerRow {
 const CHOSEN_BY: Record<string, string> = {
   slash: "command",
   heuristic: "pattern",
+  chat: "small talk",
+  // Kept for answers stored while a visitor could arm a skill themselves.
   skill: "skill",
 };
 const KIND_WORDS: Record<string, string> = {
   route: "choice",
   decide: "choice again",
   repair: "sent back",
+  compose: "wrote code",
   fill: "filled in",
   tool: "tool",
   answer: "answer",
@@ -237,68 +242,4 @@ export function costFigures(m: Cost): CostFigure[] {
   if (has(m.completion_tokens)) figs.push({ value: fmtInt(m.completion_tokens), words: "tokens" });
   if (has(m.total_ms)) figs.push({ value: fmtMs(m.total_ms), words: "to answer" });
   return figs;
-}
-
-/* --------------------------------------------------------- the palette -- */
-
-export interface PaletteRow {
-  kind: "tool" | "skill";
-  id: string;
-  /** What the row shows: a tool's example command, or a skill's name. */
-  cmd: string;
-  desc: string;
-}
-
-/**
- * What the input's text asks the palette for: the word after the slash, or
- * null when the palette should be closed (no slash, a second line, or
- * arguments already being typed).
- */
-export function paletteQuery(value: string): string | null {
-  if (!value.startsWith("/") || value.includes("\n")) return null;
-  if (value.slice(1).includes(" ")) return null; // arguments being typed
-  return value.slice(1).split(" ")[0] ?? "";
-}
-
-/**
- * The rows for a query. On the empty sheet the skills are already listed, as
- * rows, directly under the input this palette opens over. Listing them again
- * would put the same six names on screen twice, so there it offers the tools.
- */
-export function paletteRows(
-  query: string,
-  tools: readonly Tool[],
-  skills: readonly Skill[],
-  emptySheet: boolean,
-): PaletteRow[] {
-  const q = query.toLowerCase();
-  const toolRows: PaletteRow[] = tools
-    .filter((t) => t.name.includes(q) || (t.example || "").toLowerCase().includes(q))
-    .map((t) => ({
-      kind: "tool",
-      id: t.name,
-      cmd: t.example || `/${t.name}`,
-      desc: t.description,
-    }));
-  const skillRows: PaletteRow[] = skills
-    .filter((s) => s.id.includes(q) || s.name.toLowerCase().includes(q))
-    .map((s) => ({ kind: "skill", id: s.id, cmd: s.name, desc: s.blurb }));
-  return emptySheet ? toolRows : [...skillRows, ...toolRows];
-}
-
-/**
- * A tool's example, as the input should hold it once chosen: the command, a
- * space, and the example's arguments selected so typing replaces them.
- */
-export function completeCommand(cmd: string): { value: string; select: [number, number] | null } {
-  const [head, ...rest] = cmd.split(" ");
-  const value = `${head} `;
-  if (!rest.length) return { value, select: null };
-  const full = value + rest.join(" ");
-  return { value: full, select: [value.length, full.length] };
-}
-
-/** The tools a skill runs through, in order, as plain words. */
-export function pipeWords(pipeline: readonly string[]): string[] {
-  return pipeline.map((node) => (node === "model" ? "answer" : node.replace(/_/g, " ")));
 }

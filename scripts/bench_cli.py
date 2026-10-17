@@ -16,8 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import bench, db  # noqa: E402
 from app.llm import engine  # noqa: E402
+from app.ops import bench  # noqa: E402
+from app.store import db
 
 
 async def main() -> int:

@@ -48,6 +48,7 @@ SLASH = {
     "news": "news", "headlines": "news",
     "open": "open_result",
     "python": "python", "py": "python", "run": "python",
+    "file": "read_file", "cat": "read_file",
 }
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
@@ -114,6 +115,8 @@ def _args_from_free_text(tool_name: str, rest: str) -> dict | None:
         return {"text": rest} if rest else None
     if tool_name == "recall":
         return {"query": rest}
+    if tool_name == "read_file":
+        return {"path": rest} if rest else None
     if tool_name == "web_search":
         return {"query": rest} if rest else None
     if tool_name == "news":

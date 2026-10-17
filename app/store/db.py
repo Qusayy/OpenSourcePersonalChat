@@ -141,8 +141,22 @@ CREATE TABLE IF NOT EXISTS notes (
     created_at       REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notes_conv ON notes(conversation_id, created_at);
-"""
 
+-- The files of a conversation's project, every version an answer wrote. The
+-- newest version of each path is the project as it stands.
+CREATE TABLE IF NOT EXISTS project_files (
+    conversation_id  TEXT NOT NULL,
+    path             TEXT NOT NULL,
+    version          INTEGER NOT NULL,
+    lang             TEXT NOT NULL,
+    content          TEXT NOT NULL,
+    bytes            INTEGER NOT NULL,
+    lines            INTEGER NOT NULL,
+    run_id           TEXT,
+    created_at       REAL NOT NULL,
+    PRIMARY KEY (conversation_id, path, version)
+);
+"""
 
 
 def init() -> None:

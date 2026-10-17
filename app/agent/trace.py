@@ -89,6 +89,10 @@ class Trace:
     # The run's own stopwatch, first stage to last. It is a little more than
     # the steps add up to: the difference is the time between them.
     wall_ms: float | None = None
+    # Every file the answer wrote out whole, in order: its path, language and
+    # content, and the ``close`` event the page is told of it, which whoever
+    # keeps the file completes with the version it was kept as.
+    files: list[dict] = field(default_factory=list)
 
     def turn(self, question: str, at: float | None = None) -> Turn:
         """This run as the next message is read with it: what it sent, where

@@ -72,6 +72,7 @@ KINDS = frozenset({
     "now",          # when the message was sent
     "compose",      # what a program the model is about to write is for
     "code",         # the program it wrote
+    "project",      # the files of the conversation's project, by name
 })
 # What survives of a turn replayed compact, beside the question and answer.
 FOUND = frozenset({"data", "failed", "observation"})

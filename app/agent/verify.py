@@ -206,6 +206,9 @@ def supported(figure: Figure, sources: list[Figure]) -> bool:
     return False
 
 
+# A fenced block, closed or still open at the end.
+_FENCED = re.compile(r"```.*?(?:```|\Z)", re.S)
+
 # Saying there is no live data to be had. Read only where a lookup worked.
 _DENIALS = (
     re.compile(
@@ -259,7 +262,8 @@ def check(
     """
     known = [f for text in sources for f in figures(text)]
     missing: list[str] = []
-    for figure in figures(answer):
+    # Code is not a claim about the world: a port, a version, a loop bound.
+    for figure in figures(_FENCED.sub(" ", answer)):
         if _exempt(figure) or (with_units_only and figure.unit is None):
             continue
         if not supported(figure, known) and figure.raw not in missing:

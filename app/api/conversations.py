@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..store import conversations
+from ..store import conversations, projects
 
 router = APIRouter()
 
@@ -19,6 +19,9 @@ async def api_conversation(cid: str):
     convo = conversations.get(cid)
     if convo is None:
         raise HTTPException(404, "No such conversation")
+    # What its project has, without the files themselves; the page asks for
+    # those when it shows the project.
+    convo["project"] = projects.manifest(cid)
     return convo
 
 

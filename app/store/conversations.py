@@ -8,7 +8,7 @@ import time
 import uuid
 
 from ..ledger import ledger
-from . import db, notes
+from . import db, notes, projects
 
 
 # ------------------------------------------------------------ conversations --
@@ -117,6 +117,7 @@ def _runs_by_message(cid: str) -> dict[str, dict]:
 
 def delete(cid: str) -> None:
     notes.forget_conversation(cid)
+    projects.forget(cid)
     db.write("DELETE FROM context_turns WHERE conversation_id = ?", (cid,))
     db.write("DELETE FROM steps WHERE conversation_id = ?", (cid,))
     db.write("DELETE FROM tool_calls WHERE conversation_id = ?", (cid,))

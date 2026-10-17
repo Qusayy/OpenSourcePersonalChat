@@ -30,6 +30,7 @@ from typing import AsyncIterator, Awaitable, Callable
 from ..config import settings
 from ..llm import Completion, Engine, Stop, engine as default_engine
 from ..llm.usage import blank
+from ..projects.parse import FileBlocks
 from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
@@ -109,6 +110,7 @@ def run(
     scope: str | None = None,
     now: datetime | None = None,
     links: tuple[Link, ...] = (),
+    project: list[dict] | None = None,
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -137,6 +139,9 @@ def run(
     ``links`` is the last list of results the conversation was shown, what
     "open the second one" means until the run is shown another.
 
+    ``project`` is the conversation's project as it stands, file by file
+    (``store.projects.manifest``): what the model is told is there.
+
     ``style`` is how the answer is written; left unset, it is read from the
     message (``style.style_for``). ``now`` is when the message was sent, as
     the model is told it; left unset, it is now, in the site's timezone.
@@ -162,6 +167,7 @@ def run(
         scope=scope,
         now=now if now is not None else datetime.now(ZoneInfo(settings.timezone)),
         links=tuple(links),
+        project=list(project or ()),
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -228,6 +234,8 @@ class _Run:
     # What an answer wrote before it was taken back for saying it could not
     # look something up; None while no answer has been.
     retracted: str | None = None
+    # The conversation's project as it stands: each file's path and size.
+    project: list[dict] = field(default_factory=list)
     # The last list of results the model was shown: the pages it may ask to
     # open by number, and addresses it may go to though the user never wrote
     # them, since a search, not a page, gave them.
@@ -611,6 +619,17 @@ class _Run:
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
 
+    def _filed(self, found: dict) -> dict:
+        """A file event of the answer, as the page is told it. A file that
+        closed is kept in the trace, with the event, which whoever keeps the
+        file completes."""
+        if found["type"] != "close":
+            return found
+        told = {"type": "close", "path": found["path"], "lang": found["lang"],
+                "lines": found["content"].count("\n")}
+        self.trace.files.append({**found, "event": told})
+        return told
+
     def _needs_program(self, call: ToolCall) -> bool:
         tool = REGISTRY.get(call.name)
         return bool(tool and tool.program and "program" not in call.meta and "refusal" not in call.meta)
@@ -725,9 +744,10 @@ class _Run:
     def _transcript(self, tools: list) -> Transcript:
         """The run's one prompt, with as much of the conversation as leaves
         room for the run. What had to give for it is kept in ``trim``."""
-        window = self._window(system_for(tools), self._message(), run=True)
+        message = self._message()
+        window = self._window(system_for(tools), message, run=True)
         self._trimmed(window)
-        return Transcript.fitted(window.parts, own=2)
+        return Transcript.fitted(window.parts, own=len(message))
 
     async def _take(self) -> AsyncIterator[Event]:
         """Take the slot for the whole run, passing on the notices of its
@@ -934,8 +954,18 @@ class _Run:
         return " ".join(URL_RE.sub(" ", self.message).split())
 
     def _message(self) -> list[Part]:
-        """This message as the model reads it: what was said, then when."""
-        return [Part("user", "question", self.said), sent_at(self.now)]
+        """This message as the model reads it: what was said, then when, then
+        the project's files, where the conversation has a project."""
+        parts = [Part("user", "question", self.said), sent_at(self.now)]
+        if self.project:
+            listed = ", ".join(
+                f"{f['path']} ({f['lines']} line{'' if f['lines'] == 1 else 's'})" for f in self.project
+            )
+            parts.append(Part("user", "project", (
+                f"The project so far: {listed}. To change a file, write the whole file "
+                "again under its ### path line."
+            )))
+        return parts
 
     def _prompt(self) -> list[Part]:
         """What this message is read as, after the conversation so far: the
@@ -1048,8 +1078,14 @@ class _Run:
         ) as stream:
             began = time.perf_counter()
             written = ""
+            blocks = FileBlocks()
             async for event, data in stream:
-                if event == "token" and watch is not None:
+                if event == "token":
+                    yield event, data
+                    for found in blocks.feed(data.get("t", "")):
+                        yield "file", self._filed(found)
+                    if watch is None:
+                        continue
                     written += data.get("t", "")
                     if watch(written):
                         self.retracted = written
@@ -1058,11 +1094,11 @@ class _Run:
                             total_ms=(time.perf_counter() - began) * 1000 + waited,
                             ok=False, error="retracted: it said it could not look this up",
                         ))
-                        yield event, data
                         yield "retract", {"reason": "It said it could not look this up, so it will."}
                         return
                     if len(written) > WATCHED:
                         watch = None
+                    continue
                 if event == "error":
                     self.trace.steps.append(Step(
                         "answer", model=True, input=trimmed, ok=False, error=data.get("message"),
@@ -1074,6 +1110,9 @@ class _Run:
                     yield event, data
                     continue
                 stopped = bool(data.get("cancelled"))
+                if not stopped:
+                    for found in blocks.finish():
+                        yield "file", self._filed(found)
                 queued = data.get("queue_wait_ms")
                 self.trace.steps.append(Step(
                     "answer", model=True, input=trimmed,

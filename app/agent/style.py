@@ -72,6 +72,17 @@ STYLES: dict[str, Style] = {
             repeat_penalty=1.0,
         ),
         Style(
+            id="project",
+            cue=(
+                "Write it as a project of files. Before each file put a line with its path, "
+                "like ### app/main.py, then the whole file in one fenced block with its "
+                "language. Give every file it needs, then one short paragraph on how to run it."
+            ),
+            temperature=0.2,
+            max_tokens=1536,
+            repeat_penalty=1.0,
+        ),
+        Style(
             id="list",
             cue="Reply with a numbered list of varied, specific items. Favour range over polish.",
             temperature=0.9,
@@ -104,6 +115,19 @@ _CODE_THING = re.compile(
     rf"endpoint|bug|unit tests?|algorithm|cli|app|web ?app|website|web ?page|bot|"
     rf"flask|django|fastapi|express|vue|svelte|numpy|pandas|{_LANGUAGES})\b", re.I,
 )
+# Something made of several files: an app, a site, a game, a service.
+_PROJECT = re.compile(
+    r"\b(?:build|create|make|scaffold|generate|write|start|set up|code)\b(?:\s+[\w'-]+){0,6}?\s+"
+    r"(?:project|app|application|website|web ?site|site|game|bot|api|server|backend|frontend|"
+    r"cli|extension|plugin|dashboard|library|package|service)s?\b",
+    re.I,
+)
+# A change to something already made.
+_CHANGE = re.compile(
+    r"\b(?:add|change|update|fix|rename|remove|delete|refactor|edit|replace|move|split|"
+    r"make (?:it|the)|now|also|instead)\b",
+    re.I,
+)
 _LIST = re.compile(
     r"\b(?:ideas?|brainstorm\w*|suggest(?:ions?)?|names? for|ways to|tips|"
     r"list (?:of|some)|options for|alternatives to)\b"
@@ -118,15 +142,25 @@ _QUICK_FACT = re.compile(
 _OPEN = re.compile(r"\b(?:why|explain|how (?:does|do|is|are|can|would|should)|what if|teach)\b", re.I)
 
 
-def style_for(message: str) -> Style:
+def style_for(message: str, *, project: bool = False) -> Style:
     """The style a message asks for, by what it says.
 
-    In order: code (code shown, a language named, or code to write or mend);
+    First, a project: something made of several files to build, or, in a
+    conversation that has a project already (``project``), code or a change
+    asked for. Then, in order: code (code shown, a language named, or code to
+    write or mend);
     a list (ideas, suggestions, "five ways to"); a quick answer (asked
     briefly, a word or three such as a greeting, or a short who/what/when
     that is not a why); and otherwise an explanation.
     """
     text = " ".join((message or "").split())
+    if _PROJECT.search(text):
+        return STYLES["project"]
+    coded = bool(_SHOWN.search(message or "") or _IN_LANGUAGE.search(text) or (
+        _VERB.search(text) and _CODE_THING.search(text)
+    ))
+    if project and (coded or _CHANGE.search(text)):
+        return STYLES["project"]
     if _SHOWN.search(message or "") or _IN_LANGUAGE.search(text) or (
         _VERB.search(text) and _CODE_THING.search(text)
     ):

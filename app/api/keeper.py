@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .. import agent
-from ..store import conversations, runs
+from ..store import conversations, projects, runs
 
 
 class Keeper:
@@ -25,6 +25,7 @@ class Keeper:
         self.question_id = question_id
         self.call_ids: list[str] = []
         self.steps_kept = 0
+        self.files_kept = 0
         self.answered = False
 
     def keep(self) -> None:
@@ -35,6 +36,19 @@ class Keeper:
                 data=result.data, summary=result.summary or result.error or "",
                 ms=result.ms, ok=result.ok,
             ))
+
+        for written in self.trace.files[self.files_kept:]:
+            # Kept before the page hears it closed, and the page is told the
+            # version it was kept as, or why it was not kept.
+            kept = projects.add(
+                self.cid, written["path"], written["content"], lang=written["lang"],
+                run_id=self.trace.run_id,
+            )
+            written["event"].update(
+                {"version": kept["version"], "kept": True} if kept["kept"]
+                else {"kept": False, "why": kept["why"]}
+            )
+            self.files_kept += 1
 
         for step in self.trace.steps[self.steps_kept:]:
             runs.add_step(

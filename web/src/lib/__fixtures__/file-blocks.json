@@ -1,0 +1,64 @@
+[
+  {
+    "name": "a heading names the file the block under it holds",
+    "answer": "Here it is.\n\n### app.py\n```python\nprint(\"hi\")\n```\nRun it.",
+    "files": [{ "path": "app.py", "lang": "python", "content": "print(\"hi\")\n" }]
+  },
+  {
+    "name": "a bold or backticked path, and a blank line before the fence",
+    "answer": "**templates/index.html**\n\n```html\n<h1>Hi</h1>\n```\n\n`static/app.css`\n```css\nh1 { color: red; }\n```\n",
+    "files": [
+      { "path": "templates/index.html", "lang": "html", "content": "<h1>Hi</h1>\n" },
+      { "path": "static/app.css", "lang": "css", "content": "h1 { color: red; }\n" }
+    ]
+  },
+  {
+    "name": "a path in the fence's own line",
+    "answer": "```python app/util.py\ndef f():\n    return 1\n```\n```js:src/main.js\nconsole.log(1)\n```\n```toml title=\"pyproject.toml\"\n[project]\n```\n",
+    "files": [
+      { "path": "app/util.py", "lang": "python", "content": "def f():\n    return 1\n" },
+      { "path": "src/main.js", "lang": "js", "content": "console.log(1)\n" },
+      { "path": "pyproject.toml", "lang": "toml", "content": "[project]\n" }
+    ]
+  },
+  {
+    "name": "a fence with no path is a code block, and what is inside it is not read",
+    "answer": "Try:\n```\n### not/a/file.py\n```\n```bash\npip install flask\n```\n",
+    "files": []
+  },
+  {
+    "name": "a header that is not followed by a fence names nothing",
+    "answer": "### app.py\nThis file starts the server.\n\n```python\nprint(1)\n```\n",
+    "files": []
+  },
+  {
+    "name": "a Markdown file may hold fenced blocks of its own",
+    "answer": "### README.md\n```markdown\n# Title\n```bash\npip install flask\n```\nDone.\n```\nThat is all.",
+    "files": [
+      { "path": "README.md", "lang": "markdown", "content": "# Title\n```bash\npip install flask\n```\nDone.\n" }
+    ]
+  },
+  {
+    "name": "the language comes from the name where the fence gives none",
+    "answer": "### Dockerfile\n```\nFROM python:3.11\n```\n### main.go\n```\npackage main\n```\n",
+    "files": [
+      { "path": "Dockerfile", "lang": "dockerfile", "content": "FROM python:3.11\n" },
+      { "path": "main.go", "lang": "go", "content": "package main\n" }
+    ]
+  },
+  {
+    "name": "a path that could leave the project, or that Windows will not make, names nothing",
+    "answer": "### ../evil.py\n```python\nx = 1\n```\n### /etc/passwd.txt\n```\nroot\n```\n### con.txt\n```\nx\n```\n### C:/a.py\n```python\ny = 2\n```\n",
+    "files": []
+  },
+  {
+    "name": "a file still open when the answer stops is not a file",
+    "answer": "### app.py\n```python\nprint(1)\n",
+    "files": []
+  },
+  {
+    "name": "a closing fence may be longer than three",
+    "answer": "### a.txt\n````text\nhello\n````\n",
+    "files": [{ "path": "a.txt", "lang": "text", "content": "hello\n" }]
+  }
+]

@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from .api import bench, chat, conversations, deps, pages, system
+from .api import bench, chat, conversations, deps, pages, projects, system
 from .gate import GateMiddleware
 from .ops import telemetry
 from .store import db
@@ -36,6 +36,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Aurora", lifespan=lifespan, docs_url=None, redoc_url=None)
 # Before every route and every error page: see app/gate.py.
 app.add_middleware(GateMiddleware)
-for group in (pages, system, chat, conversations, bench):
+for group in (pages, system, chat, conversations, projects, bench):
     app.include_router(group.router)
 app.add_exception_handler(404, pages.handle_404)

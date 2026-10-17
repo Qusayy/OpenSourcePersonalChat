@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from .. import agent
 from ..agent.context import turns_from
 from ..agent.style import style_for
-from ..store import conversations
+from ..store import conversations, projects
 from ..tools import REGISTRY
 from ..tools.results import links_of
 from . import deps
@@ -36,7 +36,6 @@ class ChatRequest(BaseModel):
 async def api_chat(payload: ChatRequest):
     engine = deps.engine
     user_text = payload.message.strip()
-    style = style_for(user_text)
 
     cid = payload.conversation_id
     created = False
@@ -54,6 +53,8 @@ async def api_chat(payload: ChatRequest):
     question_id = conversations.add_message(cid, "user", user_text)
     conversations.touch(cid)
     links = last_links(cid)
+    project = projects.manifest(cid)
+    style = style_for(user_text, project=bool(project))
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex
@@ -78,6 +79,7 @@ async def api_chat(payload: ChatRequest):
             run = agent.run(
                 user_text, style=style, history=history, trace=trace,
                 engine=engine, request_id=run_id, context=context, scope=cid, links=links,
+                project=project,
             )
             try:
                 # Closed with this response, not whenever it is collected: a

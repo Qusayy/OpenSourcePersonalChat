@@ -934,7 +934,7 @@ class ReplayTests(ChatCase):
     def test_what_was_sent_is_kept_with_the_conversation_and_goes_with_it(self) -> None:
         support.played_tools(self, {"weather": WEATHER})
         cid = self.two(ScriptedEngine([self.PARIS, self.NONE, "Overcast.", self.NONE, "Milder."]),
-                       "Do I need a coat in Paris", "And tomorrow?")
+                       "Do I need a coat in Paris today", "And tomorrow?")
         messages, records = conversations.record(cid)
         self.assertEqual(len(records), 2)
         first = records[0]
@@ -945,7 +945,7 @@ class ReplayTests(ChatCase):
         # Reloading the conversation shows what it always showed.
         convo = self.client.get(f"/api/conversations/{cid}").json()
         self.assertEqual([m["content"] for m in convo["messages"]],
-                         ["Do I need a coat in Paris", "Overcast.", "And tomorrow?", "Milder."])
+                         ["Do I need a coat in Paris today", "Overcast.", "And tomorrow?", "Milder."])
         self.client.delete(f"/api/conversations/{cid}")
         self.assertEqual(conversations.record(cid), ([], []))
         # And it is not cleared out with the steps.

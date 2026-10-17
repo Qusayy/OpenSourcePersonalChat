@@ -51,6 +51,17 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"'”’)\]]*\s+(?=[\"'“‘(\[]?[A
 _WORD = re.compile(r"[^\W_]+(?:['’][^\W_]+)?")
 
 
+# Where the first sentence of a short line of our own ends: at ., ! or ?
+# followed by a space.
+_FIRST_END = re.compile(r"(?<=[.!?])\s")
+
+
+def first_sentence(text: str) -> str:
+    """The first sentence of a line: a reply or a result, read for its one
+    fact and not for whatever advice follows it."""
+    return _FIRST_END.split(text, maxsplit=1)[0]
+
+
 def estimate(text: str) -> int:
     """Tokens in ``text``, counted as a byte in three, rounded up."""
     return -(-len(text.encode("utf-8")) // 3)

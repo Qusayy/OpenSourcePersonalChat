@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from ..tools.base import Arg, Choice
+from ..tools.base import Arg, Choice, Rejection, check_args, was_given
 from .context import Part
 from .route import URL_RE, ToolCall
 
@@ -268,6 +268,32 @@ def offered(tools: list) -> list[Choice]:
         if s.cue and s.steps and all(step.tool in names for step in s.steps)
     ]
     return [*tools, *skills]
+
+
+def check_inputs(
+    skill: Skill, given: dict, theirs: list[str]
+) -> tuple[dict[str, str], Rejection | None]:
+    """A skill's inputs as the model gave them, checked as a call's arguments
+    are: the inputs it may run with, and why it cannot, if it cannot. Text
+    with nothing in it is not an input given, and an address must be one the
+    user wrote (``theirs``)."""
+    clean, rejection = check_args(skill.name, skill.inputs, given)
+    reasons = list(rejection.reasons) if rejection else []
+    reasons += [
+        f"{arg.name} is required and was not given"
+        for arg in skill.missing({k: str(v).strip() for k, v in clean.items()})
+        if arg.name in clean
+    ]
+    reasons += [
+        f"{arg.name} must be an address the user gave; got {clean[arg.name]!r}"
+        for arg in skill.inputs
+        if arg.quoted and clean.get(arg.name) and not was_given(clean[arg.name], theirs)
+    ]
+    clean = {name: str(value) for name, value in clean.items()}
+    if not reasons:
+        return clean, None
+    said = rejection.summary if rejection else f"{skill.name} was not given what it needs."
+    return clean, Rejection(tuple(reasons), said, "bad input")
 
 
 def get_skill(skill_id: str | None) -> Skill | None:

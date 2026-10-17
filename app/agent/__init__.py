@@ -8,7 +8,8 @@ and the window it is fitted to (``context``), and the check on the answer
 """
 
 from .context import RUN_ROOM
-from .loop import ALREADY_LOOKED_UP, LEAST_SHARE, OUT_OF_LOOKUPS, Step, Trace, run, what_happened
+from .loop import ALREADY_LOOKED_UP, LEAST_SHARE, OUT_OF_LOOKUPS, run, what_happened
+from .trace import Step, Trace
 
 __all__ = [
     "ALREADY_LOOKED_UP", "LEAST_SHARE", "OUT_OF_LOOKUPS", "RUN_ROOM",

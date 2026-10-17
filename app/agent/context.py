@@ -26,12 +26,11 @@ made on an estimate, and one whole-prompt count checks it.
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from ..chatml import render_chatml
-from ..text import clip, estimate
+from ..text import clip, estimate, first_sentence
 
 # The most a summary of dropped turns takes.
 SUMMARY_TOKENS = 150
@@ -70,8 +69,6 @@ FOUND = frozenset({"data", "failed", "observation"})
 STALE = "This was looked up earlier and is out of date now."
 SUMMARY_HEADING = "Earlier in this conversation, in short:"
 
-# Where one sentence ends and the next begins.
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s")
 
 
 @dataclass(frozen=True)
@@ -250,7 +247,7 @@ def summary(turns: list[Turn], budget: int = SUMMARY_TOKENS) -> Part | None:
     lines: list[str] = []
     used = estimate(SUMMARY_HEADING) + 1
     for turn in reversed(turns):
-        said = _SENTENCE_END.split(turn.answer.strip(), maxsplit=1)[0] if turn.answer else ""
+        said = first_sentence(turn.answer.strip()) if turn.answer else ""
         line = "- " + clip(" ".join(turn.question.split()), 25)
         if said:
             line += " — " + clip(" ".join(said.split()), 25)

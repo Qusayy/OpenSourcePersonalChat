@@ -8,6 +8,7 @@ colors:
   ink: "oklch(22% 0.015 150)"
   ink-2: "oklch(45% 0.018 150)"
   live: "oklch(46% 0.12 152)"
+  aurora-violet: "oklch(48% 0.15 295)"
   fault: "oklch(48% 0.19 27)"
   caution: "oklch(47% 0.095 70)"
   scrim: "oklch(22% 0.015 150 / 0.32)"
@@ -22,6 +23,7 @@ colors:
   ink-dark: "oklch(93% 0.01 150)"
   ink-2-dark: "oklch(72% 0.018 150)"
   live-dark: "oklch(80% 0.19 150)"
+  aurora-violet-dark: "oklch(76% 0.14 295)"
   fault-dark: "oklch(74% 0.14 27)"
   caution-dark: "oklch(82% 0.13 82)"
   scrim-dark: "oklch(8% 0.01 150 / 0.6)"
@@ -189,14 +191,14 @@ The material is paper and ink. A near-white sheet tinted toward green-grey, two 
 
 The system refuses gradients, glass and backdrop blur, glow, pills, message bubbles, avatar tiles, a sparkle mark, uppercase tracked micro-labels, themed vocabulary with renamed labels, a black-and-orange palette, and monospace set on words. The themed vocabulary, the cold mono-caps look and the black-and-orange palette are the user's stated reasons for reverting an earlier redesign; the rest were in the plan the user approved, except the monospace rule, which came out of review.
 
-There is one exception to the first and third of those, and it has a name: the aurora, a light that rises from the status line while an answer is being produced. The user asked for one live generation effect. It is the only luminous thing on any page, and it is not there when nothing is in progress.
+There is one exception to the first and third of those, and it has a name: the aurora. It comes in two forms. The curtains hang from the top bar over the head of a page at rest, and go when a conversation starts. The strip rises from the status line while an answer is being produced. The user asked for the strip first, as one live generation effect, and for the curtains later, so that the site would feel like the aurora it is named for. They are the only luminous things on any page.
 
 **Key Characteristics:**
 - Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
 - Everything is centred: the top bar, the reading column and the status line share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
-- One light, the aurora, and only while an answer is in flight.
+- One light, the aurora, in two forms: curtains over the head of a page at rest, and a strip rising from the status line while an answer is in flight.
 - One typeface. Numerals and units fixed-width, words proportional.
 - Hairline rules instead of boxes; flat surfaces; one shadow, only for things that float.
 - Every fact said once, in the place it belongs.
@@ -208,6 +210,8 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 ### Primary
 - **Aurora Live** (`live`, `live-dark`): marks what is happening right now. The status line's state dot and state word during a request phase, the running tok/s figure and its trace, the writing caret in the thread and in the input, a running step in the route line, and the benchmark's progress bar. It is not a brand colour and not a selection colour.
+
+- **Aurora Violet** (`aurora-violet`, `aurora-violet-dark`): the colour the aurora turns as it climbs, as a real one does: the top of the strip's reach and the upper part of the curtains. Only ever drawn faint, under the aurora's ceiling; never text, never a control, never a mark of state.
 
 ### Secondary
 - **Fault Red** (`fault`, `fault-dark`): a failed tool's caption, the "model unavailable" state, the Stop button's outline and word, the error toast, a destructive hover, the character count past its limit.
@@ -227,7 +231,7 @@ A green-grey sheet and two inks, every neutral tinted toward the accent hue (150
 
 ### Named Rules
 
-**The Live Rule.** `live` marks the thing that is happening now and nothing that is merely selected, chosen, successful or important. Where you are and what you chose are said in ink with a 2px underline. If nothing on the page is in progress, nothing on the page is green. The aurora is the live colour at its largest and is held to the same rule.
+**The Live Rule.** `live` marks the thing that is happening now and nothing that is merely selected, chosen, successful or important. Where you are and what you chose are said in ink with a 2px underline. If nothing on the page is in progress, nothing on the page is green. The strip is the live colour at its largest and is held to the same rule. The curtains are the one exception: they hang at rest, in the aurora's green and violet, wide and faint, at the head of the page and behind it, and nothing there can be read as a mark that something is running.
 
 **The Two Inks Rule.** There are two inks and no third. A fainter grey is not available to reach for; hierarchy comes from size, weight and space.
 
@@ -281,7 +285,7 @@ Flat. Surfaces are the sheet and one tint of it; separation is a hairline. There
 ### Shadow Vocabulary
 - **Pop** (`box-shadow: 0 1px 2px oklch(22% 0.015 150 / 0.08), 0 12px 32px -8px oklch(22% 0.015 150 / 0.22)`; in dark, `0 1px 2px oklch(0% 0 0 / 0.4), 0 12px 32px -8px oklch(0% 0 0 / 0.6)`): the command palette, the history dialog, toasts.
 
-Layers are five: the aurora (-1, behind everything that sits in the sheet), status line (10), popovers (30), toasts (60), the skip link (200).
+Layers are five: the aurora's two forms, the curtains and the strip (-1, behind everything that sits in the sheet), status line (10), popovers (30), toasts (60), the skip link (200).
 
 ### Named Rules
 
@@ -366,14 +370,23 @@ One row along the bottom edge of every page, like an editor's: sheet-tint ground
 **The Measured Rule.** Nothing on this line is a configured description of the machine. Core count, load and memory are read from the host while the page is open. If a figure cannot be read on a given host it is left off. The same holds for prose on the other pages: a sentence that names the machine's size prints the measured figure, a claim about what would or would not fit is worked out against it, and an estimate is called an estimate. In mock mode timings are of a fake stream: they are not stored, and the Benchmark page opens with a ruled note saying so.
 
 ### The aurora
-The page's one luminous thing: a strip of light in the live colour that rises from the top edge of the status line, across the full width of the window, while this visitor's request is being read or written. At no other time is it on the page.
+A strip of light in the live colour, turning violet where it reaches highest, that rises from the top edge of the status line, across the full width of the window, while this visitor's request is being read or written. At no other time is it on the page.
 
 - **What drives it:** the same phase the status word shows, from the same call, so the two cannot disagree. Only two phases light it: reading, when the model has the prompt, and writing. The moment before that, when the request is sent and the server has not yet said whether it is running or queued, lights nothing, and neither does queued, which is someone else's work. While the model reads it holds a low, slow swell. Once tokens arrive its brightness and reach follow the measured tokens per second as a share of the fastest steady rate this page has seen (never less than 1 tok/s), so a machine writing at its own full speed is at full brightness whether that is six tokens a second or sixty; a rate counts as steady once an answer has been writing for 2.5 seconds, and until then the rate is measured against itself. Each token adds a small lift. When the answer ends it fades over about two seconds and the element is hidden, not left transparent, and stops asking for frames.
 - **Where it sits:** fixed to the window, 14rem tall (10rem below 620px), a child of the body behind everything: under the thread, the composer and the palette, over nothing but the sheet's own colour. It cannot cover a control or take a pointer event.
-- **Ceiling:** no pixel carries more than 24% of the live colour, on either sheet; the shader clamps to it after dithering. Composited at that ceiling the second ink reads 4.88:1 on the light sheet and 4.60:1 on the dark one, and the Stop label 4.76:1 and 4.61:1. On the dark sheet the range below the ceiling is lifted (a power of 0.55), because a faint green on near-black is close to no green at all; the ceiling itself does not move.
+- **Ceiling:** no pixel carries more than 24% of the live colour, on either sheet; the shader clamps to it after dithering. Composited at that ceiling the second ink reads 4.88:1 on the light sheet and 4.60:1 on the dark one, and the Stop label 4.76:1 and 4.61:1. The violet at the same ceiling leaves more contrast than the green on both sheets: the second ink reads 4.90:1 and 4.98:1 over it, and the Stop label 4.79:1 and 5.02:1. On the dark sheet the range below the ceiling is lifted (a power of 0.55), because a faint green on near-black is close to no green at all; the ceiling itself does not move.
 - **How it is drawn:** a WebGL2 fragment shader on a transparent canvas, at half resolution with the pixel ratio capped at 1.5, eased by elapsed time so it runs the same at 60 and 120 frames a second. The light is broad curtains, not bands: its noise takes each lattice value from integer arithmetic, so neighbouring pixels never differ by more than two or three levels in 255. The shader compiles when the page is idle, never on the first send. Without WebGL2, or until the shader is ready, a CSS strip of the same colour and ceiling whose opacity is the same energy. Under reduced motion, a still, faint tint for as long as the request runs.
 
-**The One Light Rule.** There is one gradient and one glow in the system, and this is it. It is made of the live colour and governed by the Live Rule: nothing in progress, no light. Nothing may borrow it: no glow on a button, no gradient on a surface, no second effect.
+### The curtains
+The aurora at rest: curtains of light hanging from the bottom edge of the top bar, across the full width of the window, behind the headline of the empty chat page and the head of the Benchmark and About pages (`web/src/lib/curtains.ts`). Green at the hem, violet above it.
+
+- **What drives them:** the page. The empty chat sheet and the long pages hang them; a conversation does not. When the first question is sent they fade over about half a second, the element is hidden and asks for no more frames, and the strip at the status line takes over. New chat brings them back. At rest they sway slowly and their brightness breathes a little either way. They fade as the page is scrolled away from them, and once the page has moved further than they are deep they ask for no frames.
+- **Where they sit:** fixed to the window directly under the top bar, at -1 behind everything in the sheet. On the empty chat page they are `clamp(11rem, 32vh, 19rem)` deep (9rem at 620px and below), deep enough to reach behind the headline; on Benchmark and About, 6rem (5rem). They cannot cover a control or take a pointer event.
+- **Ceiling:** the strip's. No pixel carries more than 24% of the green or the violet, so every figure under The aurora holds over them too; the headline's ink reads at least 9.24:1 over their brightest part. Below the ceiling the range is lifted a little on the light sheet as well (a power of 0.8), and as the strip's on the dark one (0.55).
+- **How they are drawn:** a WebGL2 fragment shader sharing the strip's noise (`web/src/lib/gl.ts`): a near curtain and a fainter, higher one behind it. Each hangs to a hem that rises and falls along its length; the light is brightest in a thin glow just above the hem and falls away upward, never to nothing. Fine rays run up the curtain and soften as they climb, and it is brighter where the sheet folds toward the viewer. Half resolution, pixel ratio capped at 1.5, at most about thirty drawings a second. The context is asked for at low power and refused where it would be drawn on the processor. The shader compiles when the page is idle and nothing is shown until it is ready, so the curtains fade in rather than jump from a stand-in.
+- **Fallbacks:** under reduced motion, without WebGL2, on a software renderer, or after a lost context, a still tint in the same colours under the same ceiling: violet under the bar, green lower down, then air. It is shown and hidden by the same rules and asks for no frames.
+
+**The One Aurora Rule.** There is one gradient and one glow in the system, and it is the aurora, in its two forms: the curtains at rest and the strip while an answer is in flight. Both are its green and its violet, under one ceiling, behind everything. Nothing may borrow them: no glow on a button, no gradient on a surface, no third effect.
 
 ### The cover
 The page a visitor without a session is sent in place of the site (`web/cover.html`, `web/src/cover`; the server side is `app/gate.py`). It is not a page of the application and it is outside this system: it has no sheet, no ink and no status line, and it is the one place a picture is drawn. The rules above are the application's and are not loosened by it. The two never share a screen: the sky gives way to the sheet's own colour before the application is loaded.
@@ -384,7 +397,7 @@ The page a visitor without a session is sent in place of the site (`web/cover.ht
 - **In front of the sky** is a fjord: far mountains in the haze, nearer headlands at both edges, and still water between them that gives the sky back, drawn out a little by ripples. The water's edge sits under a fifth of the way up the view, lower on a phone held upright, so the stars that can be joined are always clear of the land.
 
 ### Motion
-Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances. Two durations sit outside the tokens on purpose: the 240ms entrance run from script for route steps and tool figures, and the 280ms ink-in, which has a gentler curve of its own because the arrival curve spent the whole fade in its first tenth of a second.
+Motion explains a change, acknowledges an action or reports work in progress; nothing moves for decoration, except the curtains, which are the aurora the site is named for. Durations are tokens: 120ms for feedback (hover, press, colour), 200ms for a routine change of state, 320ms for something crossing part of the screen, 480ms for an entrance or a chart drawing itself. Arrivals decelerate on `cubic-bezier(0.16, 1, 0.3, 1)`; exits are faster than entrances. Two durations sit outside the tokens on purpose: the 240ms entrance run from script for route steps and tool figures, and the 280ms ink-in, which has a gentler curve of its own because the arrival curve spent the whole fade in its first tenth of a second.
 
 - **The arrival.** Come to from outside (a typed address, a link from elsewhere, a reload), a page assembles once in reading order: headline, what it is, where to type, what to try, each rising 10px out of nothing, 50ms apart. It does not replay on New chat or when moving between the site's own pages.
 - **The first send.** The composer travels from under the headline to the foot of the sheet. This is the authored move.
@@ -392,11 +405,12 @@ Motion explains a change, acknowledges an action or reports work in progress; no
 - **The status line.** The state word slides when the state changes: the old word leaves upward, the new one comes up from below. Core columns and meters ease between samples. The dot breathes while waiting.
 - **Choosing.** One rule slides under the chosen persona instead of an underline vanishing from one word and appearing under another. Send becomes Stop with the word seen to change.
 - **Lists.** History rows arrive one after another, once per opening. A skill row's route leans the way it runs under the pointer. The command palette arrives as a panel; its rows, rebuilt on every keystroke, do not.
-- **In flight.** The rate eases between measurements, its trace scrolls, and the aurora rises with the rate (see The status line and The aurora). These run on one shared frame loop that exists only while something is subscribed to it; at rest the page asks for no frames.
+- **In flight.** The rate eases between measurements, its trace scrolls, and the aurora rises with the rate (see The status line and The aurora). These run on one shared frame loop that exists only while something is subscribed to it.
+- **At rest.** The curtains sway and breathe over the head of the page, drawn at most about thirty times a second. They are the only thing that asks for frames at rest, and they stop when the tab is hidden, when the page is scrolled past them and when a conversation starts.
 - **The thread.** Questions enter from 6px below over 200ms; route steps and tool figures from 8px over 240ms. An answer is inked in: each stretch of text fades up from nothing over 280ms as it arrives, opacity only, so nothing shifts the line it lands in. The block being written is rebuilt ten times a second, so the fade is carried across rebuilds rather than restarted, and across the final clean render too: the last words finish fading before their wrappers are removed.
 - **Charts.** Bars grow from the baseline, the memory budget fills segment by segment and the history line is drawn left to right, each when scrolled to and once only.
 
-Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed, charts are shown drawn, the rate and its trace step from sample to sample, the aurora holds still and an answer's text simply appears, while colour and opacity transitions stay so the interface still acknowledges input.
+Bars and meters animate `scaleX` or `scaleY`, never width or height. Every entrance is written from the element's resting state, so a failed animation leaves the content in place. Under reduced motion the loops stop, travel is removed, charts are shown drawn, the rate and its trace step from sample to sample, the strip and the curtains hold still and an answer's text simply appears, while colour and opacity transitions stay so the interface still acknowledges input.
 
 ## How it is built
 
@@ -442,7 +456,7 @@ Tailwind's reset (Preflight) is on, so no element keeps a browser default margin
 
 ### Moving parts are not rendered
 
-React draws the page. It does not draw each frame of something that moves. The streaming answer, the rate figure and its trace, the state word and the aurora are written to the DOM directly by plain modules (`web/src/lib`, `shell/figures.ts`), each given an empty element that React then leaves alone. And a figure with its unit is written as one string, not as two expressions side by side: two text nodes are shaped separately and can land a pixel apart.
+React draws the page. It does not draw each frame of something that moves. The streaming answer, the rate figure and its trace, the state word, the aurora and the curtains are written to the DOM directly by plain modules (`web/src/lib`, `shell/figures.ts`), each given an empty element that React then leaves alone. And a figure with its unit is written as one string, not as two expressions side by side: two text nodes are shaped separately and can land a pixel apart.
 
 ## Do's and Don'ts
 
@@ -450,7 +464,7 @@ React draws the page. It does not draw each frame of something that moves. The s
 - **Do** centre new content and stop it at the column measure (42rem, on every page). What needs more width breaks out symmetrically, never to one side.
 - **Do** keep the status line on the same container as the top bar, on every page.
 - **Do** keep `live` for what is in progress: the state dot and word, the running rate and its trace, the caret, a running step, a progress bar, the aurora.
-- **Do** keep the aurora under its ceiling and behind the content, and check the second ink over it if either changes.
+- **Do** keep both forms of the aurora under the one ceiling and behind the content, and check the second ink over the green and the violet if any of them changes.
 - **Do** mark selection and location in ink with a 2px underline.
 - **Do** set numerals and units fixed-width with tabular figures, and the words beside them proportional.
 - **Do** separate with a 1px rule and space; set a result as a captioned figure between two hairlines.
@@ -462,9 +476,9 @@ React draws the page. It does not draw each frame of something that moves. The s
 - **Do** check every new colour pair against both sheets; the floor is 4.5:1.
 
 ### Don't:
-- **Don't** use gradients. The aurora is the one exception.
+- **Don't** use gradients. The aurora, in its two forms, is the one exception.
 - **Don't** use glass, backdrop blur or translucent surfaces.
-- **Don't** use glow, or add a second light. The aurora is the one exception, and only while an answer is in flight.
+- **Don't** use glow, or add a third light. The aurora is the one exception: the curtains at rest, the strip only while an answer is in flight.
 - **Don't** make pills. Corners are 4px; the one floating panel is 8px.
 - **Don't** put messages in bubbles or add avatar tiles.
 - **Don't** add a sparkle mark.

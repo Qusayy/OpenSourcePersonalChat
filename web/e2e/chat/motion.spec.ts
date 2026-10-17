@@ -55,6 +55,21 @@ test.describe("with motion", () => {
     expect(await moving(page, "#hero, #skills")).toBe(0);
   });
 
+  test("the curtains hang over the empty sheet, go with the first question and come back for a new chat", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const band = page.locator("#curtains");
+    // Shown once the page has been idle long enough to decide how to draw them.
+    await expect(band).toBeVisible({ timeout: 8000 });
+    await ask(page, "hello");
+    await expect(band).toBeHidden({ timeout: 4000 });
+    await answer(page, "Hi.");
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    await page.locator("#new-chat").click();
+    await expect(band).toBeVisible({ timeout: 4000 });
+  });
+
   test("a question and its answer arrive from just below", async ({ page }) => {
     await page.goto("/");
     await ask(page, "hello");
@@ -82,6 +97,9 @@ test.describe("with reduced motion", () => {
     await page.goto("/");
     await expect(page.locator("#hero h1")).toBeVisible();
     expect(await moving(page, "#hero, #composer, #skills")).toBe(0);
+    // The curtains are a still tint, there at once.
+    await expect(page.locator("#curtains")).toHaveAttribute("data-mode", "still");
+    await expect(page.locator("#curtains")).toBeVisible();
     const opacity = await page.locator("#hero h1").evaluate((el) => getComputedStyle(el).opacity);
     expect(opacity).toBe("1");
   });

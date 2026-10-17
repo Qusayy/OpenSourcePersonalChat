@@ -224,10 +224,31 @@ def _offered(name: str) -> bool:
 SMALL_TALK = re.compile(
     r"^(?:hi|hello|hey|hiya|yo|good (?:morning|afternoon|evening|night)|thanks?(?: you)?|"
     r"thank you(?: so much| very much)?|cheers|ok(?:ay)?|cool|great|nice|bye|goodbye|"
-    r"see you|how are you(?: doing)?|what'?s up)(?:\s+(?:there|again|mate|friend))?"
+    r"see you|how are you(?: doing)?|what'?s up)"
+    r"(?:\s+(?:there|again|mate|friend|dear|all|everyone|guys|buddy|folks)){0,2}"
     r"[\s!.?,:)]*$",
     re.I,
 )
+
+# A message whose answer turns on when it is asked: "today", "the latest",
+# "how old", a weekday, a year. Only such a message is told when it was sent;
+# told it with a greeting, a small model answers with the date.
+TIMELY = re.compile(
+    r"\b(?:today|tonight|tomorrow|yesterday|now|nowadays|current(?:ly)?|latest|recent(?:ly)?|"
+    r"news|headlines?|upcoming|soon|ago|since|until|till|how long|how old|age|born|"
+    r"date|time|day|days|week|weekend|month|year|years|o'?clock|deadline|schedule|"
+    r"weather|forecast|prices?|scores?|stocks?|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|april|june|"
+    r"july|august|september|october|november|december|"
+    r"birthday|anniversary|holidays?|christmas|easter|ramadan|eid)\b"
+    r"|\b(?:19|20)\d\d\b",
+    re.I,
+)
+
+
+def time_matters(text: str) -> bool:
+    """Whether the answer to ``text`` depends on when it was asked."""
+    return bool(TIMELY.search(text or ""))
 
 
 def heuristic(text: str) -> ToolCall | None:

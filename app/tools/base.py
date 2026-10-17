@@ -140,6 +140,10 @@ class Tool:
     program: bool = False
     # Seconds before the call is abandoned, where it is not the setting's.
     timeout: float | None = None
+    # It works on the conversation's project, and can be chosen only in a
+    # conversation that has one. It stays on the menu, which every
+    # conversation shares; it leaves the grammar of a choice.
+    project: bool = False
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)

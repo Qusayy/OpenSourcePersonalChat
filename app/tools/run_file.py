@@ -69,5 +69,6 @@ register(Tool(
     budget=200,
     observe=_observe,
     timeout=sandbox.WALL_SECONDS + 5,
+    project=True,
     requires=lambda: settings.sandbox != "off" and sandbox.runner().available(),
 ))

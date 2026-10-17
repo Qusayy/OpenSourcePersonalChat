@@ -108,7 +108,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         support.with_settings(self, tools_enabled=True, allow_outbound=True, agent_loop=True)
 
     async def test_the_answer_says_each_file_as_it_is_written(self) -> None:
-        engine = ScriptedEngine(["{\"tool\": \"none\"}", ANSWER])
+        engine = ScriptedEngine([ANSWER])
         self.addAsyncCleanup(engine.settled)
         trace = agent.Trace()
         stream = await collect(agent.run("build me a small flask todo app", history=[],
@@ -119,8 +119,46 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([f["path"] for f in trace.files], ["app.py", "templates/index.html"])
         self.assertEqual(trace.files[0]["content"], "from flask import Flask\napp = Flask(__name__)\n")
         # The project style asked for it, and the tokens are the answer as written.
-        self.assertIn(STYLES["project"].cue, engine.passes[1].prompt)
+        self.assertIn(STYLES["project"].cue, engine.passes[0].prompt)
         self.assertEqual(trace.answer, ANSWER)
+
+    async def test_a_new_project_is_written_without_choosing_a_tool(self) -> None:
+        # Offered the menu, a small model chose the calculator for "I want to
+        # create a python project", and a pattern hears "a weather app" as a
+        # question about the weather.
+        for message in ("I want to create a python project", "build me a weather app in flask"):
+            with self.subTest(message):
+                engine = ScriptedEngine([ANSWER])
+                self.addAsyncCleanup(engine.settled)
+                trace = agent.Trace()
+                await collect(agent.run(message, history=[], trace=trace, engine=engine))
+                self.assertEqual(len(engine.passes), 1)
+                self.assertIsNone(engine.passes[0].grammar)
+                self.assertEqual([(s.kind, s.via) for s in trace.steps][0], ("route", "chat"))
+                self.assertEqual([f["path"] for f in trace.files], ["app.py", "templates/index.html"])
+
+    async def test_a_command_still_runs_in_a_project_message(self) -> None:
+        engine = ScriptedEngine(["Four."])
+        self.addAsyncCleanup(engine.settled)
+        trace = agent.Trace()
+        await collect(agent.run("/calc 2+2", history=[], trace=trace, engine=engine,
+                                style=STYLES["project"]))
+        self.assertEqual(trace.steps[0].name, "calculator")
+
+    async def test_the_tools_for_a_project_are_chosen_only_where_there_is_one(self) -> None:
+        engine = ScriptedEngine(["{\"tool\": \"none\"}", "Fine."])
+        self.addAsyncCleanup(engine.settled)
+        await collect(agent.run("Suggest a name for my boat", history=[], engine=engine))
+        self.assertNotIn("read_file", engine.passes[0].grammar)
+        # Still on the menu, which every conversation shares, so the system
+        # text, and the cache of it, is the same with a project or without.
+        self.assertIn("read_file", engine.passes[0].messages[0]["content"])
+
+        engine = ScriptedEngine(["{\"tool\": \"none\"}", "Fine."])
+        self.addAsyncCleanup(engine.settled)
+        await collect(agent.run("what does app.py do", history=[], engine=engine,
+                                project=[{"path": "app.py", "lines": 40}]))
+        self.assertIn("read_file", engine.passes[0].grammar)
 
     async def test_a_project_so_far_is_listed_after_the_message(self) -> None:
         engine = ScriptedEngine(["{\"tool\": \"none\"}", "Done."])
@@ -172,6 +210,17 @@ class ChatTests(ChatCase):
         self.assertIn("The project so far: app.py (2 lines), templates/index.html (1 line).",
                       "\n".join(m["content"] for m in self.engine.answer_prompts[-1]))
         self.assertEqual(style_for("add a delete button", project=True).id, "project")
+
+    def test_a_project_asked_for_goes_on_until_it_is_written(self) -> None:
+        # The conversation that did not become a project: asked for, then the
+        # details, then the files.
+        self.use_engine(PlayedEngine("What should it do?"))
+        cid = only(self.chat("I want to create a python project"), "conversation")[0]["id"]
+        for message in ("first init a new basic hello world fastapi",
+                        "can you create the files and write to them"):
+            with self.subTest(message):
+                self.chat(message, conversation_id=cid)
+                self.assertIn(STYLES["project"].cue, self.engine.answer_prompts[-1][-1]["content"])
 
 
 class ReadFileTests(unittest.IsolatedAsyncioTestCase):

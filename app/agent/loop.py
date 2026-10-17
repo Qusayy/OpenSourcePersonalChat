@@ -54,6 +54,7 @@ from .route import (
     parse_action,
     program_of,
     search_query,
+    time_matters,
 )
 from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered
 from .style import Style, style_for
@@ -424,6 +425,12 @@ class _Run:
             self.routed = True
             return
         call, tier = free_route(self.message)
+        if tier != "slash" and self.style.id == "project" and not self.project:
+            # A new project is written, not looked up. Offered a choice, a
+            # small model reaches for whatever is on the menu (the calculator,
+            # a file that is not there yet), and a pattern would hear "a
+            # weather app" as a question about the weather.
+            call, tier = None, "chat"
         if tier is None:
             return
         self.routed = True
@@ -468,9 +475,12 @@ class _Run:
     async def _choose(
         self, kind: str, messages: list[dict], tools: list, given: dict, *, held: bool = False
     ) -> tuple[Action, Completion]:
-        """One pass that chooses, read as an action and written down whole."""
+        """One pass that chooses, read as an action and written down whole.
+        A tool for a project is on the menu but not in the grammar of a
+        conversation that has none."""
+        choices = [c for c in tools if self.project or not getattr(c, "project", False)]
         said = await self.engine.complete_json(
-            messages, decision_grammar(tools), decision_limit(tools),
+            messages, decision_grammar(choices), decision_limit(choices),
             request_id=self.request_id, seed=self.seed, held=held,
         )
         action = parse_action(said, {c.name: c.skill for c in tools if isinstance(c, Offer)})
@@ -954,9 +964,12 @@ class _Run:
         return " ".join(URL_RE.sub(" ", self.message).split())
 
     def _message(self) -> list[Part]:
-        """This message as the model reads it: what was said, then when, then
-        the project's files, where the conversation has a project."""
-        parts = [Part("user", "question", self.said), sent_at(self.now)]
+        """This message as the model reads it: what was said, then when, where
+        that matters to the answer, then the project's files, where the
+        conversation has a project."""
+        parts = [Part("user", "question", self.said)]
+        if time_matters(self.message):
+            parts.append(sent_at(self.now))
         if self.project:
             listed = ", ".join(
                 f"{f['path']} ({f['lines']} line{'' if f['lines'] == 1 else 's'})" for f in self.project

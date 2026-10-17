@@ -2,7 +2,7 @@
 grammar a choice is held to, with the most tokens a choice can take.
 
 A choice is one JSON object: a tool and its arguments, a question for the
-user, or ``{"tool": "none"}``. The grammar is what makes a reply that is not
+user, ``{"tool": "write_files"}`` or ``{"tool": "none"}``. The grammar is what makes a reply that is not
 one of those impossible to write, whatever size the model.
 """
 
@@ -29,6 +29,8 @@ _NUMBER_BYTES = 24
 _CHAR_BYTES = 4
 
 NONE_ACTION = '{"tool": "none"}'
+# The answer is to be written as a project of files.
+FILES_ACTION = '{"tool": "write_files"}'
 
 # A program, as the pass that writes one is held to it: one fenced Python
 # block, ended where its fence closes. Inside it anything but three
@@ -107,7 +109,9 @@ class _Builder:
         return lines
 
 
-def tools_to_gbnf(tools: list[Choice] | None = None, *, ask: bool = True) -> str:
+def tools_to_gbnf(
+    tools: list[Choice] | None = None, *, ask: bool = True, files: bool = False
+) -> str:
     """Build a grammar that can only produce a valid action.
 
     This is what makes routing viable on a 1.5B model. Asked politely for JSON
@@ -115,8 +119,9 @@ def tools_to_gbnf(tools: list[Choice] | None = None, *, ask: bool = True) -> str
     by this grammar, malformed output is not merely unlikely, it is
     unrepresentable.
 
-    An action is a call to one tool, a question for the user (``ask``), or
-    ``none``. Within a call:
+    An action is a call to one tool, a question for the user (``ask``),
+    files to write (``write_files``, where ``files``), or ``none``. Within a
+    call:
 
     * a required argument is always there, an optional one may be;
     * text has a ceiling, so a reply always closes instead of running on until
@@ -141,6 +146,9 @@ def tools_to_gbnf(tools: list[Choice] | None = None, *, ask: bool = True) -> str
     if ask:
         alts.append("t-ask")
         lines.append(f"t-ask ::= {call('ask', (ASK,))}")
+    if files:
+        alts.append("t-files")
+        lines.append(f"t-files ::= {_literal(FILES_ACTION)}")
     alts.append("t-none")
     lines.append(f"t-none ::= {_literal(NONE_ACTION)}")
 
@@ -178,7 +186,9 @@ def args_ceiling(args: tuple[Arg, ...]) -> int:
     return len(b"{}") + _fields_size(args)
 
 
-def decision_ceiling(tools: list[Choice] | None = None, *, ask: bool = True) -> int:
+def decision_ceiling(
+    tools: list[Choice] | None = None, *, ask: bool = True, files: bool = False
+) -> int:
     """The longest reply the grammar allows, in bytes.
 
     A token is at least one byte, so a pass given this many tokens can always
@@ -194,7 +204,7 @@ def decision_ceiling(tools: list[Choice] | None = None, *, ask: bool = True) -> 
     sizes = [longest(t.name, t.args) for t in tools]
     if ask:
         sizes.append(longest("ask", (ASK,)))
-    return max([len(NONE_ACTION), *sizes])
+    return max([len(NONE_ACTION), len(FILES_ACTION) if files else 0, *sizes])
 
 
 def tool_menu(tools: list[Choice] | None = None) -> str:

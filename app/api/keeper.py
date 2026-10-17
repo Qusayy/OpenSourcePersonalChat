@@ -94,7 +94,7 @@ class Keeper:
             return
         runs.add_run(
             "chat",
-            label=self.label,
+            label=self.label or self.trace.style,
             prompt_tokens=usage.get("prompt_tokens"),
             gen_tokens=usage.get("completion_tokens"),
             ttft_ms=usage.get("ttft_ms"),

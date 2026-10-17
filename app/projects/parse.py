@@ -45,6 +45,27 @@ OPENING = re.compile(
 )
 CLOSING = re.compile(r"^\s{0,3}`{3,}\s*$")
 
+# What an answer that writes a project is held to as it is written: a line or
+# two first, then each file as a ### path line and its fenced block, with a
+# line between files if it likes, and a paragraph at the end. Told the
+# convention, a small model still wrapped a whole answer in one ```text fence
+# and wrote a description under each path instead of the file. Here a path is
+# always followed by a block, and a block always has a path. A line of a file
+# never begins with three backticks, so a Markdown file holds no fence of its
+# own, and the block's own fence is the only way out of it.
+GRAMMAR = "\n".join((
+    r'root ::= intro? file (between? file){0,15} outro? "\n"?',
+    r'intro ::= prose "\n" (prose "\n")? "\n"?',
+    r'between ::= prose "\n" "\n"?',
+    r'file ::= "### " path "\n```" lang "\n" line+ "```\n" "\n"?',
+    r'path ::= seg ("/" seg){0,7}',
+    r'seg ::= [A-Za-z0-9_.-]+',
+    r'lang ::= [A-Za-z0-9_+#-]*',
+    r'line ::= ([^`\n] [^\n]* | "`" [^`\n] [^\n]* | "``" [^`\n] [^\n]*)? "\n"',
+    r'outro ::= prose ("\n" "\n"? prose){0,5}',
+    r'prose ::= [^#`\n] [^\n]*',
+)) + "\n"
+
 
 @dataclass
 class _Open:

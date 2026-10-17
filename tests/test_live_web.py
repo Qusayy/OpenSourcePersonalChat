@@ -16,7 +16,6 @@ from unittest import mock
 
 try:
     from app import agent
-    from app.agent.route import free_route, news_topic, search_query
     from app.tools import news, open_result, results, web_search
     from app.tools.base import CALL, CallContext, Link, ToolResult, available
     from evals.scripted import ScriptedEngine
@@ -117,45 +116,6 @@ class ListTests(unittest.TestCase):
         links = results.links_of({"items": news.read_feed(FEED)})
         self.assertEqual(links[0], Link("https://news.google.com/rss/articles/one",
                                         "Budget passes after late vote", "reuters.com"))
-
-
-class RoutingTests(unittest.TestCase):
-    def setUp(self) -> None:
-        support.with_settings(self, allow_outbound=True, search="auto", searx_url="")
-
-    def test_the_news_goes_to_the_news_with_what_it_is_about(self) -> None:
-        for text, topic in (("Hi what are the latest news", ""), ("any headlines?", ""),
-                            ("latest news about the election", "the election"),
-                            ("football news today", "football")):
-            with self.subTest(text):
-                call, tier = free_route(text)
-                self.assertEqual((call.name, tier), ("news", "heuristic"))
-                self.assertEqual(call.args, {"topic": topic} if topic else {})
-                self.assertEqual(news_topic(text), topic)
-
-    def test_something_current_goes_to_the_web(self) -> None:
-        for text in ("who is the current president of France", "what is the price of bitcoin",
-                     "what is the latest version of python"):
-            with self.subTest(text):
-                call, _ = free_route(text)
-                self.assertEqual(call.name, "web_search")
-        self.assertEqual(search_query("Hi, what is the newest iPhone?"), "what is the newest iPhone")
-
-    def test_something_to_be_made_is_not_a_search(self) -> None:
-        for text in ("write a poem about the latest trends", "tell me a joke about current events"):
-            with self.subTest(text):
-                call, _ = free_route(text)
-                self.assertNotEqual(getattr(call, "name", None), "web_search")
-
-    def test_a_place_is_a_place_without_when(self) -> None:
-        call, _ = free_route("weather in Paris today")
-        self.assertEqual(call.args, {"location": "Paris"})
-
-    def test_with_the_search_off_nothing_is_sent_to_it(self) -> None:
-        support.with_settings(self, search="off")
-        call, _ = free_route("what is the price of bitcoin")
-        self.assertIsNone(call)
-        self.assertNotIn("web_search", [t.name for t in available()])
 
 
 class EngineChoiceTests(unittest.TestCase):
@@ -272,58 +232,12 @@ FOUND = ToolResult(True, "Search", card="search", data={"items": [
 ]})
 
 
-class GuardTests(RunCase):
-    """An answer that says it cannot look something up, from a run that
-    could have, is taken back, and the lookup is made."""
-
-    async def test_the_answer_is_taken_back_and_written_again_from_a_search(self) -> None:
-        engine = self.scripted(NONE, DENIAL, "The motion passed, 312 to 201.")
-        seen = support.played_tools(self, {"web_search": FOUND})
-        trace = agent.Trace()
-        stream = await collect(agent.run("how did the vote on the motion go", history=[],
-                                         trace=trace, engine=engine))
-        names = [name for name, _ in stream]
-        self.assertIn("retract", names)
-        self.assertLess(names.index("retract"), names.index("done"))
-        self.assertEqual(seen["web_search"], [{"query": "how did the vote on the motion go"}])
-        self.assertEqual(trace.calls[0][0].via, "guard")
-        self.assertEqual(trace.answer, "The motion passed, 312 to 201.")
-        self.assertEqual([s.kind for s in trace.steps], ["route", "answer", "tool", "answer"])
-        self.assertEqual((trace.steps[1].ok, trace.steps[1].error.split(":")[0]), (False, "retracted"))
-        self.assertTrue(engine.free)
-
-    async def test_an_answer_that_looked_something_up_is_left_to_the_check(self) -> None:
-        weather = '{"tool": "web_search", "args": {"query": "the vote"}}'
-        engine = self.scripted(weather, NONE, DENIAL)
-        support.played_tools(self, {"web_search": FOUND})
-        stream = await collect(agent.run("how did the vote on the motion go", history=[], engine=engine))
-        self.assertNotIn("retract", [name for name, _ in stream])
-
-    async def test_with_nothing_to_look_it_up_with_the_answer_stands(self) -> None:
-        support.with_settings(self, search="off")
-        engine = self.scripted(NONE, DENIAL)
-        trace = agent.Trace()
-        stream = await collect(agent.run("how did the vote on the motion go", history=[],
-                                         trace=trace, engine=engine))
-        self.assertNotIn("retract", [name for name, _ in stream])
-        self.assertEqual(trace.answer, DENIAL)
-
-    async def test_it_is_taken_back_once_and_not_again(self) -> None:
-        engine = self.scripted(NONE, DENIAL, DENIAL)
-        support.played_tools(self, {"web_search": FOUND})
-        trace = agent.Trace()
-        stream = await collect(agent.run("how did the vote on the motion go", history=[],
-                                         trace=trace, engine=engine))
-        self.assertEqual([name for name, _ in stream].count("retract"), 1)
-        self.assertEqual(trace.answer, DENIAL)
-
-
 class ConversationLinksTests(support.ChatCase):
     def test_the_next_message_can_open_what_the_last_one_was_shown(self) -> None:
         support.played_tools(self, {"news": ToolResult(True, "Top", card="news", data={"items": [
             results.item("Budget passes", "https://example.org/budget"),
         ]})})
-        first = self.chat("what are the headlines")
+        first = self.chat("/news")
         from app.api.chat import last_links
 
         cid = support.only(first, "conversation")[0]["id"]

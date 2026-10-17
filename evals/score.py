@@ -46,7 +46,7 @@ def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
     tool = (ran.name if ran else None) if route.via == "skill" else route.name
     if tool == "ask":
         tool = None  # a question put back to the user, not a tool
-    args = ran.input if ran else (route.input if route.via in ("slash", "heuristic") else None)
+    args = ran.input if ran else (route.input if route.via == "slash" else None)
     return tool, args, route.via
 
 
@@ -122,6 +122,9 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
         failed.append(
             f"passes: {passes} through the model, at most {expect['max_model_passes']} expected"
         )
+
+    if "style" in expect and trace.style != expect["style"]:
+        failed.append(f"style: written as {trace.style!r}, expected {expect['style']!r}")
 
     outcome = expect.get("outcome", "answered")
     if trace.outcome != outcome:

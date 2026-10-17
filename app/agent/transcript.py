@@ -27,7 +27,8 @@ from __future__ import annotations
 import re
 
 from ..chatml import render_chatml
-from ..tools.base import Tool, tool_menu
+from ..tools.base import Tool
+from ..tools.grammar import tool_menu
 from .context import Part, merged
 from .personas import Persona
 from .skills import SAY_SO

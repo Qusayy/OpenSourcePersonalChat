@@ -22,7 +22,8 @@ try:
         data,
         system_for,
     )
-    from app.tools.base import available, tool_menu
+    from app.tools.base import available
+    from app.tools.grammar import tool_menu
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")

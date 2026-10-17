@@ -2,7 +2,8 @@
 
 This module holds the connection and the schema. What is kept lives beside
 it, one module to a kind of thing: ``conversations``, ``runs``, ``notes``.
-Nothing outside this package writes SQL.
+Nothing outside this package writes SQL but the gate, whose own tables
+nothing else reads (``app/gate.py``).
 
 Traffic here is a handful of rows per generation — on a box that manages ~10
 tokens a second, a connection pool would be ceremony without benefit.

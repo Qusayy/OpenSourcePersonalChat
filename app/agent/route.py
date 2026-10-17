@@ -24,9 +24,9 @@ from typing import Any
 
 from ..config import settings
 from ..tools import REGISTRY, tools_to_gbnf
-from ..tools.base import decision_ceiling
 from ..tools.currency import CURRENCY_CODES
-from ..tools.units import TEMPS, UNITS, _canon
+from ..tools.grammar import decision_ceiling
+from ..tools.units import TEMPS, UNITS, canon_unit
 
 # The same list the currency tool is held to, as the patterns below match it.
 CURRENCIES = {code.lower() for code in CURRENCY_CODES}
@@ -174,7 +174,7 @@ def heuristic(text: str) -> ToolCall | None:
     # 4. Unit conversion.
     m = re.search(rf"{NUMBER}\s*([A-Za-z°/]+)\s+(?:to|in|into)\s+([A-Za-z°/]+)", body, re.I)
     if m:
-        src, dst = _canon(m.group(2)), _canon(m.group(3))
+        src, dst = canon_unit(m.group(2)), canon_unit(m.group(3))
         known = (src in UNITS or src in TEMPS) and (dst in UNITS or dst in TEMPS)
         if known:
             return ToolCall(

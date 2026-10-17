@@ -15,9 +15,10 @@ from unittest import mock
 try:
     from app.text import estimate
     from app.tools import base
-    from app.tools.base import (
-        Arg, Tool, ToolResult, args_ceiling, args_to_gbnf, call_tool, check, check_args,
-        decision_ceiling, tool_menu, tools_to_gbnf, was_given,
+    from app.tools.base import Arg, Tool, ToolResult, call_tool, check, check_args, was_given
+    from app.tools.grammar import (
+        ASK, DEFAULT_MAX_LEN, args_ceiling, args_to_gbnf, decision_ceiling, tool_menu,
+        tools_to_gbnf,
     )
     from evals import fixtures
     from tests import support
@@ -506,7 +507,7 @@ class GrammarTests(unittest.TestCase):
             for arg in tool.args:
                 if arg.type == "string":
                     with self.subTest(tool=tool.name, arg=arg.name):
-                        self.assertTrue(arg.choices or (arg.max_len or base.DEFAULT_MAX_LEN) <= 200)
+                        self.assertTrue(arg.choices or (arg.max_len or DEFAULT_MAX_LEN) <= 200)
         self.assertTrue(self.grammar.accepts(call("weather", location="x" * 60)))
         self.assertFalse(self.grammar.accepts(call("weather", location="x" * 61)))
         self.assertFalse(self.grammar.accepts(call("weather", location="")))
@@ -695,13 +696,13 @@ class CeilingTests(unittest.TestCase):
             elif arg.choices:
                 args[arg.name] = max(arg.choices, key=lambda c: len(json.dumps(c, ensure_ascii=False).encode()))
             else:
-                args[arg.name] = "\U0001F600" * (arg.max_len or base.DEFAULT_MAX_LEN)  # four bytes each
+                args[arg.name] = "\U0001F600" * (arg.max_len or DEFAULT_MAX_LEN)  # four bytes each
         return call(tool.name, **args).replace("null", "-" + "9" * 16 + "." + "9" * 6)
 
     def test_the_longest_call_to_each_tool_is_allowed_and_fits_under_the_ceiling(self) -> None:
         grammar = Grammar(tools_to_gbnf())
         ceiling = decision_ceiling()
-        for tool in [*base.available(), Tool("ask", "", "", "", (base.ASK,), None, "")]:
+        for tool in [*base.available(), Tool("ask", "", "", "", (ASK,), None, "")]:
             with self.subTest(tool=tool.name):
                 said = self.longest(tool)
                 self.assertTrue(grammar.accepts(said))

@@ -22,7 +22,8 @@ try:
         parse_slash,
     )
     from app.llm import Completion
-    from app.tools.base import available, decision_ceiling
+    from app.tools.base import available
+    from app.tools.grammar import decision_ceiling
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")

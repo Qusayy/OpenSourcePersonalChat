@@ -29,10 +29,8 @@ from ..llm import Completion, Engine, Stop, engine as default_engine
 from ..llm.usage import blank
 from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
-from ..tools.base import (
-    CALL, CallContext, Rejection, ToolResult, args_ceiling, args_to_gbnf, available, fresh_for,
-    untrusted,
-)
+from ..tools.base import CALL, CallContext, Rejection, ToolResult, available, fresh_for, untrusted
+from ..tools.grammar import args_ceiling, args_to_gbnf
 from .context import (
     RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
 )

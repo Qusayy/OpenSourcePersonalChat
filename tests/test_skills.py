@@ -11,7 +11,8 @@ import unittest
 try:
     from app.agent.route import ToolCall
     from app.agent.skills import SKILLS, Lookup, Offer, build_prompt, look, offered, prompt_parts, skill_list
-    from app.tools.base import REGISTRY, available, decision_ceiling, tool_menu, tools_to_gbnf
+    from app.tools.base import REGISTRY, available
+    from app.tools.grammar import decision_ceiling, tool_menu, tools_to_gbnf
     from tests import support
     from tests.gbnf import Grammar
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -99,7 +100,7 @@ class ReadingTests(unittest.TestCase):
             with self.subTest(text):
                 self.assertEqual(compare.read(text), {"a": a, "b": b})
                 self.assertEqual(
-                    compare.prepare(text),
+                    compare.calls(compare.read(text)),
                     [ToolCall("wikipedia", {"query": a}, via="skill"),
                      ToolCall("wikipedia", {"query": b}, via="skill")],
                 )
@@ -107,12 +108,13 @@ class ReadingTests(unittest.TestCase):
     def test_one_thing_alone_is_the_first_and_only_that_is_looked_up(self) -> None:
         compare = SKILLS["compare"]
         self.assertEqual(compare.read("  Rust  "), {"a": "Rust"})
-        self.assertEqual([c.args for c in compare.prepare("Rust")], [{"query": "Rust"}])
+        self.assertEqual([c.args for c in compare.calls(compare.read("Rust"))], [{"query": "Rust"}])
         self.assertEqual([a.name for a in compare.missing(compare.read("Rust"))], ["b"])
 
     def test_the_whole_message_is_the_input_of_a_skill_with_one(self) -> None:
         self.assertEqual(SKILLS["weather_brief"].read(" Paris "), {"location": "Paris"})
-        self.assertEqual(SKILLS["fact_check"].prepare("The Moon is cheese"),
+        fact_check = SKILLS["fact_check"]
+        self.assertEqual(fact_check.calls(fact_check.read("The Moon is cheese")),
                          [ToolCall("wikipedia", {"query": "The Moon is cheese"}, via="skill")])
 
     def test_a_link_is_found_anywhere_and_nothing_else_is_taken_for_one(self) -> None:
@@ -120,12 +122,12 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(reader.read("sum up https://example.org/a please"),
                          {"url": "https://example.org/a"})
         self.assertEqual(reader.read("no link here"), {})
-        self.assertEqual(reader.prepare("no link here"), [])
+        self.assertEqual(reader.calls(reader.read("no link here")), [])
 
     def test_nothing_in_the_message_is_nothing_to_look_up(self) -> None:
         for skill in SKILLS.values():
             with self.subTest(skill.id):
-                self.assertEqual(skill.prepare("   "), [])
+                self.assertEqual(skill.calls(skill.read("   ")), [])
 
     def test_a_lookup_is_made_only_with_every_input_it_takes(self) -> None:
         step = look("currency", amount="n", from_currency="x", to_currency="y")

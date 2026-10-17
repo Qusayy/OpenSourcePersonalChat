@@ -60,7 +60,7 @@ ALIASES = {
 TEMPS = {"c", "f", "k"}
 
 
-def _canon(unit: str) -> str:
+def canon_unit(unit: str) -> str:
     u = (unit or "").strip().lower().rstrip(".")
     return ALIASES.get(u, u)
 
@@ -79,7 +79,7 @@ def _from_celsius(value: float, unit: str) -> float:
 
 
 async def _convert(value: float, from_unit: str, to_unit: str) -> ToolResult:
-    src, dst = _canon(from_unit), _canon(to_unit)
+    src, dst = canon_unit(from_unit), canon_unit(to_unit)
     try:
         value = float(value)
     except (TypeError, ValueError):
@@ -133,9 +133,9 @@ register(Tool(
     args=(
         Arg("value", "number", True, "the quantity"),
         Arg("from_unit", "string", True, "unit to convert from",
-            choices=UNIT_SPELLINGS, canon=_canon),
+            choices=UNIT_SPELLINGS, canon=canon_unit),
         Arg("to_unit", "string", True, "unit to convert to",
-            choices=UNIT_SPELLINGS, canon=_canon),
+            choices=UNIT_SPELLINGS, canon=canon_unit),
     ),
     run=_convert,
     card="convert",

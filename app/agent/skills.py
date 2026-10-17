@@ -90,9 +90,6 @@ class Skill:
         """The lookups ``values`` are enough for, in order."""
         return [call for step in self.steps if (call := step.call(values)) is not None]
 
-    def prepare(self, text: str) -> list[ToolCall]:
-        return self.calls(self.read(text))
-
     def as_dict(self) -> dict:
         return {
             "id": self.id, "name": self.name, "glyph": self.glyph,

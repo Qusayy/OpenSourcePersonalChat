@@ -24,8 +24,8 @@ try:
     from app.agent.transcript import data
     from app.text import estimate
     from app.tools import REGISTRY
-    from app.tools.base import args_to_gbnf
     from app.tools.base import ToolResult
+    from app.tools.grammar import args_to_gbnf
     from evals import fixtures
     from evals.scripted import ScriptedEngine
     from tests import support

@@ -12,10 +12,10 @@ import unittest
 from unittest import mock
 
 try:
-    from app import db
-    from app.personas import get_persona
-    from app.skills import offered
-    from app.transcript import CUE_PLAIN, CUE_WITH_DATA, data, system_for
+    from app.agent.personas import get_persona
+    from app.agent.skills import offered
+    from app.agent.transcript import CUE_PLAIN, CUE_WITH_DATA, data, system_for
+    from app.store import db
     from app.tools import base as tool_base
     from app.tools.base import ToolResult, available
     from evals.scripted import ScriptedEngine

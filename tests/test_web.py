@@ -18,22 +18,24 @@ from unittest import mock
 try:
     from fastapi.testclient import TestClient
 
-    from app import db, main, web
+    from app import main
+    from app.api import frontend, pages
     from app.llm import Engine
+    from app.store import db
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
 REPO = Path(__file__).resolve().parent.parent
 
 INDEX = f"""<!doctype html>
-{web.MARK_PAGE}
+{frontend.MARK_PAGE}
 <head>
-{web.MARK_DESCRIPTION}
-{web.MARK_TITLE}
+{frontend.MARK_DESCRIPTION}
+{frontend.MARK_TITLE}
 <script type="module" src="/assets/index-abc123.js"></script>
 </head>
 <body><div id="root"></div>
-{web.MARK_BOOTSTRAP}
+{frontend.MARK_BOOTSTRAP}
 </body>
 </html>
 """
@@ -58,26 +60,26 @@ def embedded(html_text: str) -> dict:
 
 class ScriptJsonTests(unittest.TestCase):
     def test_a_closing_script_tag_cannot_end_the_element(self) -> None:
-        out = web.script_json({"title": "</script><script>alert(1)</script>"})
+        out = frontend.script_json({"title": "</script><script>alert(1)</script>"})
         self.assertNotIn("<", out)
         self.assertNotIn(">", out)
         self.assertEqual(json.loads(out)["title"], "</script><script>alert(1)</script>")
 
     def test_comment_openers_and_ampersands_are_escaped(self) -> None:
-        out = web.script_json({"a": "<!-- & -->"})
+        out = frontend.script_json({"a": "<!-- & -->"})
         self.assertNotIn("<!--", out)
         self.assertNotIn("&", out)
         self.assertEqual(json.loads(out)["a"], "<!-- & -->")
 
     def test_line_separators_are_escaped_and_survive(self) -> None:
         text = "one\u2028two\u2029three"
-        out = web.script_json({"t": text})
+        out = frontend.script_json({"t": text})
         self.assertNotIn("\u2028", out)
         self.assertNotIn("\u2029", out)
         self.assertEqual(json.loads(out)["t"], text)
 
     def test_other_text_is_left_readable(self) -> None:
-        self.assertEqual(web.script_json({"name": "Zoë — 東京"}), '{"name":"Zoë — 東京"}')
+        self.assertEqual(frontend.script_json({"name": "Zoë — 東京"}), '{"name":"Zoë — 東京"}')
 
 
 class SourceMarkerTests(unittest.TestCase):
@@ -87,7 +89,7 @@ class SourceMarkerTests(unittest.TestCase):
         source = (REPO / "web" / "index.html").read_text(encoding="utf-8")
         for name in ("MARK_BOOTSTRAP", "MARK_TITLE", "MARK_DESCRIPTION", "MARK_PAGE"):
             with self.subTest(marker=name):
-                self.assertEqual(source.count(getattr(web, name)), 1)
+                self.assertEqual(source.count(getattr(frontend, name)), 1)
 
     def test_the_notice_for_no_scripts_is_inside_the_sheet(self) -> None:
         # <body> is a three-row grid. As a child of <body> the notice would be
@@ -102,7 +104,7 @@ class FrontendTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         self.root = Path(self.dir.name)
-        self.front = web.Frontend(make_dist(self.root))
+        self.front = frontend.Frontend(make_dist(self.root))
 
     def page(self, **over) -> str:
         args = dict(page="chat", title="Aurora", description="d", bootstrap={"ok": True})
@@ -124,7 +126,7 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(page.headers["cache-control"], "no-cache")
         file = self.front.asset("index-abc123.js")
         self.assertEqual(file.status_code, 200)
-        self.assertEqual(file.headers["cache-control"], web.CACHE_FOREVER)
+        self.assertEqual(file.headers["cache-control"], frontend.CACHE_FOREVER)
 
     def test_the_typeface_is_sent_as_a_font(self) -> None:
         self.assertEqual(self.front.asset("face-abc123.woff2").media_type, "font/woff2")
@@ -143,7 +145,7 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(self.front.asset("").status_code, 404)
 
     def test_without_a_build_the_page_says_so(self) -> None:
-        front = web.Frontend(self.root / "nowhere")
+        front = frontend.Frontend(self.root / "nowhere")
         self.assertFalse(front.built())
         res = front.page(page="chat", title="t", description="d", bootstrap={})
         self.assertEqual(res.status_code, 503)
@@ -151,7 +153,7 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(front.asset("index-abc123.js").status_code, 404)
 
     def test_a_build_that_appears_later_is_picked_up(self) -> None:
-        front = web.Frontend(self.root / "later" / "dist")
+        front = frontend.Frontend(self.root / "later" / "dist")
         self.assertEqual(front.page(page="chat", title="t", description="d", bootstrap={}).status_code, 503)
         make_dist(self.root / "later")
         self.assertEqual(front.page(page="chat", title="t", description="d", bootstrap={}).status_code, 200)
@@ -172,7 +174,7 @@ class AppRoutingTests(unittest.TestCase):
         db.init()
         self.addCleanup(db.close)
 
-        patcher = mock.patch.object(main, "frontend", web.Frontend(make_dist(root)))
+        patcher = mock.patch.object(pages, "frontend", frontend.Frontend(make_dist(root)))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -233,7 +235,7 @@ class AppRoutingTests(unittest.TestCase):
     def test_a_built_file_is_served_for_good(self) -> None:
         res = self.client.get("/assets/index-abc123.js")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.headers["cache-control"], web.CACHE_FOREVER)
+        self.assertEqual(res.headers["cache-control"], frontend.CACHE_FOREVER)
 
     def test_benchmark_results_include_what_the_template_used_to_print(self) -> None:
         data = self.client.get("/api/bench/results").json()

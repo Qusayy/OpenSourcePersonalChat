@@ -26,9 +26,11 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from app import db, main
+from app import main
+from app.api import deps
 from app.config import settings
 from app.llm import Completion, Engine
+from app.store import db
 from app.tools import base as tool_base
 from app.tools.base import ToolResult
 
@@ -253,7 +255,7 @@ class ChatCase(unittest.TestCase):
         self.engine = self.use_engine(PlayedEngine())
 
     def use_engine(self, engine: PlayedEngine) -> PlayedEngine:
-        patcher = mock.patch.object(main, "engine", engine)
+        patcher = mock.patch.object(deps, "engine", engine)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.engine = engine

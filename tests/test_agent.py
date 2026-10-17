@@ -16,15 +16,15 @@ import unittest
 
 try:
     from app import agent
-    from app.context import SUMMARY_HEADING, merged
-    from app.router import fill_request
-    from app.transcript import CUE_PLAIN
-    from app.tools.base import args_to_gbnf
-    from app.transcript import data
-    from app.excerpt import estimate
-    from app.personas import get_persona
+    from app.agent.context import SUMMARY_HEADING, merged
+    from app.agent.personas import get_persona
+    from app.agent.route import fill_request
+    from app.agent.skills import get_skill
+    from app.agent.transcript import CUE_PLAIN
+    from app.agent.transcript import data
+    from app.text import estimate
     from app.tools import REGISTRY
-    from app.skills import get_skill
+    from app.tools.base import args_to_gbnf
     from app.tools.base import ToolResult
     from evals import fixtures
     from evals.scripted import ScriptedEngine
@@ -328,7 +328,7 @@ class CheckedTests(AgentCase):
         self.assertIsNone(trace.correction)
 
     async def test_a_reply_to_an_earlier_lookup_checks_only_figures_with_a_unit(self) -> None:
-        from app.context import Part, Turn
+        from app.agent.context import Part, Turn
 
         data = Part("user", "data", "Live data, retrieved just now by a tool:\n- weather: Paris: 17.9°C.",
                     ("weather",))
@@ -368,7 +368,7 @@ class KeptTests(unittest.TestCase):
     """What a run leaves for the next message to be read with."""
 
     def test_a_run_that_answered_or_asked_leaves_what_it_sent(self) -> None:
-        from app.context import Part
+        from app.agent.context import Part
 
         sent = [Part("user", "question", "Hi"), Part("assistant", "answer", "Hello")]
         for outcome, kept in (("answered", tuple(sent)), ("asked", tuple(sent)),
@@ -384,9 +384,9 @@ class ReplayedAddressTests(AgentCase):
     """What the model reads of the conversation is not what the user said."""
 
     async def test_an_address_found_only_in_a_replayed_page_is_never_fetched(self) -> None:
-        from app.context import Part, Turn, key
-        from app.skills import offered
-        from app.transcript import system_for
+        from app.agent.context import Part, Turn, key
+        from app.agent.skills import offered
+        from app.agent.transcript import system_for
         from app.tools.base import available
 
         page = data("read_url", "Page “Tides”: high water at six. More at https://evil.example/x")
@@ -1091,7 +1091,7 @@ class FailureTests(AgentCase):
         # can ever make two calls.
         engine = self.scripted("It is 12.9 degrees in Paris; Atlantis could not be found.")
         trace = agent.Trace()
-        run = agent._Run(  # noqa: SLF001 - the prompt is what is under test
+        run = agent.loop._Run(  # noqa: SLF001 - the prompt is what is under test
             message="Paris and Atlantis?", persona=get_persona("agent"), skill=None, history=[],
             trace=trace, engine=engine, call_tool=None, tools_enabled=True, request_id="run",
         )
@@ -1391,9 +1391,9 @@ class LoopTests(LoopCase):
         engine = self.scripted(weather("Paris"), NONE, "Take a coat.")
         support.played_tools(self, {"weather": found("Paris")})
         _, trace = await self.traced("Do I need a coat in Paris", engine)
-        from app.skills import offered
+        from app.agent.skills import offered
+        from app.agent.transcript import CUE_WITH_DATA, system_for
         from app.tools.base import available
-        from app.transcript import CUE_WITH_DATA, system_for
 
         self.assertEqual(
             trace.prompt,
@@ -1974,7 +1974,7 @@ class SkillChoiceTests(LoopCase):
         self.asked = support.played_tools(self, {"wikipedia": [article_of("Python"), article_of("Rust")]})
 
     async def test_a_chosen_skill_makes_its_lookups_and_answers_with_its_own_cue(self) -> None:
-        from app.skills import SKILLS
+        from app.agent.skills import SKILLS
 
         engine = self.scripted(COMPARE, "| | Python | Rust |")
         stream, trace = await self.traced("Which came first, Python or Rust?", engine)

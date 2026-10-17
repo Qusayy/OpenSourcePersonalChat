@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Protocol
 
 from ..config import settings
-from ..excerpt import clip
+from ..text import clip
 
 
 @dataclass(frozen=True)

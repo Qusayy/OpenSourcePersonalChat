@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Iterator
 from unittest import mock
 
-from app import personas, skills, transcript
+from app.agent import personas, skills, transcript
 from app.tools import base
 
 _OVERRIDE = re.compile(r"^@(persona|tool|skill)\s+([\w-]+):[ \t]?(.*)$")

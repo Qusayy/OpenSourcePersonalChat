@@ -37,7 +37,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from ..config import settings
-from ..excerpt import estimate, excerpt
+from ..text import estimate, excerpt
 from .base import Arg, Tool, ToolResult, register
 
 MAX_BYTES = 2 * 1024 * 1024

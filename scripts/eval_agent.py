@@ -37,12 +37,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import agent  # noqa: E402
+from app.agent.context import Turn  # noqa: E402
+from app.agent.personas import get_persona  # noqa: E402
+from app.agent.route import decision_grammar, decision_limit  # noqa: E402
+from app.agent.transcript import Transcript, system_for  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.context import Turn  # noqa: E402
-from app.personas import get_persona  # noqa: E402
-from app.router import decision_grammar, decision_limit  # noqa: E402
 from app.tools.base import available  # noqa: E402
-from app.transcript import Transcript, system_for  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
 from evals.tasks import TASKS, load_tasks  # noqa: E402

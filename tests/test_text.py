@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import unittest
 
-from app.excerpt import GAP, estimate, excerpt, sentences, terms
+from app.text import GAP, estimate, excerpt, sentences, terms
 
 # A page whose answer is near its end, as pages tend to have it.
 FILLER = [

@@ -30,8 +30,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from .excerpt import clip, estimate
-from .llm import render_chatml
+from ..llm import render_chatml
+from ..text import clip, estimate
 
 # The most a summary of dropped turns takes.
 SUMMARY_TOKENS = 150

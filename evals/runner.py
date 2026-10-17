@@ -29,12 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from app import agent, db
+from app import agent
+from app.agent.context import Turn as Sent
+from app.agent.personas import get_persona
+from app.agent.skills import get_skill
 from app.config import settings
-from app.context import Turn as Sent
 from app.llm import Engine
-from app.personas import get_persona
-from app.skills import get_skill
+from app.store import db
 
 from . import fixtures
 from .score import route_match, score, skill_match

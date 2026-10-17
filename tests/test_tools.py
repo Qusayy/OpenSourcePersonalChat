@@ -13,12 +13,12 @@ import unittest
 from unittest import mock
 
 try:
+    from app.text import estimate
     from app.tools import base
     from app.tools.base import (
         Arg, Tool, ToolResult, args_ceiling, args_to_gbnf, call_tool, check, check_args,
         decision_ceiling, tool_menu, tools_to_gbnf, was_given,
     )
-    from app.excerpt import estimate
     from evals import fixtures
     from tests import support
     from tests.gbnf import Grammar
@@ -345,7 +345,7 @@ class CheckTests(unittest.TestCase):
                 self.assertNotRegex(reason.lower(), r"\b(try|please|should|retry|again)\b")
 
     def test_every_real_tool_accepts_the_arguments_its_own_command_produces(self) -> None:
-        from app.router import parse_slash
+        from app.agent.route import parse_slash
 
         for text in ("/calc 2+2", "/clock", "/time Asia/Tokyo", "/convert 10 km to mi",
                      "/stats one two", "/wiki Ada Lovelace", "/weather Lisbon",

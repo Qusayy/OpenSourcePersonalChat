@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 try:
-    from app import bench
+    from app.ops import bench
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 

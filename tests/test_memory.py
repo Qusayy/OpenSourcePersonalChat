@@ -15,13 +15,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 try:
-    from app import agent, db
-    from app.context import Part, Turn
-    from app.personas import get_persona
-    from app.router import parse_slash
+    from app import agent
+    from app.agent.context import Part, Turn
+    from app.agent.personas import get_persona
+    from app.agent.route import parse_slash
+    from app.agent.transcript import data
+    from app.store import db
     from app.tools.base import REGISTRY, ToolResult, available, call_tool
-    from app.tools.memory import SCOPE
-    from app.transcript import data
+    from app.tools.notes import SCOPE
     from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import collect

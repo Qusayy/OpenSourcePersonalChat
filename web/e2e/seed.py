@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if not os.environ.get("AURORA_DB_PATH"):
     sys.exit("AURORA_DB_PATH is not set; refusing to touch the default database")
 
-from app import db  # noqa: E402
+from app.store import db  # noqa: E402
 from app.tools import call_tool  # noqa: E402
 
 WEATHER = {

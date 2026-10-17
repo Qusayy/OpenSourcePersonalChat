@@ -10,7 +10,7 @@ import time
 import unittest
 
 try:
-    from app import db
+    from app.store import db
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")

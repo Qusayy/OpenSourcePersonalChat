@@ -10,11 +10,11 @@ import unittest
 from pathlib import Path
 
 try:
-    from app import transcript
-    from app.personas import get_persona
-    from app.skills import SKILLS, offered
+    from app.agent import transcript
+    from app.agent.personas import get_persona
+    from app.agent.skills import SKILLS, offered
+    from app.agent.transcript import system_for
     from app.tools.base import REGISTRY, available, tool_menu
-    from app.transcript import system_for
     from evals.runner import run_suite
     from evals.tasks import load_tasks
     from evals.wording import applied, load

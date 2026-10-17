@@ -12,10 +12,9 @@ import random
 import unittest
 
 try:
-    from app.context import merged
-    from app.personas import get_persona
-    from app.tools.base import available, tool_menu
-    from app.transcript import (
+    from app.agent.context import merged
+    from app.agent.personas import get_persona
+    from app.agent.transcript import (
         CUE_NOTHING_FOUND,
         CUE_PLAIN,
         CUE_WITH_DATA,
@@ -23,6 +22,7 @@ try:
         data,
         system_for,
     )
+    from app.tools.base import available, tool_menu
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")

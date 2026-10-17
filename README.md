@@ -15,18 +15,17 @@ weather, currency and a URL reader — because those are precisely the things a
 
 ```
 app/                     the server (Python, FastAPI)
-  main.py        the API: SSE chat, tools, skills, benchmark, history, the page routes
-  web.py         serves the built interface and writes its first values into the page
-  llm.py         the engine: one slot, one lock, honest metrics; the model in this process or in a llama-server
-  llm_server.py  the client for a llama-server holding the model
-  telemetry.py   the machine, measured: usable CPUs, per-core load, memory, cgroup limits
-  router.py      slash commands -> heuristics -> grammar-constrained routing
-  skills.py      one-click workflows built on the tools
-  tools/         base (registry + GBNF) · offline · web · reader (SSRF guard)
-  bench.py       the benchmark suite + reference data
-  personas.py    five presets (system prompt + sampling profile)
-  db.py          SQLite (WAL): conversations, messages, tool_calls, runs
+  main.py        the application: the gate in front, then every group of routes
+  api/           the routes: pages · chat (SSE) and what a run leaves behind · conversations · system · bench
+                 frontend.py serves the built interface and writes its first values into the page
+  agent/         one message, question to answer: loop · route (slash -> heuristics -> grammar)
+                 skills · transcript · context (the window) · verify · personas
+  llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server)
+  store/         SQLite (WAL): conversations, messages, tool_calls, steps, runs, notes
+  tools/         base (registry + GBNF), then one module per tool; read_url carries the SSRF guard
+  ops/           telemetry (usable CPUs, per-core load, memory, cgroup limits) · bench (the suite + reference data)
   gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
+  config.py · text.py · ledger.py   settings · token estimates and excerpts · what a run cost
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)
@@ -494,7 +493,7 @@ Eight tools, no API keys anywhere:
 
 **Skills** are one-click workflows on top of them — *Summarise a link*,
 *Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
-*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path:
+*Explain this code*. Each is a dict entry in `app/agent/skills.py`, not a code path:
 the inputs it needs, the lookups it makes with them, and the prompt the answer
 is written from. A skill reads its inputs out of the message with a pattern of
 its own; *Compare* knows "A vs B", "the difference between A and B", "how does
@@ -749,7 +748,7 @@ request.
 
 **The first values are in the page.** The server writes the model, the machine
 as last measured, the personas, tools, conversations and the benchmark's suite
-into `index.html` as one JSON element (`app/web.py`), so the first paint has
+into `index.html` as one JSON element (`app/api/frontend.py`), so the first paint has
 real figures with no request behind it, and no persona prompt or file path is
 among them.
 
@@ -759,7 +758,7 @@ block of redefinitions; the Tailwind theme only names them, and Tailwind's own
 palette, scales and breakpoints are removed. `DESIGN.md` says which parts are
 written as CSS instead of utility classes, and why.
 
-**The machine is measured, not described.** `app/telemetry.py` reads the host
+**The machine is measured, not described.** `app/ops/telemetry.py` reads the host
 while the page is open: the CPUs this process may use (scheduler affinity, then
 the cgroup's CPU quota, so `CPUQuota=150%` reads as 1.5 cores), load per core
 from two readings of `/proc/stat`, memory in use and in total from
@@ -909,7 +908,7 @@ cd web && npm run build && npm run e2e        # the interface, in a browser
 
 **The server's** use the standard library's `unittest`. The telemetry tests
 need nothing else: they cover the parsers and the sampler in
-`app/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
+`app/ops/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
 nested limits, quotas, missing files), so they run the same on any OS.
 `tests/test_runs.py` checks what is kept in the `runs` table (real runs are,
 mock runs are not), and `tests/test_web.py` checks how the built interface is

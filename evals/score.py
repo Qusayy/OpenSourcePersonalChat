@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.skills import SKILLS
+from app.agent.skills import SKILLS
 
 from .tasks import Task, Turn
 

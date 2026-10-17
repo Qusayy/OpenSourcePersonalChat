@@ -15,7 +15,7 @@ Design notes that matter on a 2 vCPU box:
   next request while the old thread was still inside llama.cpp.
 
 The model can also live in another process: with ``AURORA_LLM_URL`` set, every
-pass goes to a llama-server over HTTP (``app/llm_server.py``) and nothing here
+pass goes to a llama-server over HTTP (``app/llm/server.py``) and nothing here
 loads weights. All of the above still holds, because the slot, the queue and
 the worker thread are this module's and only the four places that touch the
 model change: loading, counting tokens, writing, and the grammar. A thread that
@@ -38,9 +38,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
-from .config import Settings, settings as default_settings
-from .llm_server import LlamaServer, Reading
-from .telemetry import describe, follow_server, process_rss_mb, usable_cpu_count
+from ..config import Settings, settings as default_settings
+from ..ops.telemetry import describe, follow_server, process_rss_mb, usable_cpu_count
+from .server import LlamaServer, Reading
 
 log = logging.getLogger("aurora.llm")
 

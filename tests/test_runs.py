@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 try:
-    from app import db
+    from app.store import db
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 

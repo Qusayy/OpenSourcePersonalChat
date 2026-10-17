@@ -44,8 +44,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
 
-from . import db, web
+from .api import frontend
 from .config import settings
+from .store import db
 
 log = logging.getLogger("aurora.gate")
 
@@ -340,7 +341,7 @@ class Cover:
         self._page: tuple[float, bytes] | None = None
 
     def body(self) -> bytes:
-        path = (self.dist or web.DIST) / "cover.html"
+        path = (self.dist or frontend.DIST) / "cover.html"
         try:
             mtime = path.stat().st_mtime
         except OSError:

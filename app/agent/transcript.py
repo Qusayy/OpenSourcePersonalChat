@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import re
 
+from ..llm import render_chatml
+from ..tools.base import Tool, tool_menu
 from .context import Part, merged
-from .llm import render_chatml
 from .personas import Persona
 from .skills import SAY_SO
-from .tools.base import Tool, tool_menu
 
 # What the model is told about choosing, once, at the top of every pass of a
 # run. The menu goes in the middle. Braces are doubled for `format`.

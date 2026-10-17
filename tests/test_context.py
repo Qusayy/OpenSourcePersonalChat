@@ -7,12 +7,12 @@ from __future__ import annotations
 import unittest
 
 try:
-    from app.context import (
+    from app.agent.context import (
         STALE, SUMMARY_HEADING, SUMMARY_TOKENS, TRIM_STEP, TURN_ROOM, Part, Turn, blocks,
         cap, compact, fit, key, merged, replayed, stale, summary, turns_from, turns_from_history,
     )
-    from app.excerpt import estimate
     from app.llm import render_chatml
+    from app.text import estimate
     from app.tools import base
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")

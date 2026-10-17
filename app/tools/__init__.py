@@ -2,10 +2,14 @@
 
 Importing this module registers every tool. Nothing else needs to know which
 file a tool lives in.
+
+The order of the imports below is the order of the model's menu, and so part
+of the system text a stored turn is replayed by: change it on purpose.
 """
 
 from .base import REGISTRY, Tool, ToolResult, call_tool, tools_to_gbnf
-from . import offline, web, reader  # noqa: F401  (import registers the tools)
-from . import memory  # noqa: F401,E402  (last: notes come after every lookup on the menu)
+from . import calculator, clock, units, text_stats  # noqa: F401  (import registers the tools)
+from . import wikipedia, weather, currency, read_url  # noqa: F401
+from . import notes  # noqa: F401,E402  (last: notes come after every lookup on the menu)
 
 __all__ = ["REGISTRY", "Tool", "ToolResult", "call_tool", "tools_to_gbnf"]

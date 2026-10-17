@@ -22,11 +22,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import settings
-from .tools import REGISTRY, tools_to_gbnf
-from .tools.base import decision_ceiling
-from .tools.offline import TEMPS, UNITS, _canon
-from .tools.web import CURRENCY_CODES
+from ..config import settings
+from ..tools import REGISTRY, tools_to_gbnf
+from ..tools.base import decision_ceiling
+from ..tools.currency import CURRENCY_CODES
+from ..tools.units import TEMPS, UNITS, _canon
 
 # The same list the currency tool is held to, as the patterns below match it.
 CURRENCIES = {code.lower() for code in CURRENCY_CODES}

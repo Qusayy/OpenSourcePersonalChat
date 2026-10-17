@@ -12,8 +12,7 @@ import json
 import unittest
 
 try:
-    from app.llm import Completion
-    from app.router import (
+    from app.agent.route import (
         ask_reply,
         decision_grammar,
         decision_limit,
@@ -22,6 +21,7 @@ try:
         parse_action,
         parse_slash,
     )
+    from app.llm import Completion
     from app.tools.base import available, decision_ceiling
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -175,7 +175,7 @@ class SkillActionTests(unittest.TestCase):
     """A skill the model was offered, chosen by its name."""
 
     def test_a_skill_it_was_offered_is_a_skill_with_the_inputs_it_gave(self) -> None:
-        from app.skills import SKILLS
+        from app.agent.skills import SKILLS
 
         reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
         action = parse_action(said(reply), {"compare": SKILLS["compare"]})

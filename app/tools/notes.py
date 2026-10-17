@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
-from .. import db
+from ..store import db
 from .base import Arg, Tool, ToolResult, notes_scope, register
 
 # The conversation the call belongs to, set for the length of one call.

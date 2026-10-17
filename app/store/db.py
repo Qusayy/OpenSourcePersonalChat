@@ -16,8 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from .config import settings
-from .ledger import ledger
+from ..config import settings
+from ..ledger import ledger
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None

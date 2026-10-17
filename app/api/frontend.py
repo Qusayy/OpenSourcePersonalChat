@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 
-from .config import BASE_DIR
+from ..config import BASE_DIR
 
 log = logging.getLogger("aurora.web")
 

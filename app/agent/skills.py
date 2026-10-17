@@ -19,9 +19,9 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
+from ..tools.base import Arg, Choice
 from .context import Part
-from .router import URL_RE, ToolCall
-from .tools.base import Arg, Choice
+from .route import URL_RE, ToolCall
 
 
 @dataclass(frozen=True)

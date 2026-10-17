@@ -9,8 +9,8 @@ from __future__ import annotations
 import unittest
 
 try:
-    from app.router import ToolCall
-    from app.skills import SKILLS, Lookup, Offer, build_prompt, look, offered, prompt_parts, skill_list
+    from app.agent.route import ToolCall
+    from app.agent.skills import SKILLS, Lookup, Offer, build_prompt, look, offered, prompt_parts, skill_list
     from app.tools.base import REGISTRY, available, decision_ceiling, tool_menu, tools_to_gbnf
     from tests import support
     from tests.gbnf import Grammar

@@ -17,8 +17,8 @@ import statistics
 import time
 from typing import AsyncIterator
 
-from . import db
-from .llm import engine
+from ..llm import engine
+from ..store import db
 
 # Filler for the benchmark prompts. It describes no particular machine: the
 # suite runs wherever the site does.

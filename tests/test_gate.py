@@ -19,8 +19,10 @@ try:
     from dotenv import dotenv_values
     from fastapi.testclient import TestClient
 
-    from app import db, gate, main, web
+    from app import gate, main
+    from app.api import frontend, pages
     from app.config import Settings
+    from app.store import db
     from tests.support import ChatCase, shape, temp_database, with_settings
     from tests.test_web import make_dist
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -33,6 +35,17 @@ SALT = bytes(range(16))
 QUICK = 1000
 COVER = "<!doctype html><title>Aurora</title><canvas id=sky></canvas>"
 TITLE = "Marmalade recipe for Thursday"
+
+
+def every_route(routes):
+    """Each route the application answers. FastAPI keeps a router it was
+    given as one entry, with that router's own routes inside it."""
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            yield from every_route(inner.routes)
+        else:
+            yield route
 
 
 def verifier_for(chain: list[int], iterations: int = QUICK, salt: bytes = SALT) -> str:
@@ -67,7 +80,7 @@ class GateCase(unittest.TestCase):
 
         temp_database(self, mock_mode=True)
         for target, name, value in (
-            (main, "frontend", web.Frontend(dist)),
+            (pages, "frontend", frontend.Frontend(dist)),
             (gate, "cover", gate.Cover(dist)),
         ):
             patcher = mock.patch.object(target, name, value)
@@ -213,7 +226,7 @@ class LockedTests(GateCase):
         # Read from the application as it is now, so a route added tomorrow
         # is held to this without anyone adding it here.
         asked = 0
-        for route in main.app.routes:
+        for route in every_route(main.app.routes):
             path = getattr(route, "path", None)
             if not path or path.startswith("/assets"):
                 continue

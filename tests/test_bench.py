@@ -77,7 +77,7 @@ class ColdReadTests(unittest.IsolatedAsyncioTestCase):
                 "prefill_tps": 80.0, "gen_tps": 17.0, "rss_mb": None,
             }
 
-        with mock.patch.object(bench, "_one_run", one_run), mock.patch.object(bench.db, "add_run"):
+        with mock.patch.object(bench, "_one_run", one_run), mock.patch.object(bench.runs, "add_run"):
             events = [event async for event, _ in bench.run_suite()]
         self.assertEqual(events[-1], "summary")
         self.assertEqual(len(prompts), 1 + sum(case["reps"] for case in bench.CASES))

@@ -18,7 +18,7 @@ import time
 from typing import AsyncIterator
 
 from ..llm import engine
-from ..store import db
+from ..store import runs
 
 # Filler for the benchmark prompts. It describes no particular machine: the
 # suite runs wherever the site does.
@@ -149,7 +149,7 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
                 "ttft_ms": res["ttft_ms"],
                 "pct": round(100 * done_reps / total_reps),
             }
-            db.add_run(
+            runs.add_run(
                 "bench",
                 label=case["id"],
                 prompt_tokens=res["prompt_tokens"],
@@ -179,7 +179,7 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
         else None,
         "info": engine.info(),
         "at": time.time(),
-        # False in mock mode, where db.add_run keeps nothing. The page then
+        # False in mock mode, where runs.add_run keeps nothing. The page then
         # draws this summary itself instead of reading back what was stored.
         "stored": not engine.cfg.mock,
     }
@@ -187,16 +187,16 @@ async def run_suite() -> AsyncIterator[tuple[str, dict]]:
 
 
 def history(limit: int = 120) -> list[dict]:
-    return db.recent_runs("bench", limit)
+    return runs.recent_runs("bench", limit)
 
 
 def latest_summary() -> dict | None:
     """Rebuild the most recent suite's headline numbers from stored runs."""
-    runs = db.recent_runs("bench", 60)
-    if not runs:
+    stored = runs.recent_runs("bench", 60)
+    if not stored:
         return None
-    newest = runs[0]["created_at"]
-    window = [r for r in runs if newest - r["created_at"] < 900]  # one sitting
+    newest = stored[0]["created_at"]
+    window = [r for r in stored if newest - r["created_at"] < 900]  # one sitting
     by_case: dict[str, list[dict]] = {}
     for r in window:
         by_case.setdefault(r["label"] or "unknown", []).append(r)

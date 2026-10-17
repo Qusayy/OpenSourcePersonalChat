@@ -32,10 +32,9 @@ from ..llm import Completion, Engine, Stop, engine as default_engine
 from ..text import estimate
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
-    Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check, check_args, fresh_for,
-    untrusted, was_given,
+    CALL, CallContext, Rejection, ToolResult, args_ceiling, args_to_gbnf, available, check,
+    check_args, fresh_for, untrusted, was_given,
 )
-from ..tools.notes import SCOPE
 from .context import (
     RUN_ROOM, SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, turns_from_history,
 )
@@ -1066,7 +1065,7 @@ class _Run:
     async def _scoped(self, call: ToolCall) -> ToolResult:
         """The call, made in this run's conversation. Set inside the call's
         own task, so that it reaches the tool and goes no further."""
-        SCOPE.set(self.scope)
+        CALL.set(CallContext(conversation_id=self.scope))
         return await self.call_tool(call.name, call.args)
 
     async def _call(self, call: ToolCall) -> ToolResult | None:

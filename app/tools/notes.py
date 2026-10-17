@@ -7,7 +7,7 @@ alone, since this site has no accounts and every visitor would otherwise read
 every other's.
 
 The conversation a note belongs to is not an argument the model can give: it
-is set by whoever runs the message, for the length of the call, in ``SCOPE``.
+is the call's own (``CALL``), set by whoever runs the message.
 
 ``remember`` writes, so it is only made on the user's own word. A note the
 model chose to make after the run had read a page is refused before it gets
@@ -16,13 +16,8 @@ here (see the agent's address rule, which this extends).
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-
-from ..store import db
-from .base import Arg, Tool, ToolResult, notes_scope, register
-
-# The conversation the call belongs to, set for the length of one call.
-SCOPE: ContextVar[str | None] = ContextVar("notes_scope", default=None)
+from ..store import notes as note_store
+from .base import CALL, Arg, Tool, ToolResult, notes_scope, register
 
 # How many notes one recall reads back.
 RECALLED = 5
@@ -30,7 +25,7 @@ RECALLED = 5
 
 def _owner() -> str | None:
     """The conversation a note is kept for: this one, or none for the site's."""
-    return SCOPE.get() if notes_scope() == "conversation" else None
+    return CALL.get().conversation_id if notes_scope() == "conversation" else None
 
 
 async def _remember(text: str) -> ToolResult:
@@ -38,9 +33,9 @@ async def _remember(text: str) -> ToolResult:
     if not text:
         return ToolResult(False, "There is nothing to remember.", error="empty")
     scope = notes_scope()
-    if scope == "conversation" and not SCOPE.get():
+    if scope == "conversation" and not CALL.get().conversation_id:
         return ToolResult(False, "A note can only be kept in a conversation.", error="no conversation")
-    db.add_note(text, scope=scope, conversation_id=_owner())
+    note_store.add_note(text, scope=scope, conversation_id=_owner())
     where = "this conversation" if scope == "conversation" else "this site"
     return ToolResult(
         True, f"Noted for {where}: {text}", card="note",
@@ -51,7 +46,7 @@ async def _remember(text: str) -> ToolResult:
 async def _recall(query: str = "") -> ToolResult:
     query = " ".join((query or "").split())
     scope = notes_scope()
-    found = db.search_notes(query, scope=scope, conversation_id=_owner(), limit=RECALLED)
+    found = note_store.search_notes(query, scope=scope, conversation_id=_owner(), limit=RECALLED)
     notes = [row["text"] for row in found]
     if notes:
         summary = "Notes: " + "; ".join(notes)

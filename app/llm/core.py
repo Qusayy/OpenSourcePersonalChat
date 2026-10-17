@@ -35,7 +35,6 @@ import uuid
 from collections import OrderedDict, deque
 from contextlib import aclosing, contextmanager
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import Any, AsyncIterator, Iterator
 
 from ..config import Settings, settings as default_settings

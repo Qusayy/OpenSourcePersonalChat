@@ -15,7 +15,7 @@ from .. import agent
 from ..agent.context import turns_from
 from ..agent.personas import get_persona
 from ..agent.skills import get_skill
-from ..store import db
+from ..store import conversations
 from . import deps
 from .keeper import Keeper
 from .sse import SSE_HEADERS, sse
@@ -39,19 +39,19 @@ async def api_chat(payload: ChatRequest):
 
     cid = payload.conversation_id
     created = False
-    if cid and db.conversation_head(cid) is None:
+    if cid and conversations.head(cid) is None:
         cid = None
     if not cid:
-        cid = db.create_conversation(persona.id, user_text)
+        cid = conversations.create(persona.id, user_text)
         created = True
 
     # What was said, which decides which addresses the visitor gave, and what
     # was sent, which is what the model reads of the conversation.
-    messages, records = db.conversation_record(cid)
+    messages, records = conversations.record(cid)
     history = [{"role": m["role"], "content": m["content"]} for m in messages]
     context = turns_from(messages, records)
-    question_id = db.add_message(cid, "user", user_text)
-    db.touch_conversation(cid, persona.id)
+    question_id = conversations.add_message(cid, "user", user_text)
+    conversations.touch(cid, persona.id)
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex
@@ -60,7 +60,7 @@ async def api_chat(payload: ChatRequest):
         # Open before the page is told the id, so a Stop sent the moment it
         # arrives finds a run to stop.
         with engine.hold(run_id):
-            convo = db.conversation_head(cid)
+            convo = conversations.head(cid)
             yield sse(
                 "conversation",
                 {

@@ -15,7 +15,7 @@ from .. import __version__
 from ..agent.personas import DEFAULT_PERSONA, persona_list
 from ..agent.skills import skill_list
 from ..ops import telemetry
-from ..store import db
+from ..store import conversations
 from ..tools.base import available as available_tools
 from . import deps
 from .bench import bench_static
@@ -40,7 +40,7 @@ def bootstrap() -> dict:
         "defaultPersona": DEFAULT_PERSONA,
         "skills": skill_list(),
         "tools": [t.as_dict() for t in available_tools()],
-        "conversations": db.list_conversations(),
+        "conversations": conversations.listing(),
         "bench": bench_static(),
     }
 

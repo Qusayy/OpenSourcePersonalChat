@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if not os.environ.get("AURORA_DB_PATH"):
     sys.exit("AURORA_DB_PATH is not set; refusing to touch the default database")
 
-from app.store import db  # noqa: E402
+from app.store import conversations, db, runs  # noqa: E402
 from app.tools import call_tool  # noqa: E402
 
 WEATHER = {
@@ -154,33 +154,33 @@ async def offline(name: str, args: dict):
 async def main() -> None:
     db.init()
     for table in ("steps", "tool_calls", "context_turns", "messages", "conversations", "runs"):
-        db._write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
+        db.write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
     # 3. Right-to-left, oldest so it sorts last.
-    cid = db.create_conversation("explainer", "ما هو النموذج اللغوي؟")
-    db.add_message(cid, "user", "ما هو النموذج اللغوي؟")
-    db.add_message(
+    cid = conversations.create("explainer", "ما هو النموذج اللغوي؟")
+    conversations.add_message(cid, "user", "ما هو النموذج اللغوي؟")
+    conversations.add_message(
         cid, "assistant",
         "النموذج اللغوي برنامج يتوقع الكلمة التالية في النص. مثال: `print(1 + 1)`.",
         ttft_ms=412.0, gen_tps=9.8, prompt_tokens=31, completion_tokens=24,
     )
 
     # 2. A long question, and every kind of markdown.
-    cid = db.create_conversation("concise", LONG_QUESTION)
-    db.add_message(cid, "user", LONG_QUESTION)
-    db.add_message(
+    cid = conversations.create("concise", LONG_QUESTION)
+    conversations.add_message(cid, "user", LONG_QUESTION)
+    conversations.add_message(
         cid, "assistant", MARKDOWN_ANSWER,
         ttft_ms=1830.5, gen_tps=8.42, prompt_tokens=212, completion_tokens=148,
     )
 
     # 1. Every card.
     question = "Show me every figure a tool can draw."
-    cid = db.create_conversation("agent", question)
-    db.add_message(cid, "user", question)
+    cid = conversations.create("agent", question)
+    conversations.add_message(cid, "user", question)
     calls: list[str] = []
 
     def keep(tool: str, card: str, data: dict, summary: str, ms: float, args: dict) -> None:
-        calls.append(db.add_tool_call(
+        calls.append(conversations.add_tool_call(
             cid, tool, via="skill", args=args, card=card, data=data, summary=summary, ms=ms,
         ))
 
@@ -201,7 +201,7 @@ async def main() -> None:
          {"url": PAGE["url"]})
     keep("currency", "currency", CURRENCY, "100 EUR = 108.42 USD.", 198.4,
          {"amount": 100, "from_currency": "EUR", "to_currency": "USD"})
-    calls.append(db.add_tool_call(
+    calls.append(conversations.add_tool_call(
         cid, "weather", via="skill", args={"location": "Atlantis"}, card=None, data={},
         summary="No place called “Atlantis” was found.", ms=301.2, ok=False,
     ))
@@ -214,28 +214,28 @@ async def main() -> None:
         ("decide", None, "model", 400.0, (702, 36, 5)),
         ("answer", None, None, 2900.0, (740, 61, 19)),
     )):
-        db.add_step(
+        runs.add_step(
             run_id, cid, idx, kind, name=name, via=via, total_ms=ms,
             prompt_tokens=tokens[0], new_tokens=tokens[1], output_tokens=tokens[2],
             first_token_ms=ms / 4 if tokens[0] else None, queue_ms=0.0 if tokens[0] else None,
         )
-    mid = db.add_message(
+    mid = conversations.add_message(
         cid, "assistant",
         "Those are the nine figures: four computed here, four fetched, and one that failed.",
         ttft_ms=96.0, gen_tps=11.7, prompt_tokens=388, completion_tokens=19,
         correction="Not in what was looked up: nine. Weather returned: Reykjavík, Iceland: "
                    "Partly cloudy, 7.4°C.",
     )
-    db.attach_tool_calls(mid, calls)
-    db.attach_steps(mid, run_id)
-    db.touch_conversation(cid)
+    conversations.attach_tool_calls(mid, calls)
+    runs.attach_steps(mid, run_id)
+    conversations.touch(cid)
 
     # The list is ordered by last use. Three rows written in the same instant
     # would come back in no particular order, so they are spaced out: the
     # cards a moment ago, the long question an hour ago, the third yesterday.
     now = time.time()
     for title_start, age in (("Show me every", 60), ("I pasted the notes", 3600), ("ما هو", 86400)):
-        db._write(  # noqa: SLF001
+        db.write(  # noqa: SLF001
             "UPDATE conversations SET updated_at = ?, created_at = ? WHERE title LIKE ?",
             (now - age, now - age, title_start + "%"),
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .. import agent
-from ..store import db
+from ..store import conversations, runs
 
 
 class Keeper:
@@ -26,7 +26,7 @@ class Keeper:
 
     def keep(self) -> None:
         for call, result in self.trace.calls[len(self.call_ids):]:
-            self.call_ids.append(db.add_tool_call(
+            self.call_ids.append(conversations.add_tool_call(
                 self.cid, call.name, via=call.via, args=call.args,
                 card=result.card if result.ok else None,
                 data=result.data, summary=result.summary or result.error or "",
@@ -34,7 +34,7 @@ class Keeper:
             ))
 
         for step in self.trace.steps[self.steps_kept:]:
-            db.add_step(
+            runs.add_step(
                 self.trace.run_id, self.cid, self.steps_kept, step.kind,
                 name=step.name, via=step.via, input=step.input, output=step.output,
                 prompt_tokens=step.prompt_tokens, new_tokens=step.new_tokens,
@@ -52,7 +52,7 @@ class Keeper:
         if not self.trace.answer.strip():
             return
         usage = self.trace.usage
-        mid = db.add_message(
+        mid = conversations.add_message(
             self.cid, "assistant", self.trace.answer,
             ttft_ms=usage.get("ttft_ms"),
             gen_tps=usage.get("gen_tps"),
@@ -60,13 +60,13 @@ class Keeper:
             completion_tokens=usage.get("completion_tokens"),
             correction=self.trace.correction,
         )
-        db.attach_tool_calls(mid, self.call_ids)
-        db.attach_steps(mid, self.trace.run_id)
-        db.touch_conversation(self.cid)
+        conversations.attach_tool_calls(mid, self.call_ids)
+        runs.attach_steps(mid, self.trace.run_id)
+        conversations.touch(self.cid)
         # What the answer was sent, for the next message to be read with.
         sent = self.trace.turn("").parts
         if sent and self.trace.system_key:
-            db.add_context_turn(
+            conversations.add_context_turn(
                 self.cid, self.trace.run_id, question_id=self.question_id, answer_id=mid,
                 system_key=self.trace.system_key, parts=[p.as_dict() for p in sent],
             )
@@ -75,7 +75,7 @@ class Keeper:
             # pass. It is a message, and it is not a sample of how fast this
             # machine writes answers.
             return
-        db.add_run(
+        runs.add_run(
             "chat",
             label=self.persona_id,
             prompt_tokens=usage.get("prompt_tokens"),

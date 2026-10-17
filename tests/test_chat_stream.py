@@ -15,7 +15,7 @@ try:
     from app.agent.personas import get_persona
     from app.agent.skills import offered
     from app.agent.transcript import CUE_PLAIN, CUE_WITH_DATA, data, system_for
-    from app.store import db
+    from app.store import conversations, runs
     from app.tools import base as tool_base
     from app.tools.base import ToolResult, available
     from evals.scripted import ScriptedEngine
@@ -170,7 +170,7 @@ class PlainAnswerTests(ChatCase):
     def test_an_answer_is_one_row_of_throughput_history(self) -> None:
         stream = self.chat("Why is the sky blue?", persona="explainer")
         done = only(stream, "done")[0]
-        rows = db.recent_runs("chat")
+        rows = runs.recent_runs("chat")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["label"], "explainer")
         self.assertEqual(rows[0]["gen_tokens"], done["completion_tokens"])
@@ -207,7 +207,7 @@ class PlainAnswerTests(ChatCase):
     def test_an_empty_message_is_refused_before_anything_is_stored(self) -> None:
         res = self.client.post("/api/chat", json={"message": ""})
         self.assertEqual(res.status_code, 422)
-        self.assertEqual(db.list_conversations(), [])
+        self.assertEqual(conversations.listing(), [])
 
 
 class SlashCommandTests(ChatCase):
@@ -302,7 +302,7 @@ class SlashCommandTests(ChatCase):
         convo = self.conversation(stream)
         self.assertEqual([m["role"] for m in convo["messages"]], ["user"])
         self.assertEqual(len(convo["orphan_tool_calls"]), 1)
-        self.assertEqual(db.recent_runs("chat"), [])
+        self.assertEqual(runs.recent_runs("chat"), [])
 
     def test_with_tools_switched_off_a_command_is_only_text(self) -> None:
         support.with_settings(self, tools_enabled=False)
@@ -698,7 +698,7 @@ class StoredTraceTests(ChatCase):
     """What is left in the database about how each message was answered."""
 
     def rows(self, stream: list) -> list[dict]:
-        return db.run_steps(only(stream, "conversation")[0]["request_id"])
+        return runs.run_steps(only(stream, "conversation")[0]["request_id"])
 
     def test_every_message_stores_steps_in_order_that_sum_to_the_run_total(self) -> None:
         support.played_tools(self, {"weather": WEATHER})
@@ -824,8 +824,8 @@ class AskTests(ChatCase):
     def test_a_question_is_not_a_sample_of_how_fast_answers_are_written(self) -> None:
         self.use_engine(PlayedEngine(decision=self.QUESTION))
         self.chat("what's the weather like", persona="agent")
-        self.assertEqual(db.recent_runs("chat"), [])
-        self.assertEqual(db.chat_stats()["n"], 0)
+        self.assertEqual(runs.recent_runs("chat"), [])
+        self.assertEqual(runs.chat_stats()["n"], 0)
 
     def test_the_visitors_reply_is_read_after_the_question_they_were_asked(self) -> None:
         self.use_engine(PlayedEngine(decision=self.QUESTION))
@@ -866,7 +866,7 @@ class LoopOverHttpTests(ChatCase):
              "step:route-3:ok", *ANSWER],
         )
         self.assertEqual(looked_up["weather"], [{"location": "Paris"}, {"location": "Lisbon"}])
-        rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
+        rows = runs.run_steps(only(stream, "conversation")[0]["request_id"])
         self.assertEqual([r["kind"] for r in rows], ["route", "tool", "decide", "tool", "decide", "answer"])
         totals = stream[-1][1]
         self.assertEqual((totals["steps"], totals["passes"], totals["outcome"]), (6, 4, "answered"))
@@ -900,7 +900,7 @@ class LoopOverHttpTests(ChatCase):
             with self.subTest(message=message):
                 self.use_engine(PlayedEngine())
                 stream = self.chat(message, persona=persona)
-                rows = db.run_steps(only(stream, "conversation")[0]["request_id"])
+                rows = runs.run_steps(only(stream, "conversation")[0]["request_id"])
                 self.assertEqual([r["kind"] for r in rows], kinds)
                 self.assertEqual(self.engine.route_prompts, [])
 
@@ -932,7 +932,7 @@ class LedgerTests(ChatCase):
 
     def test_an_answer_whose_steps_are_gone_has_no_run(self) -> None:
         stream = self.chat("Why is the sky blue?", persona="explainer")
-        db.prune_steps(keep_days=-1)
+        runs.prune_steps(keep_days=-1)
         self.assertIsNone(self.conversation(stream)["messages"][1]["run"])
         self.assertNotIn("run", self.conversation(stream)["messages"][0])
 
@@ -954,7 +954,7 @@ class CorrectionTests(ChatCase):
         # Kept with the answer, so a reload shows it too.
         self.assertEqual(self.conversation(first)["messages"][1]["correction"], expected)
         # And kept for the model, in the harness's voice, quoting nothing.
-        _, records = db.conversation_record(cid)
+        _, records = conversations.record(cid)
         last = records[0]["parts"][-1]
         self.assertEqual(last["kind"], "correction")
         self.assertEqual(
@@ -1026,7 +1026,7 @@ class ReplayTests(ChatCase):
         support.played_tools(self, {"weather": WEATHER})
         cid = self.two(ScriptedEngine([self.PARIS, self.NONE, "Overcast.", self.NONE, "Welcome."]),
                        "Do I need a coat in Paris", "Thanks", persona="agent")
-        messages, records = db.conversation_record(cid)
+        messages, records = conversations.record(cid)
         self.assertEqual(len(records), 2)
         first = records[0]
         self.assertEqual((first["question_id"], first["answer_id"]), (messages[0]["id"], messages[1]["id"]))
@@ -1038,16 +1038,16 @@ class ReplayTests(ChatCase):
         self.assertEqual([m["content"] for m in convo["messages"]],
                          ["Do I need a coat in Paris", "Overcast.", "Thanks", "Welcome."])
         self.client.delete(f"/api/conversations/{cid}")
-        self.assertEqual(db.conversation_record(cid), ([], []))
+        self.assertEqual(conversations.record(cid), ([], []))
         # And it is not cleared out with the steps.
         cid = self.two(ScriptedEngine(["One.", "Two."]), "Hello", "And?", persona="explainer")
-        db.prune_steps(keep_days=0)
-        self.assertEqual(len(db.conversation_record(cid)[1]), 2)
+        runs.prune_steps(keep_days=0)
+        self.assertEqual(len(conversations.record(cid)[1]), 2)
 
     def test_a_conversation_kept_before_this_is_read_as_it_always_was(self) -> None:
-        cid = db.create_conversation("agent", "Hello")
-        db.add_message(cid, "user", "Hello")
-        db.add_message(cid, "assistant", "Hi there.")
+        cid = conversations.create("agent", "Hello")
+        conversations.add_message(cid, "user", "Hello")
+        conversations.add_message(cid, "assistant", "Hi there.")
         engine = self.use_engine(ScriptedEngine([self.NONE, "Fine."]))
         self.chat("How are you?", persona="agent", conversation_id=cid)
         self.assertEqual([m["content"] for m in engine.passes[0].messages[1:]],

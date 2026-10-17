@@ -19,6 +19,7 @@ import json
 import math
 import re
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Protocol
 
@@ -69,6 +70,19 @@ class ToolResult:
             "ms": round(self.ms, 1),
             "error": self.error,
         }
+
+
+@dataclass(frozen=True)
+class CallContext:
+    """Whom a call is made for. Set by whoever runs the message, inside the
+    call's own task, so it reaches the tool and goes no further. Nothing in
+    it is an argument the model can give."""
+
+    # The conversation the message belongs to; None outside one.
+    conversation_id: str | None = None
+
+
+CALL: ContextVar[CallContext] = ContextVar("tool_call", default=CallContext())
 
 
 @dataclass(frozen=True)

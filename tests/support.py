@@ -30,7 +30,7 @@ from app import main
 from app.api import deps
 from app.config import settings
 from app.llm import Completion, Engine
-from app.store import db
+from app.store import conversations, db
 from app.tools import base as tool_base
 from app.tools.base import ToolResult
 
@@ -269,6 +269,6 @@ class ChatCase(unittest.TestCase):
 
     def conversation(self, stream: list[tuple[str, Any]]) -> dict:
         """The stored conversation a stream belongs to."""
-        found = db.get_conversation(only(stream, "conversation")[0]["id"])
+        found = conversations.get(only(stream, "conversation")[0]["id"])
         assert found is not None
         return found

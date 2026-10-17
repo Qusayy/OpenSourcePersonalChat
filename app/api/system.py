@@ -8,7 +8,7 @@ from ..agent.personas import DEFAULT_PERSONA, persona_list
 from ..agent.skills import skill_list
 from ..config import settings
 from ..ops import telemetry
-from ..store import db
+from ..store import runs
 from ..tools.base import available as available_tools
 from . import deps
 from .pages import bootstrap
@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/api/health")
 async def api_health():
-    return {"engine": deps.engine.info(), "system": telemetry.snapshot(), "chat": db.chat_stats()}
+    return {"engine": deps.engine.info(), "system": telemetry.snapshot(), "chat": runs.chat_stats()}
 
 
 @router.get("/api/bootstrap")

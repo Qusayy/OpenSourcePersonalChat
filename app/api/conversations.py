@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..store import db
+from ..store import conversations
 
 router = APIRouter()
 
 
 @router.get("/api/conversations")
 async def api_conversations():
-    return {"conversations": db.list_conversations()}
+    return {"conversations": conversations.listing()}
 
 
 @router.get("/api/conversations/{cid}")
 async def api_conversation(cid: str):
-    convo = db.get_conversation(cid)
+    convo = conversations.get(cid)
     if convo is None:
         raise HTTPException(404, "No such conversation")
     return convo
@@ -24,5 +24,5 @@ async def api_conversation(cid: str):
 
 @router.delete("/api/conversations/{cid}")
 async def api_delete_conversation(cid: str):
-    db.delete_conversation(cid)
+    conversations.delete(cid)
     return {"ok": True}

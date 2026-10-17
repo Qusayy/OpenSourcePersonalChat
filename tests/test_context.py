@@ -7,12 +7,13 @@ from __future__ import annotations
 import unittest
 
 try:
-    from app.context import (
-        STALE, SUMMARY_HEADING, SUMMARY_TOKENS, TRIM_STEP, TURN_ROOM, Part, Turn, blocks,
-        cap, compact, fit, key, merged, replayed, stale, summary, turns_from, turns_from_history,
+    from app.agent.context import (
+        RUN_ROOM, RUN_ROOM_MOST, STALE, SUMMARY_HEADING, SUMMARY_TOKENS, TRIM_STEP, TURN_ROOM,
+        Part, Turn, blocks, cap, compact, fit, key, merged, replayed, run_room, stale, summary,
+        turns_from, turns_from_history,
     )
-    from app.excerpt import estimate
     from app.llm import render_chatml
+    from app.text import estimate
     from app.tools import base
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
@@ -261,6 +262,14 @@ class FitTests(unittest.TestCase):
         self.assertGreater(moves, 0)
         self.assertLessEqual(moves, sum(sizes) // TRIM_STEP + 1)
         self.assertEqual(sorted(set(cuts)), [c for c in sorted(set(cuts)) if c in blocks(sizes) or c == 0])
+
+
+class RunRoomTests(unittest.TestCase):
+    def test_a_larger_window_gives_a_run_more_room_up_to_a_ceiling(self) -> None:
+        self.assertEqual(run_room(4096), RUN_ROOM)
+        self.assertEqual(run_room(8192), 1024)
+        self.assertEqual(run_room(16384), RUN_ROOM_MOST)
+        self.assertEqual(run_room(1024), RUN_ROOM)
 
 
 if __name__ == "__main__":

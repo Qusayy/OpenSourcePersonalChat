@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setBootstrap } from "@/lib/bootstrap";
-import type { Bootstrap } from "@/lib/types";
 import {
   addBot,
   addNotice,
   addUser,
   botItem,
-  choosePersona,
   patchBot,
   patchNotice,
-  personaNow,
   questionBefore,
   removeItem,
   stepBot,
@@ -17,32 +13,11 @@ import {
 } from "./run";
 
 beforeEach(() => {
-  localStorage.clear();
-  setBootstrap({ defaultPersona: "explainer" } as Bootstrap);
   useChat.setState({
     view: "empty",
-    persona: null,
-    skill: null,
     conversationId: null,
     items: [],
     streaming: false,
-  });
-});
-
-describe("the persona", () => {
-  it("is the server's default until one is chosen", () => {
-    expect(personaNow()).toBe("explainer");
-  });
-
-  it("is remembered as the bare id, the value the page has always stored", () => {
-    choosePersona("code");
-    expect(personaNow()).toBe("code");
-    expect(localStorage.getItem("aurora.persona")).toBe("code");
-  });
-
-  it("comes back from storage on the next visit", () => {
-    localStorage.setItem("aurora.persona", "agent");
-    expect(personaNow()).toBe("agent");
   });
 });
 

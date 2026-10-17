@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import re
 import socket
 import tempfile
 import time
@@ -26,9 +27,11 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from app import db, main
+from app import main
+from app.api import deps
 from app.config import settings
 from app.llm import Completion, Engine
+from app.store import conversations, db
 from app.tools import base as tool_base
 from app.tools.base import ToolResult
 
@@ -74,6 +77,17 @@ def shape(stream: list[tuple[str, Any]]) -> list[str]:
         else:
             out.append(name)
     return out
+
+
+# The line that says when a message was sent, as the model reads it after
+# the message. It is the clock's, so a test that reads a prompt to the letter
+# reads it without.
+_SENT = re.compile(r"\n\n\(Sent [^()\n]*\.\)")
+
+
+def unsent(messages: list[dict]) -> list[dict]:
+    """A prompt without the lines that say when each message was sent."""
+    return [{**m, "content": _SENT.sub("", m["content"])} for m in messages]
 
 
 def only(stream: list[tuple[str, Any]], name: str) -> list[Any]:
@@ -253,7 +267,7 @@ class ChatCase(unittest.TestCase):
         self.engine = self.use_engine(PlayedEngine())
 
     def use_engine(self, engine: PlayedEngine) -> PlayedEngine:
-        patcher = mock.patch.object(main, "engine", engine)
+        patcher = mock.patch.object(deps, "engine", engine)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.engine = engine
@@ -267,6 +281,6 @@ class ChatCase(unittest.TestCase):
 
     def conversation(self, stream: list[tuple[str, Any]]) -> dict:
         """The stored conversation a stream belongs to."""
-        found = db.get_conversation(only(stream, "conversation")[0]["id"])
+        found = conversations.get(only(stream, "conversation")[0]["id"])
         assert found is not None
         return found

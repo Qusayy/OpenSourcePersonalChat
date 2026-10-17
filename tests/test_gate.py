@@ -19,8 +19,10 @@ try:
     from dotenv import dotenv_values
     from fastapi.testclient import TestClient
 
-    from app import db, gate, main, web
+    from app import gate, main
+    from app.api import frontend, pages
     from app.config import Settings
+    from app.store import conversations, db
     from tests.support import ChatCase, shape, temp_database, with_settings
     from tests.test_web import make_dist
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -33,6 +35,17 @@ SALT = bytes(range(16))
 QUICK = 1000
 COVER = "<!doctype html><title>Aurora</title><canvas id=sky></canvas>"
 TITLE = "Marmalade recipe for Thursday"
+
+
+def every_route(routes):
+    """Each route the application answers. FastAPI keeps a router it was
+    given as one entry, with that router's own routes inside it."""
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            yield from every_route(inner.routes)
+        else:
+            yield route
 
 
 def verifier_for(chain: list[int], iterations: int = QUICK, salt: bytes = SALT) -> str:
@@ -67,7 +80,7 @@ class GateCase(unittest.TestCase):
 
         temp_database(self, mock_mode=True)
         for target, name, value in (
-            (main, "frontend", web.Frontend(dist)),
+            (pages, "frontend", frontend.Frontend(dist)),
             (gate, "cover", gate.Cover(dist)),
         ):
             patcher = mock.patch.object(target, name, value)
@@ -76,7 +89,7 @@ class GateCase(unittest.TestCase):
         quick_gate(self)
         with_settings(self, gate="on", gate_verifier=verifier_for(CHAIN))
 
-        self.conversation = db.create_conversation("explainer", TITLE)
+        self.conversation = conversations.create(TITLE)
         # No `with`: the lifespan would open the real database and start
         # loading the model.
         self.client = TestClient(main.app)
@@ -213,7 +226,7 @@ class LockedTests(GateCase):
         # Read from the application as it is now, so a route added tomorrow
         # is held to this without anyone adding it here.
         asked = 0
-        for route in main.app.routes:
+        for route in every_route(main.app.routes):
             path = getattr(route, "path", None)
             if not path or path.startswith("/assets"):
                 continue
@@ -237,12 +250,12 @@ class LockedTests(GateCase):
     def test_a_message_sent_without_a_session_is_not_stored(self) -> None:
         res = self.client.post("/api/chat", json={"message": "hello"})
         self.assertEqual(res.status_code, 401)
-        self.assertEqual(len(db.list_conversations()), 1)
+        self.assertEqual(len(conversations.listing()), 1)
 
     def test_a_conversation_cannot_be_deleted_from_outside(self) -> None:
         res = self.client.delete(f"/api/conversations/{self.conversation}")
         self.assertEqual(res.status_code, 401)
-        self.assertIsNotNone(db.get_conversation(self.conversation))
+        self.assertIsNotNone(conversations.get(self.conversation))
 
     def test_what_is_not_a_page_and_not_the_api_does_not_exist(self) -> None:
         for method, path in (
@@ -379,14 +392,14 @@ class UnlockTests(GateCase):
             self.draw(CHAIN[:-1])
             self.client.post("/api/unlock", json={"chain": "x"})
         matches.assert_not_called()
-        self.assertEqual(db._rows("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'gate_attempts'")[0]["n"], 0)
+        self.assertEqual(db.rows("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'gate_attempts'")[0]["n"], 0)
 
     def test_unlock_is_only_ever_a_post(self) -> None:
         self.assertEqual(self.client.get("/api/unlock").status_code, 401)
 
     def test_the_cookie_s_value_is_not_what_is_stored(self) -> None:
         token = self.draw(CHAIN).cookies["aurora_s"]
-        stored = [row["token"] for row in db._rows("SELECT token FROM gate_sessions")]
+        stored = [row["token"] for row in db.rows("SELECT token FROM gate_sessions")]
         self.assertEqual(len(stored), 1)
         self.assertNotEqual(stored[0], token)
         self.assertNotIn(token, stored[0])
@@ -416,7 +429,7 @@ class UnlockTests(GateCase):
             with self.subTest(origin=origin):
                 res = self.client.delete(path, headers={"origin": origin})
                 self.assertEqual(res.status_code, 403)
-                self.assertIsNotNone(db.get_conversation(self.conversation))
+                self.assertIsNotNone(conversations.get(self.conversation))
         # The site's own page says where it is from, and is believed. Behind
         # a proxy that renames the host, the name the visitor used is kept in
         # X-Forwarded-Host.
@@ -425,7 +438,7 @@ class UnlockTests(GateCase):
             headers={"origin": "http://203.0.113.9", "x-forwarded-host": "203.0.113.9"},
         )
         self.assertEqual(res.status_code, 200)
-        self.assertIsNone(db.get_conversation(self.conversation))
+        self.assertIsNone(conversations.get(self.conversation))
 
     def test_a_request_that_only_reads_is_not_asked_where_it_came_from(self) -> None:
         self.draw(CHAIN)
@@ -477,7 +490,7 @@ class LimitTests(GateCase):
     NOW = 2_000_000.0
 
     def rows(self) -> int:
-        return int(db._rows("SELECT COUNT(*) AS n FROM gate_attempts")[0]["n"])
+        return int(db.rows("SELECT COUNT(*) AS n FROM gate_attempts")[0]["n"])
 
     def test_one_address_gets_five_guesses_in_ten_minutes(self) -> None:
         for i in range(5):
@@ -617,7 +630,7 @@ class GatedChatTests(ChatCase):
         gated_stream = self.chat("What is a curtain made of?")
 
         self.assertEqual(shape(gated_stream), shape(open_stream))
-        self.assertEqual(len(db.list_conversations()), 2)
+        self.assertEqual(len(conversations.listing()), 2)
 
 
 class CommandTests(GateCase):

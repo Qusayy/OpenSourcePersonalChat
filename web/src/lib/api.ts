@@ -9,11 +9,15 @@ import type {
   Conversation,
   ConversationSummary,
   Health,
+  ProjectFileRow,
   Telemetry,
 } from "./types";
 
 export const CHAT_URL = "/api/chat";
 export const BENCH_RUN_URL = "/api/bench/run";
+/** Where a conversation's project is downloaded, as one zip. */
+export const projectZipUrl = (id: string): string =>
+  `/api/conversations/${encodeURIComponent(id)}/project.zip`;
 
 /** A response that was not 2xx. */
 export class ApiError extends Error {
@@ -40,6 +44,13 @@ export const api = {
   conversations: async () =>
     (await json<{ conversations: ConversationSummary[] }>("/api/conversations")).conversations,
   conversation: (id: string) => json<Conversation>(`/api/conversations/${encodeURIComponent(id)}`),
+  /** A conversation's project: every file as it stands, with its content. */
+  project: async (id: string) =>
+    (
+      await json<{ files: ProjectFileRow[] }>(
+        `/api/conversations/${encodeURIComponent(id)}/project`,
+      )
+    ).files,
   deleteConversation: (id: string) =>
     json<{ ok: boolean }>(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
 

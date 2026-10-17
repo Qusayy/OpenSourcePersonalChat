@@ -161,7 +161,8 @@ test.describe("what the server sends", () => {
     expect(found).not.toBeNull();
     const boot = JSON.parse(found?.[1] ?? "null");
     expect(boot.info.model).toBeTruthy();
-    expect(Object.keys(boot.personas[0]).sort()).toEqual(["blurb", "id", "name"]);
+    expect(boot.personas).toBeUndefined();
+    expect(html).not.toContain("connected to live tools");
     expect(html).not.toContain(".gguf");
   });
 

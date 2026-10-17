@@ -18,7 +18,7 @@ from unittest import mock
 try:
     from app.config import settings
     from app.llm import Engine
-    from app.llm_server import Reading, ServerError
+    from app.llm.server import Reading, ServerError
     from evals.scripted import ScriptedEngine
     from tests.support import collect, until
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -840,17 +840,17 @@ class ThreadTests(unittest.TestCase):
         return Engine(settings.model_copy(update={"mock": True, "n_threads": n_threads}))
 
     def test_zero_means_every_cpu_this_process_may_use(self) -> None:
-        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+        with mock.patch("app.llm.core.usable_cpu_count", return_value=4):
             engine = self.engine(0)
             self.assertEqual(engine.threads, 4)
             self.assertEqual(engine.info()["n_threads"], 4)
 
     def test_a_number_pins_it_whatever_the_machine_has(self) -> None:
-        with mock.patch("app.llm.usable_cpu_count", return_value=4):
+        with mock.patch("app.llm.core.usable_cpu_count", return_value=4):
             self.assertEqual(self.engine(2).threads, 2)
 
     def test_a_machine_that_cannot_be_measured_gets_one(self) -> None:
-        with mock.patch("app.llm.usable_cpu_count", return_value=None):
+        with mock.patch("app.llm.core.usable_cpu_count", return_value=None):
             self.assertEqual(self.engine(0).threads, 1)
 
 
@@ -944,7 +944,7 @@ class ServerLoadTests(unittest.TestCase):
         server = FakeServer()
         server.port = 8081
         engine = served(server)
-        with mock.patch("app.llm.follow_server") as follow:
+        with mock.patch("app.llm.core.follow_server") as follow:
             engine.load_blocking()
         follow.assert_called_once_with(8081)
 

@@ -70,24 +70,7 @@ export interface Health {
   };
 }
 
-/* ------------------------------------------- personas, skills and tools -- */
-
-export interface Persona {
-  id: string;
-  name: string;
-  blurb: string;
-}
-
-export interface Skill {
-  id: string;
-  name: string;
-  glyph: string;
-  blurb: string;
-  /** Tool names, in the order the skill runs them. */
-  pipeline: string[];
-  persona: string;
-  placeholder: string;
-}
+/* ------------------------------------------------------------------ tools -- */
 
 export interface ToolArg {
   name: string;
@@ -120,6 +103,10 @@ export type CardKind =
   | "clock"
   | "textstats"
   | "note"
+  | "search"
+  | "news"
+  | "python"
+  | "file"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats
@@ -132,7 +119,6 @@ export type CardData = Record<string, unknown>;
 export interface ConversationSummary {
   id: string;
   title: string;
-  persona: string;
   created_at: number;
   updated_at: number;
   /** How many messages it holds. */
@@ -175,13 +161,46 @@ export interface StoredMessage {
 export interface Conversation {
   id: string;
   title: string;
-  persona: string;
   created_at: number;
   updated_at: number;
   messages: StoredMessage[];
   /** Calls whose answer was cancelled before it could be stored. */
   orphan_tool_calls: StoredToolCall[];
+  /** Its project's files, without their contents. */
+  project?: ProjectEntry[];
 }
+
+/* ------------------------------------------------------------ projects -- */
+
+/** One file of a conversation's project, as it stands. */
+export interface ProjectEntry {
+  path: string;
+  version: number;
+  lang: string;
+  bytes: number;
+  lines: number;
+  created_at: number;
+}
+
+/** The same, with what it holds: GET /api/conversations/{id}/project. */
+export interface ProjectFileRow extends ProjectEntry {
+  content: string;
+}
+
+/** What the stream says of a file an answer writes, as it writes it. */
+export type FileEventData =
+  | { type: "open"; path: string; lang: string }
+  | { type: "line"; path: string; text: string }
+  | {
+      type: "close";
+      path: string;
+      lang: string;
+      lines: number;
+      /** Set once the file was kept: its version, or why it was not kept. */
+      version?: number;
+      kept?: boolean;
+      why?: string;
+    };
 
 /* ------------------------------------------------------- the chat stream -- */
 
@@ -189,8 +208,6 @@ export interface Conversation {
 export interface ChatRequest {
   message: string;
   conversation_id?: string | null;
-  persona?: string | null;
-  skill?: string | null;
 }
 
 export interface StepEvent {
@@ -295,8 +312,6 @@ export type ChatEvents = {
     id: string;
     title: string;
     created: boolean;
-    skill: string | null;
-    persona: string;
     /** The run's name, known from the first event: what Stop asks the server
      *  to stop, at whatever stage the run has reached. */
     request_id?: string;
@@ -305,6 +320,11 @@ export type ChatEvents = {
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
   /** Something had to give for the prompt to fit the window: the oldest
    *  messages, given to the model only in short, or the end of this one. */
+  /** A file the answer is writing: it opens, a line of it arrives, it closes. */
+  file: FileEventData;
+  /** The answer so far is taken back: it said it could not look something
+   *  up, and the run is looking it up and writing it again. */
+  retract: { reason: string };
   trimmed: {
     dropped: number;
     /** Earlier turns read whole, and earlier turns given only in short. */
@@ -443,9 +463,6 @@ export interface Bootstrap {
   version: string;
   info: EngineInfo;
   system: SystemSnapshot;
-  personas: Persona[];
-  defaultPersona: string;
-  skills: Skill[];
   tools: Tool[];
   conversations: ConversationSummary[];
   bench: BenchStatic;

@@ -14,6 +14,16 @@
 
 import { flushSync } from "react-dom";
 import { create } from "zustand";
+import { WIDE } from "@/features/project/ProjectPanel";
+import {
+  fileEvent,
+  flushProject,
+  loadProject,
+  projectConversation,
+  resetProject,
+  setProjectOpen,
+  useProject,
+} from "@/features/project/store";
 import { ApiError, api, CHAT_URL } from "@/lib/api";
 import { aurora } from "@/lib/aurora";
 import { bootstrap } from "@/lib/bootstrap";
@@ -22,7 +32,7 @@ import { reduced } from "@/lib/frame";
 import { Meter } from "@/lib/meter";
 import { proseRenderer } from "@/lib/prose-stream";
 import { sseFetch } from "@/lib/sse";
-import type { CardKind, ChatEvents, Skill } from "@/lib/types";
+import type { CardKind, ChatEvents } from "@/lib/types";
 import { livePhase, resetFigures, setContext, showFigures, traceSample } from "@/shell/figures";
 import { refreshConversations } from "@/state/queries";
 import { announce, holdPhase, toast } from "@/state/shell";
@@ -37,7 +47,6 @@ import {
   newKey,
   patchBot,
   patchNotice,
-  personaNow,
   removeItem,
   stepBot,
   type ThreadItem,
@@ -145,12 +154,6 @@ export function setView(view: View, { animate = false } = {}): void {
   else apply();
 }
 
-/** Arm a skill for the next message, or pass null to disarm. */
-export function setSkill(skill: Skill | null): void {
-  useChat.setState({ skill });
-  if (skill) dom.input?.focus();
-}
-
 /* ------------------------------------------------------------ streaming -- */
 
 const meter = new Meter({
@@ -236,7 +239,6 @@ export async function send(text: string): Promise<void> {
   scrollBottom();
   setView("thread", { animate: true });
 
-  const skill = useChat.getState().skill;
   const bot: BotItem = commit(() => addBot({ live: true }));
   scrollBottom();
   // The element React drew for this answer's text, empty. From here on it is
@@ -252,11 +254,13 @@ export async function send(text: string): Promise<void> {
   const stepMeta = new Map<string, { label: string; ms: number | undefined }>();
   let raw = "";
   let dirty = false;
+  let wroteFiles = false;
   let caretOn = true;
 
   const paint = () => {
     // A backgrounded tab still receives tokens; there is no point laying them
     // out until someone can see them.
+    flushProject();
     if (!dirty || document.hidden) return;
     dirty = false;
     // Read first, then write: measuring the scroll position after the DOM has
@@ -280,8 +284,6 @@ export async function send(text: string): Promise<void> {
       body: {
         message: text,
         conversation_id: useChat.getState().conversationId,
-        persona: personaNow(),
-        skill: skill ? skill.id : null,
       },
       signal: controller.signal,
       onEvent: (event, data) => {
@@ -289,6 +291,7 @@ export async function send(text: string): Promise<void> {
           // From here on the run can be stopped by name.
           if (data.request_id) requestId = data.request_id;
           useChat.setState({ conversationId: data.id });
+          projectConversation(data.id);
           if (data.created) void refreshList();
         } else if (event === "queue") {
           if (queueKey === null) queueKey = notice("queue", "");
@@ -329,6 +332,20 @@ export async function send(text: string): Promise<void> {
           if (nearBottom()) scrollBottom();
         } else if (event === "trimmed") {
           notice("", trimmedWording(data.dropped, data.cut));
+        } else if (event === "file") {
+          // The first file of a run opens the panel beside the thread where
+          // there is room for it; on a narrow screen the top bar offers it.
+          wroteFiles = true;
+          if (fileEvent(data) && window.matchMedia(WIDE).matches) setProjectOpen(true);
+        } else if (event === "retract") {
+          // The answer said it could not look this up. It can, and it will:
+          // what was written is taken off the page, and the next answer is
+          // written in its place.
+          raw = "";
+          dirty = false;
+          prose.reset();
+          livePhase("working");
+          announce(data.reason);
         } else if (event === "start") {
           requestId = data.request_id;
           livePhase("reading"); // holds until the first token lands
@@ -410,9 +427,11 @@ export async function send(text: string): Promise<void> {
     requestId = null;
     connection = null;
     const final = raw;
+    // The project as it was kept, in place of what the stream showed of it.
+    const projectOf = useProject.getState().cid;
+    if (wroteFiles && projectOf) void loadProject(projectOf);
     if (!final.trim() && !botItem(bot.key)?.cards.length) removeItem(bot.key);
     else patchBot(bot.key, (b) => ({ ...b, live: false, content: final }));
-    setSkill(null); // a skill applies to one message, not the whole thread
     dom.input?.focus();
   }
 }
@@ -423,10 +442,7 @@ export async function send(text: string): Promise<void> {
 // conversation, where only its registry name was kept.
 let toolLabels: Map<string, string> | null = null;
 export function toolLabel(name: string): string {
-  toolLabels ??= new Map([
-    ...bootstrap().tools.map((t) => [t.name, t.label || t.name] as const),
-    ...bootstrap().skills.map((s) => [s.id, s.name || s.id] as const),
-  ]);
+  toolLabels ??= new Map(bootstrap().tools.map((t) => [t.name, t.label || t.name] as const));
   return toolLabels.get(name) ?? name;
 }
 
@@ -471,14 +487,10 @@ export async function loadConversation(cid: string): Promise<void> {
       });
       ctx = (m.prompt_tokens || 0) + (m.completion_tokens || 0) || ctx;
     }
-    commit(() =>
-      useChat.setState((s) => ({
-        conversationId: cid,
-        persona: convo.persona || s.persona,
-        items,
-      })),
-    );
+    commit(() => useChat.setState({ conversationId: cid, items }));
     setContext(ctx);
+    if (convo.project?.length) void loadProject(cid);
+    else resetProject(cid);
     setRail(false);
     setView("thread");
     scrollBottom();
@@ -491,8 +503,8 @@ export async function loadConversation(cid: string): Promise<void> {
 export function newChat(): void {
   if (useChat.getState().streaming) return;
   useChat.setState({ conversationId: null, items: [] });
+  resetProject();
   setView("empty");
-  setSkill(null);
   setContext(0);
   setRail(false);
   void refreshList();

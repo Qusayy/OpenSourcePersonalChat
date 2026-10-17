@@ -1,0 +1,35 @@
+# SearXNG for Aurora's web_search tool (app/tools/web_search.py).
+#
+# It is this server's own search, for the app alone: on loopback, answering in
+# JSON, with nobody else let in. The app reaches it at AURORA_SEARX_URL
+# (http://127.0.0.1:8888). Installed by deploy/build-searxng.sh, which puts a
+# random secret_key in place of the one below.
+use_default_settings: true
+
+general:
+  instance_name: "aurora-search"
+  enable_metrics: false
+
+server:
+  bind_address: "127.0.0.1"
+  port: 8888
+  secret_key: "replaced-on-install"
+  # One caller, on loopback: there is nobody to rate-limit, and the limiter
+  # would want a Valkey this server does not run.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 1
+  # json is what the app reads; html is kept for a look by hand over an SSH
+  # tunnel when the results seem wrong.
+  formats:
+    - html
+    - json
+
+outgoing:
+  # The tool gives up after AURORA_TOOL_TIMEOUT (10 s); an engine that is
+  # slower than this is dropped from the answer instead of holding it up.
+  request_timeout: 4.0
+  max_request_timeout: 6.0

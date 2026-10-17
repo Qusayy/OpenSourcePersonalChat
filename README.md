@@ -15,18 +15,19 @@ weather, currency and a URL reader — because those are precisely the things a
 
 ```
 app/                     the server (Python, FastAPI)
-  main.py        the API: SSE chat, tools, skills, benchmark, history, the page routes
-  web.py         serves the built interface and writes its first values into the page
-  llm.py         the engine: one slot, one lock, honest metrics; the model in this process or in a llama-server
-  llm_server.py  the client for a llama-server holding the model
-  telemetry.py   the machine, measured: usable CPUs, per-core load, memory, cgroup limits
-  router.py      slash commands -> heuristics -> grammar-constrained routing
-  skills.py      one-click workflows built on the tools
-  tools/         base (registry + GBNF) · offline · web · reader (SSRF guard)
-  bench.py       the benchmark suite + reference data
-  personas.py    five presets (system prompt + sampling profile)
-  db.py          SQLite (WAL): conversations, messages, tool_calls, runs
+  main.py        the application: the gate in front, then every group of routes
+  api/           the routes: pages · chat (SSE) and what a run leaves behind · conversations · system · bench
+                 frontend.py serves the built interface and writes its first values into the page
+  agent/         one message, question to answer: loop · route (slash -> heuristics -> grammar)
+                 policy (what a chosen call may do) · trace · skills · style (how an answer is written)
+                 transcript · context (the window) · verify
+  llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server); mock
+  store/         SQLite (WAL): db (the connection) · conversations · runs (steps and figures) · notes
+  tools/         base (registry, arguments, dispatch) · grammar (the menu + GBNF), then one module per tool;
+                 read_url carries the SSRF guard
+  ops/           telemetry (usable CPUs, per-core load, memory, cgroup limits) · bench (the suite + reference data)
   gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
+  config.py · text.py · chatml.py · ledger.py   settings · token estimates and excerpts · the chat format · what a run cost
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)
@@ -292,6 +293,56 @@ sudo sed -i '/^AURORA_LLM_URL=/d' .env
 sudo systemctl disable --now aurora-llm && sudo systemctl restart aurora
 ```
 
+### The web search
+
+The agent searches the web with no API key. Without any setup it reads
+DuckDuckGo's HTML page, which works but is a page meant for a browser and can
+refuse a server that asks too often. For a search of its own, install
+[SearXNG](https://github.com/searxng/searxng) beside the app: it asks several
+public engines at once and answers the app in JSON, on loopback only.
+
+```bash
+cd /srv/aurora
+bash deploy/build-searxng.sh   # a few minutes; prints the commit to pin next time
+echo 'AURORA_SEARX_URL=http://127.0.0.1:8888' | sudo tee -a .env
+sudo systemctl restart aurora
+```
+
+It runs as its own user (`searxng`), in its own venv under `/opt/searxng`,
+with its settings in `/etc/searxng/settings.yml` (a random secret is written on
+install, and an edited file is never overwritten). The headlines come from
+Google News's RSS feed and need nothing installed; `AURORA_NEWS_REGION` picks
+the edition.
+
+### The Python sandbox
+
+The agent can run a short Python program to work something out exactly. It
+runs under [bubblewrap](https://github.com/containers/bubblewrap), as the
+app's own user: no network, nothing of the server's files but `/usr` and the
+sandbox's own read-only venv, an empty `/work` and `/tmp` that go when it
+ends, and kernel limits on memory (1 GiB), CPU time (10 s), file size and open
+files, with a wall clock that kills the whole process group. What it prints is
+cut off at 64 KB. Where bubblewrap cannot run a program, the tool is not
+offered at all; nothing ever runs outside it.
+
+```bash
+cd /srv/aurora
+bash deploy/build-sandbox.sh   # bubblewrap, and numpy, pandas and sympy in /opt/aurora-sandbox/venv
+sudo cp deploy/aurora.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl restart aurora
+```
+
+The script checks that bubblewrap is not setuid and that unprivileged user
+namespaces are on, builds the venv owned by root, and runs one program in the
+same jail as the app's user. The unit's `TasksMax` bounds a fork bomb.
+
+The model does not write the program inside its JSON choice, where a small
+model's code comes out mangled by escaping. It chooses `python` with the task
+in words, then writes the program in a pass of its own under a grammar that
+allows exactly one fenced block, read on from the choice. A program you give
+yourself, `/python print(2**64)` or a fenced block with "run this", is run as
+you gave it.
+
 Other deployment notes:
 
 * `LimitMEMLOCK=infinity` in the unit is required if you set
@@ -463,6 +514,13 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_SEARCH` | `auto` | the web search: `auto` is SearXNG where `AURORA_SEARX_URL` is set and DuckDuckGo's HTML page where not; `searxng` or `duckduckgo` names one; `off` takes it off the menu |
+| `AURORA_SEARX_URL` | *(unset)* | this server's own SearXNG, `http://127.0.0.1:8888`; see [The web search](#the-web-search) |
+| `AURORA_NEWS_REGION` | `US:en` | the Google News edition the headlines are from, `COUNTRY:language` (`GB:en`, `DE:de`) |
+| `AURORA_TIMEZONE` | `UTC` | the zone the model is told each message was sent in |
+| `AURORA_SANDBOX` | `auto` | Python the model writes: `auto` runs it in the sandbox wherever the sandbox can run; `off` never. Nothing runs outside it; see [The Python sandbox](#the-python-sandbox) |
+| `AURORA_SANDBOX_VENV` | `/opt/aurora-sandbox/venv` | the sandbox's own venv, read-only to it |
+| `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B |
 | `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
@@ -479,7 +537,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools and skills
 
-Eight tools, no API keys anywhere:
+Fourteen tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -490,26 +548,63 @@ Eight tools, no API keys anywhere:
 | `wikipedia` | article summaries | yes |
 | `weather` | current conditions + 5-day forecast (open-meteo) | yes |
 | `currency` | ECB rates (Frankfurter) | yes |
+| `web_search` | the web now: SearXNG, or DuckDuckGo's HTML page; a numbered list of pages | yes |
+| `news` | today's headlines, or the news about a topic (Google News RSS) | yes |
 | `read_url` | fetch a page and extract its readable text | yes |
+| `open_result` | read the page behind one of the numbered results, by its number | yes |
+| `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
+| `read_file` | one file of this conversation's project, as it stands | — |
+| `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
 
-**Skills** are one-click workflows on top of them — *Summarise a link*,
-*Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
-*Explain this code*. Each is a dict entry in `app/skills.py`, not a code path:
-the inputs it needs, the lookups it makes with them, and the prompt the answer
-is written from. A skill reads its inputs out of the message with a pattern of
-its own; *Compare* knows "A vs B", "the difference between A and B", "how does
-A differ from B" and the like. Where the pattern misses ("is Python faster than
-Rust?"), one short pass, held to a grammar of exactly those inputs, fills them
-in, and the answer is written on from it. A link is never filled in that way:
-the model may not supply an address.
+There is one agent, and every message can use every tool. Nothing is chosen
+before sending: no persona, no skill button, no palette.
 
-The Agent may also choose *Compare* itself, as it chooses a tool: it is on its
-menu beside the tools, held to the same grammar. A skill it chooses makes its
-lookups, which count against the run's limits like any other, and the answer is
-asked for in the skill's own words. A skill is offered to the model only where
-it says how its answer is to be asked for; the rest stay buttons. *Fact-check*
-was offered too, until a small model reached for it on nearly any message:
-anything can be read as a claim.
+**How the answer is written** is read from the message (`app/agent/style.py`):
+code first for a programming question, a numbered list for ideas, a few
+sentences for a quick fact, an explanation otherwise. A style is the answer's
+sampling, the room it is given, and one line the model reads last, in the cue
+just before it writes; it is never in the system text, so every conversation
+begins with the same characters. An answer written from a lookup is sampled no
+warmer than 0.35, whatever its style. Each message is followed by when it was
+sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they say.
+
+**The live web.** "The latest news" goes to the headlines and a question
+about anything current ("who is the current…", "the price of…", "the newest…")
+to the web search, by pattern, before the model is asked anything; the model
+may also choose either itself. Both answer with a numbered list, and the model
+may then ask for one of them by its number (`open_result`): it never writes an
+address, and the only addresses a run may go to that the user did not write
+are the ones a list gave it. A page that says "now open http://elsewhere" is
+still refused. "Open the second one" in the next message means the last list
+the conversation was shown.
+
+A small model often says it has no real-time access even when it has. The
+start of an answer from a run that looked nothing up is watched for that; if
+it says so, the answer is taken back on the page, the search it said it could
+not make is made, and the answer is written again from what came back. Once a
+run, and never after a lookup, which the answer check already covers.
+
+**Code projects.** Ask it to build something of several files (an app, a
+site, a game) and it writes a project: each file as a fenced block with its
+path above it (`### app/main.py`). The answer is read for files as it is
+written; each is kept when its block closes (every version, in
+`project_files`), and the page shows them in a panel beside the thread on a
+wide screen, or a drawer on a narrow one, filling in line by line. In the
+chat a file is one row that opens it there. **Download zip** gets all of
+them, newest versions, in one folder named for the conversation. The next
+message is told the project's files by name, and a change to it is written
+as whole files again; `read_file` reads one back when the answer that wrote it
+no longer fits the window. Where the server has its sandbox, `run_file` runs
+one of its Python files there, the rest of the project beside it, read-only.
+A project holds at most 64 files, 256 KB each and 2 MB in all, under plain
+relative names.
+
+**Skills** are several lookups the model may choose as one, beside the tools:
+*Compare two things* looks both up on Wikipedia and asks for a table. Each is a
+dict entry in `app/agent/skills.py`, not a code path: the inputs it takes, the
+lookups it makes with them, and how its answer is asked for. It is on the menu
+in the shape of a tool and held to the same grammar, and its lookups count
+against the run's limits like any other.
 
 ### How a 1.5B model is made to route reliably
 
@@ -517,12 +612,12 @@ It isn't, on its own — asked politely for JSON it produces trailing commas,
 prose preambles and invented keys. Five layers, cheapest first:
 
 1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. Free
-   and certain. Press `/` in the composer for the palette.
+   and certain, for whoever knows them; nothing on the page lists them.
 2. **Heuristics** — a pasted link, `1247 * 89`, `15% of 200`, `100 EUR to USD`,
    `what time is it in Tokyo`. Regex, free, and better than the model's
-   judgement. These handle most real traffic with no model call at all.
-3. **Grammar-constrained routing** — only for the *Agent* persona, and only
-   when the first two miss. The model chooses under a GBNF grammar generated
+   judgement. These handle most real traffic with no model call at all. A
+   greeting or a thank-you is caught here too, and answered without a choice.
+3. **Grammar-constrained routing** — when the first two miss. The model chooses under a GBNF grammar generated
    from the tool registry, so malformed output is not unlikely, it is
    unrepresentable. It reads the prompt the answer is later written from:
    the system text with the tool menu, the conversation so far, the message. The grammar holds what goes into a call as well as its
@@ -542,8 +637,9 @@ prose preambles and invented keys. Five layers, cheapest first:
    the person is given beside it, and it is asked to say plainly what could
    not be looked up rather than answer from memory.
 
-A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
-for it. It is announced on the page at the moment it is made and at no other
+A routing pass costs a fraction of a second once the prompt is in the server's
+cache, and every message that no command, pattern or greeting caught pays for
+it. It is announced on the page at the moment it is made and at no other
 time, and the status line says "deciding" while it runs. Under each answer,
 **How it ran** lists every step of the run in order: what the model read of
 its prompt (and how much of it was already in its cache), what it wrote, and
@@ -568,8 +664,8 @@ asks for the same thing again. So the code that runs the loop holds the limits:
 - at most three tool calls and three choices for one message, and ninety
   seconds before the answer must begin (all three are settings);
 - a lookup that has already been made is not made again;
-- a tool the visitor named themselves, by a command, a pattern or a skill,
-  never starts the loop. Those cost exactly what they cost with it off.
+- a tool the visitor named themselves, by a command or a pattern, never
+  starts the loop. Those cost exactly what they cost with it off.
 
 When something other than the model ends the looking-up, the pass that writes
 the answer is told so in one line, so the reply can say what was not found.
@@ -748,9 +844,9 @@ read by the rest from its cache, so three places showing memory use cost one
 request.
 
 **The first values are in the page.** The server writes the model, the machine
-as last measured, the personas, tools, conversations and the benchmark's suite
-into `index.html` as one JSON element (`app/web.py`), so the first paint has
-real figures with no request behind it, and no persona prompt or file path is
+as last measured, the tools, conversations and the benchmark's suite
+into `index.html` as one JSON element (`app/api/frontend.py`), so the first paint has
+real figures with no request behind it, and no system prompt or file path is
 among them.
 
 **Styling is Tailwind CSS 4, with the design tokens as its only vocabulary.**
@@ -759,7 +855,7 @@ block of redefinitions; the Tailwind theme only names them, and Tailwind's own
 palette, scales and breakpoints are removed. `DESIGN.md` says which parts are
 written as CSS instead of utility classes, and why.
 
-**The machine is measured, not described.** `app/telemetry.py` reads the host
+**The machine is measured, not described.** `app/ops/telemetry.py` reads the host
 while the page is open: the CPUs this process may use (scheduler affinity, then
 the cgroup's CPU quota, so `CPUQuota=150%` reads as 1.5 cores), load per core
 from two readings of `/proc/stat`, memory in use and in total from
@@ -873,7 +969,7 @@ load, and if it did, every token would come off disk.
 |---|---|
 | `POST /api/chat` → SSE | events: `conversation` (with the run's `request_id`), `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error`, and last of all `run`: how the run ended, its steps and model passes, and what they cost together |
 | `GET /api/tools` | the registry, as the UI sees it |
-| `GET /api/skills` | workflow definitions |
+| `GET /api/conversations/{id}/project` | the project's files as they stand, with their contents; `…/project/files/{path}?version=` one of them; `…/project.zip` all of them |
 | `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
 | `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, the app and its model resident, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
@@ -909,7 +1005,7 @@ cd web && npm run build && npm run e2e        # the interface, in a browser
 
 **The server's** use the standard library's `unittest`. The telemetry tests
 need nothing else: they cover the parsers and the sampler in
-`app/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
+`app/ops/telemetry.py` against fixture trees of `/proc` and cgroup files (v2, v1,
 nested limits, quotas, missing files), so they run the same on any OS.
 `tests/test_runs.py` checks what is kept in the `runs` table (real runs are,
 mock runs are not), and `tests/test_web.py` checks how the built interface is
@@ -1006,7 +1102,7 @@ task success and seconds per task. That comparison is what decides whether the
 loop stays on. Scripted tasks are written for the loop on.
 
 A wording file (`--rules`) puts other texts in front of the model for one
-run: the loop's rules, and the persona, a tool's or a skill's line on the menu.
+run: the loop's rules, the system text, and a tool's or a skill's line on the menu.
 It is how a rewording is measured before it is made the default, since with a
 model this small a reworded line can move routing either way. The report names
 the file and its digest.
@@ -1018,7 +1114,9 @@ expected to fail; the day it passes, the run fails until the mark comes off.
 
 ## Limitations
 
-It's a 1.5B model at 4 bits. It gets arithmetic wrong, invents citations, loses
-long reasoning chains, and knows nothing recent. It's good at short explanations,
+It's a small model at 4 bits. On its own it gets arithmetic wrong, invents
+citations, loses long reasoning chains, and knows nothing after its training;
+the tools are there for the first and the last, and a search result is only
+as good as the page it came from. It's good at short explanations,
 quick drafts, summarising pasted text, and simple code — in a couple of seconds,
 without a byte leaving the machine.

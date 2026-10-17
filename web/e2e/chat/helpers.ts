@@ -112,8 +112,6 @@ export const CONVERSATION = {
   id: "c0ffee",
   title: "A test",
   created: false,
-  skill: null,
-  persona: "explainer",
   request_id: "req-1",
 };
 export const START = { request_id: "req-1", queue_wait_ms: 0, prompt_tokens: 56, n_ctx: 4096 };
@@ -171,4 +169,3 @@ export async function openStored(page: Page, n: number): Promise<void> {
 export const question = (page: Page): Locator => page.locator('[data-part="question"]');
 export const answerOf = (page: Page): Locator => page.locator('[data-part="answer"]');
 export const notice = (page: Page): Locator => page.locator('[data-part="notice"]');
-export const options = (page: Page): Locator => page.locator('#palette [role="option"]');

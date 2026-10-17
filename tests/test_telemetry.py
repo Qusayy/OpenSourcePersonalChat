@@ -1,4 +1,4 @@
-"""Tests for app.telemetry.
+"""Tests for app.ops.telemetry.
 
 The Linux path reads /proc and /sys, which this may well be run without (the
 project is developed on Windows too). So every reader takes a filesystem root,
@@ -16,8 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app import telemetry
-from app.telemetry import (
+from app.ops import telemetry
+from app.ops.telemetry import (
     Sampler,
     parse_cgroup,
     parse_cpu_list,

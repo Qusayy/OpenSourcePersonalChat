@@ -64,6 +64,33 @@ jobs:
           pip install -r requirements-ci.txt
       - run: python -m unittest discover -s tests -t .
 
+  sandbox:
+    name: Sandbox (real programs under bubblewrap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          grep -v '^llama-cpp-python' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
+      # Ubuntu 24.04 keeps unprivileged user namespaces behind AppArmor; the
+      # server (Debian 12) has them on. bubblewrap needs them.
+      - run: |
+          sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The sandbox's own venv, where the server keeps it, read-only to the
+      # user the tests run as.
+      - run: |
+          sudo python3 -m venv /opt/aurora-sandbox/venv
+          sudo /opt/aurora-sandbox/venv/bin/pip install -q -r deploy/sandbox-requirements.txt
+          sudo chmod -R a+rX,go-w /opt/aurora-sandbox
+      - run: python -m unittest tests.test_sandbox -v
+        env:
+          AURORA_SANDBOX_TESTS: "1"
+
   browser:
     name: Browser (the built interface on the real server, mock mode)
     runs-on: ubuntu-latest
@@ -117,7 +144,7 @@ jobs:
     name: Publish the built files to the release branch
     # Only what is on master, and only once everything above has passed.
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [web, server, browser]
+    needs: [web, server, sandbox, browser]
     runs-on: ubuntu-latest
     # The one job that may write to the repository.
     permissions:

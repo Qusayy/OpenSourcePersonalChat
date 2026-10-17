@@ -2,7 +2,7 @@
  *
  * The server writes them into index.html as one JSON element, so they are
  * there before any request: the model's name, the machine as last measured,
- * the personas and tools on offer. Under the Vite dev server nothing wrote
+ * the tools on offer. Under the Vite dev server nothing wrote
  * them, and the page asks /api/bootstrap for the same thing before it draws.
  */
 

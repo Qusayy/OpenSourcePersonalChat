@@ -12,8 +12,7 @@ import json
 import unittest
 
 try:
-    from app.llm import Completion
-    from app.router import (
+    from app.agent.route import (
         ask_reply,
         decision_grammar,
         decision_limit,
@@ -22,7 +21,9 @@ try:
         parse_action,
         parse_slash,
     )
-    from app.tools.base import available, decision_ceiling
+    from app.llm import Completion
+    from app.tools.base import available
+    from app.tools.grammar import decision_ceiling
     from tests import support
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
@@ -108,31 +109,38 @@ class HeuristicTests(unittest.TestCase):
 
 
 class FreeRouteTests(unittest.TestCase):
-    """The two tiers that cost nothing, in order."""
+    """The tiers that cost nothing, in order."""
 
-    def test_a_command_is_routed_even_for_a_persona_without_tools(self) -> None:
-        call, tier = free_route("/calc 2+2", tools_enabled=False)
+    def test_a_command_is_routed(self) -> None:
+        call, tier = free_route("/calc 2+2")
         self.assertEqual((call.name, call.via, tier), ("calculator", "slash", "slash"))
 
-    def test_without_tools_nothing_but_a_command_is_routed(self) -> None:
-        self.assertEqual(free_route("15% of 200", tools_enabled=False), (None, None))
-
-    def test_a_pattern_is_tried_where_tools_are_on(self) -> None:
-        call, tier = free_route("15% of 200", tools_enabled=True)
+    def test_a_pattern_is_tried_after_a_command(self) -> None:
+        call, tier = free_route("15% of 200")
         self.assertEqual((call.name, call.via, tier), ("calculator", "heuristic", "heuristic"))
 
     def test_a_command_is_tried_before_a_pattern(self) -> None:
-        call, tier = free_route("/wiki 15% of 200", tools_enabled=True)
+        call, tier = free_route("/wiki 15% of 200")
         self.assertEqual((call.name, tier), ("wikipedia", "slash"))
 
     def test_a_command_nobody_defined_can_still_match_a_pattern(self) -> None:
-        call, tier = free_route("/foo https://example.org/x", tools_enabled=True)
+        call, tier = free_route("/foo https://example.org/x")
         self.assertEqual((call.name, tier), ("read_url", "heuristic"))
+
+    def test_a_greeting_or_thanks_needs_nothing_looked_up(self) -> None:
+        for text in ("Hi", "hello there!", "Thanks!", "thank you so much", "good morning", "ok"):
+            with self.subTest(text=text):
+                self.assertEqual(free_route(text), (None, "chat"))
+
+    def test_a_greeting_with_a_question_after_it_is_not_small_talk(self) -> None:
+        for text in ("Hi what are the latest news", "thanks, now what is a quark"):
+            with self.subTest(text=text):
+                self.assertNotEqual(free_route(text)[1], "chat")
 
     def test_what_neither_catches_is_left_for_the_model(self) -> None:
         for text in ("Suggest a name for my boat", "/foo bar", "the weather"):
             with self.subTest(text=text):
-                self.assertEqual(free_route(text, tools_enabled=True), (None, None))
+                self.assertEqual(free_route(text), (None, None))
 
 
 class DecisionTests(unittest.TestCase):
@@ -175,7 +183,7 @@ class SkillActionTests(unittest.TestCase):
     """A skill the model was offered, chosen by its name."""
 
     def test_a_skill_it_was_offered_is_a_skill_with_the_inputs_it_gave(self) -> None:
-        from app.skills import SKILLS
+        from app.agent.skills import SKILLS
 
         reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
         action = parse_action(said(reply), {"compare": SKILLS["compare"]})

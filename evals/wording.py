@@ -1,11 +1,11 @@
 """Another wording of what the model reads when it chooses, for one run.
 
-A choice reads the persona's system text, the loop's rules and a menu of
-tools and skills. With a model this small a reworded line can move routing in
+A choice reads the system text, the loop's rules and a menu of tools and
+skills. With a model this small a reworded line can move routing in
 either direction, and the only way to know which is to run the tasks. A
 wording file lets a run try one without a change to the code:
 
-    @persona agent: You are …
+    @system: You are …
     @tool clock: The date, the time and the day of the week …
     @skill compare: Compare two things …
 
@@ -14,7 +14,7 @@ wording file lets a run try one without a change to the code:
     {menu}
     …
 
-A line that begins ``@persona``, ``@tool`` or ``@skill`` replaces that one
+A line that begins ``@system``, ``@tool`` or ``@skill`` replaces that one
 text. Everything else, if there is anything, replaces the loop's rules; it is
 written as the model will read it, braces and all, with ``{menu}`` where the
 menu goes. Nothing is changed outside the ``with`` block it is applied in.
@@ -31,10 +31,11 @@ from pathlib import Path
 from typing import Iterator
 from unittest import mock
 
-from app import personas, skills, transcript
+from app.agent import skills, transcript
 from app.tools import base
 
-_OVERRIDE = re.compile(r"^@(persona|tool|skill)\s+([\w-]+):[ \t]?(.*)$")
+_OVERRIDE = re.compile(r"^@(tool|skill)\s+([\w-]+):[ \t]?(.*)$")
+_SYSTEM = re.compile(r"^@system:[ \t]?(.*)$")
 _MENU = "{menu}"
 
 
@@ -43,7 +44,8 @@ class Wording:
     path: str
     # The loop's rules as a format template, or None to keep them.
     rules: str | None = None
-    personas: dict[str, str] = field(default_factory=dict)
+    # Who the model is, in place of the system text's first paragraph.
+    system: str | None = None
     tools: dict[str, str] = field(default_factory=dict)
     skills: dict[str, str] = field(default_factory=dict)
     digest: str = ""
@@ -58,11 +60,15 @@ def load(path: str | Path) -> Wording:
     one that could not be used."""
     path = Path(path)
     raw = path.read_text(encoding="utf-8")
-    found: dict[str, dict[str, str]] = {"persona": {}, "tool": {}, "skill": {}}
+    found: dict[str, dict[str, str]] = {"tool": {}, "skill": {}}
+    system: str | None = None
     body: list[str] = []
     for line in raw.splitlines():
         match = _OVERRIDE.match(line)
-        if match:
+        said = _SYSTEM.match(line)
+        if said:
+            system = said.group(1).strip()
+        elif match:
             kind, name, text = match.groups()
             found[kind][name] = text.strip()
         else:
@@ -79,7 +85,7 @@ def load(path: str | Path) -> Wording:
     return Wording(
         path=path.as_posix(),
         rules=rules,
-        personas=found["persona"],
+        system=system,
         tools=found["tool"],
         skills=found["skill"],
         digest=hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12],
@@ -94,7 +100,6 @@ def applied(wording: Wording | None) -> Iterator[None]:
         yield
         return
     for kind, names, known in (
-        ("persona", wording.personas, personas.PERSONAS),
         ("tool", wording.tools, base.REGISTRY),
         ("skill", wording.skills, skills.SKILLS),
     ):
@@ -104,10 +109,8 @@ def applied(wording: Wording | None) -> Iterator[None]:
     with ExitStack() as stack:
         if wording.rules is not None:
             stack.enter_context(mock.patch.object(transcript, "LOOP_RULES", wording.rules))
-        stack.enter_context(mock.patch.dict(personas.PERSONAS, {
-            name: dataclasses.replace(personas.PERSONAS[name], system=text)
-            for name, text in wording.personas.items()
-        }))
+        if wording.system is not None:
+            stack.enter_context(mock.patch.object(transcript, "SYSTEM", wording.system))
         stack.enter_context(mock.patch.dict(base.REGISTRY, {
             name: dataclasses.replace(base.REGISTRY[name], description=text)
             for name, text in wording.tools.items()

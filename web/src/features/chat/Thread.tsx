@@ -5,7 +5,7 @@ import { copyText } from "@/lib/clipboard";
 import { cx } from "@/lib/cx";
 import { enter } from "@/lib/frame";
 import { Icon } from "@/lib/icons";
-import { renderMarkdown } from "@/lib/markdown";
+import { renderAnswer } from "@/lib/markdown";
 import { Button } from "@/shell/Button";
 import { toast } from "@/state/shell";
 import { dom, send, streamed, toolLabel } from "./controller";
@@ -164,7 +164,7 @@ const Prose = memo(function Prose({
     const el = host.current;
     if (!el || live || streamed.has(el)) return;
     // The renderer escapes everything it is given before it adds markup.
-    el.innerHTML = renderMarkdown(content);
+    el.innerHTML = renderAnswer(content);
   }, [live, content]);
 
   return <div className="prose" dir="auto" ref={host} />;

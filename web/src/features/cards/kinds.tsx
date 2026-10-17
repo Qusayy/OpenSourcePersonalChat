@@ -7,7 +7,7 @@
  */
 
 import type { ComponentType } from "react";
-import { num, weekdayShort } from "@/lib/format";
+import { ago, num, weekdayShort } from "@/lib/format";
 import { Icon } from "@/lib/icons";
 import { sparkPaths } from "@/lib/meter";
 import type { CardData, CardKind } from "@/lib/types";
@@ -135,6 +135,160 @@ function Wikipedia({ data, meta }: KindProps) {
         en.wikipedia.org
         <Icon name="external" size={12} />
       </a>
+    </Figure>
+  );
+}
+
+/* ------------------------------------------------------ search / news -- */
+
+/* A list the model was shown, numbered as it read it, so "the second one"
+   means the same thing on the page as in the answer. Each entry links to its
+   page; the age is worked out from when it was published, here and now,
+   rather than taken from when it was looked up. */
+
+interface Entry {
+  title: string;
+  url: string;
+  source: string;
+  published: string;
+  snippet: string;
+}
+
+/** When an entry was published, as an age; empty when the date cannot be read. */
+function published(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? "" : ago(at / 1000);
+}
+
+function entries(data: CardData): Entry[] {
+  return list(data, "items").map((raw) => {
+    const e = record(raw);
+    return {
+      title: text(e, "title") || text(e, "url"),
+      url: text(e, "url"),
+      source: text(e, "source"),
+      published: text(e, "published"),
+      snippet: text(e, "snippet"),
+    };
+  });
+}
+
+function Entries({ items, snippets }: { items: Entry[]; snippets: boolean }) {
+  return (
+    <ol className="m-0 p-0 list-none flex flex-col gap-3">
+      {items.map((e, i) => (
+        <li key={e.url || i} className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-1">
+          <span className="text-ink-2 num">{i + 1}.</span>
+          <div className="min-w-0">
+            <a
+              className="font-semibold [overflow-wrap:anywhere]"
+              href={e.url || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {e.title}
+            </a>
+            <div className="text-ink-2 text-1">
+              {[e.source, published(e.published)].filter(Boolean).join(" · ")}
+            </div>
+            {snippets && e.snippet ? <p className="mt-1 mb-0 line-clamp-2">{e.snippet}</p> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function Search({ data, meta }: KindProps) {
+  const answer = text(data, "answer");
+  const query = text(data, "query");
+  return (
+    <Figure
+      tool="search"
+      card="search"
+      name="Web search"
+      note={query ? `“${query}”` : undefined}
+      meta={meta}
+    >
+      {answer ? <p className="mt-0 mb-3">{answer}</p> : null}
+      <Entries items={entries(data)} snippets />
+    </Figure>
+  );
+}
+
+function News({ data, meta }: KindProps) {
+  const topic = text(data, "topic");
+  return (
+    <Figure tool="news" card="news" name="News" note={topic || "top stories"} meta={meta}>
+      <Entries items={entries(data)} snippets={false} />
+    </Figure>
+  );
+}
+
+/* -------------------------------------------------------------- python -- */
+
+/* The program as it was run, then what it printed. A program the model wrote
+   is shown whole, so what was run is never a guess; a failure keeps the end
+   of its traceback, where Python says what went wrong. */
+function Python({ data, meta }: KindProps) {
+  const code = text(data, "code");
+  const out = text(data, "stdout");
+  const err = text(data, "stderr");
+  const exit = data.exit_code;
+  const timedOut = data.timed_out === true;
+  const failed = timedOut || (typeof exit === "number" && exit !== 0);
+  const note = timedOut
+    ? "stopped: out of time"
+    : typeof exit === "number"
+      ? exit === 0
+        ? "exited 0"
+        : `exited ${exit}`
+      : undefined;
+  return (
+    <Figure tool="python" card="python" name="Python" note={note} meta={meta} failed={failed}>
+      {code ? (
+        <div className="codeblock" data-code={code}>
+          <header>
+            <span>python</span>
+            <button type="button" className="copy-btn" data-copy>
+              Copy
+            </button>
+          </header>
+          <pre>
+            <code>{code}</code>
+          </pre>
+        </div>
+      ) : null}
+      {out ? (
+        <pre className="mt-2 mb-0 text-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{out}</pre>
+      ) : !failed ? (
+        <p className="mt-2 mb-0 text-ink-2">It printed nothing.</p>
+      ) : null}
+      {failed && err ? (
+        <pre className="mt-2 mb-0 text-1 text-fault whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {err.length > 1200 ? `…${err.slice(-1200)}` : err}
+        </pre>
+      ) : null}
+      {data.truncated ? (
+        <p className="mt-1 mb-0 text-ink-2 text-1">The output was cut off.</p>
+      ) : null}
+    </Figure>
+  );
+}
+
+/* ---------------------------------------------------------------- file -- */
+
+/* A file of the project, read back by the model. The file itself is in the
+   project panel; this says which, and opens it there. */
+function ProjectFileRead({ data, meta }: KindProps) {
+  const path = text(data, "path");
+  const lines = num(data.lines);
+  return (
+    <Figure tool="file" card="file" name="Read file" note={path} meta={meta}>
+      <button type="button" className="file-chip" data-file={path} data-state="done">
+        <span className="file-chip-name">{path}</span>
+        <span className="file-chip-meta num">{`version ${num(data.version)} · ${lines} lines`}</span>
+      </button>
     </Figure>
   );
 }
@@ -415,5 +569,9 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   clock: Clock,
   textstats: TextStats,
   note: Note,
+  search: Search,
+  news: News,
+  python: Python,
+  file: ProjectFileRead,
   error: Failure,
 };

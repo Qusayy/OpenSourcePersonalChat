@@ -7,6 +7,8 @@
  * never inject markup.
  */
 
+import { FILE_MARK, foldFiles } from "./files";
+
 const ESC: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -14,6 +16,18 @@ const ESC: Record<string, string> = {
   '"': "&quot;",
   "'": "&#39;",
 };
+
+/** The line `foldFiles` (./files) folds a file into, drawn as a chip that
+ *  opens the file in the project panel. */
+function fileChip(path: string, lines: number, writing: boolean): string {
+  const count = `${lines} line${lines === 1 ? "" : "s"}`;
+  return (
+    `<button type="button" class="file-chip" data-file="${escapeHtml(path)}"` +
+    ` data-state="${writing ? "writing" : "done"}">` +
+    `<span class="file-chip-name">${escapeHtml(path)}</span>` +
+    `<span class="file-chip-meta num">${writing ? `writing · ${count}` : count}</span></button>`
+  );
+}
 
 export function escapeHtml(s: unknown): string {
   return String(s).replace(/[&<>"']/g, (c) => ESC[c] ?? c);
@@ -112,6 +126,12 @@ export function splitBlocks(src: string | null | undefined): string[] {
   return blocks;
 }
 
+/** An answer as the chat shows it: markdown, with each file it writes as a
+ *  chip. The text copied from it stays the answer as it was written. */
+export function renderAnswer(src: string | null | undefined): string {
+  return renderMarkdown(foldFiles(String(src ?? "")));
+}
+
 export function renderMarkdown(src: string | null | undefined): string {
   const lines = String(src ?? "")
     .replace(/\r\n?/g, "\n")
@@ -129,6 +149,17 @@ export function renderMarkdown(src: string | null | undefined): string {
 
   while (i < lines.length) {
     const line = lines[i] as string;
+
+    // a file of a project, folded into one line
+    if (line.startsWith(FILE_MARK)) {
+      const [, path, count, state] = line.split(FILE_MARK);
+      if (path && count !== undefined) {
+        flushPara();
+        out += fileChip(path, Number(count) || 0, state === "writing");
+        i++;
+        continue;
+      }
+    }
 
     // fenced code — also renders while still streaming (unterminated fence)
     const fence = line.match(/^\s*```+\s*([\w+-]*)\s*$/);

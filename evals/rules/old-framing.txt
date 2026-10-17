@@ -1,4 +1,4 @@
-@persona agent:
+@system:
 
 You choose a tool for the user's last message. Reply with one JSON object only.
 Tools:

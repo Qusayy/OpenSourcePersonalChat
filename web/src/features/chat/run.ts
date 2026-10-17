@@ -1,5 +1,5 @@
-/* The conversation on the sheet: which view is showing, who is being asked,
- * and the thread itself.
+/* The conversation on the sheet: which view is showing, and the thread
+ * itself.
  *
  * It lives outside the page component, so a visit to Benchmark or About and
  * back finds the conversation as it was left. What changes many times a
@@ -9,8 +9,7 @@
  */
 
 import { create } from "zustand";
-import { bootstrap } from "@/lib/bootstrap";
-import type { CardData, CardKind, Skill, StepEvent, StoredRun } from "@/lib/types";
+import type { CardData, CardKind, StepEvent, StoredRun } from "@/lib/types";
 import { applyStep, type Cost, type StepRow } from "./rules";
 
 export type View = "empty" | "thread";
@@ -66,36 +65,13 @@ export type ThreadItem = UserItem | BotItem | NoticeItem;
 
 interface ChatState {
   view: View;
-  /** The persona chosen in this visit; null until one is, see `personaNow`. */
-  persona: string | null;
-  /** The armed skill: applies to the next message only. */
-  skill: Skill | null;
   conversationId: string | null;
   items: ThreadItem[];
   streaming: boolean;
 }
 
-const PERSONA_KEY = "aurora.persona";
-
-/** The persona last chosen here, or the server's default. Stored as the bare
- *  id, the same value the previous interface wrote, so a returning visitor
- *  keeps their choice. */
-function storedPersona(): string {
-  try {
-    const kept = localStorage.getItem(PERSONA_KEY);
-    if (kept) return kept;
-  } catch {
-    /* storage is off; the default will do */
-  }
-  return bootstrap().defaultPersona;
-}
-
 export const useChat = create<ChatState>(() => ({
   view: "empty",
-  // Not read here: nothing may touch storage or the bootstrap when the module
-  // is loaded, only once the page is up.
-  persona: null,
-  skill: null,
   conversationId: null,
   items: [],
   streaming: false,
@@ -109,27 +85,7 @@ export const newKey = (): number => ++nextKey;
 const set = useChat.setState;
 const get = useChat.getState;
 
-/** Who the next message goes to. */
-export function personaNow(): string {
-  return get().persona ?? storedPersona();
-}
-
-/** The same, for a component. */
-export function usePersona(): string {
-  return useChat((s) => s.persona) ?? storedPersona();
-}
-
 /* -------------------------------------------------------------- actions -- */
-
-/** Choose a persona, and remember it for the next visit. */
-export function choosePersona(id: string): void {
-  try {
-    localStorage.setItem(PERSONA_KEY, id);
-  } catch {
-    /* storage is off; the choice lasts as long as the page */
-  }
-  set({ persona: id });
-}
 
 export function addUser(text: string): UserItem {
   const item: UserItem = { kind: "user", key: newKey(), text };

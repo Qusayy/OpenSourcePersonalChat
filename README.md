@@ -537,7 +537,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools and skills
 
-Thirteen tools, no API keys anywhere:
+Fourteen tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -554,6 +554,7 @@ Thirteen tools, no API keys anywhere:
 | `open_result` | read the page behind one of the numbered results, by its number | yes |
 | `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
 | `read_file` | one file of this conversation's project, as it stands | — |
+| `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.
@@ -593,8 +594,10 @@ chat a file is one row that opens it there. **Download zip** gets all of
 them, newest versions, in one folder named for the conversation. The next
 message is told the project's files by name, and a change to it is written
 as whole files again; `read_file` reads one back when the answer that wrote it
-no longer fits the window. A project holds at most 64 files, 256 KB each and
-2 MB in all, under plain relative names.
+no longer fits the window. Where the server has its sandbox, `run_file` runs
+one of its Python files there, the rest of the project beside it, read-only.
+A project holds at most 64 files, 256 KB each and 2 MB in all, under plain
+relative names.
 
 **Skills** are several lookups the model may choose as one, beside the tools:
 *Compare two things* looks both up on Wikipedia and asks for a table. Each is a

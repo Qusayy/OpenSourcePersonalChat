@@ -191,6 +191,47 @@ class ProgramPassTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(engine.passes), 1)
 
 
+class RunFileTests(unittest.IsolatedAsyncioTestCase):
+    """A Python file of the project, run where it can import the others."""
+
+    def setUp(self) -> None:
+        from app.store import projects
+
+        support.temp_database(self)
+        projects.add("c", "app.py", "from util import twice\nprint(twice(21))\n", lang="python")
+        projects.add("c", "util.py", "def twice(n):\n    return 2 * n\n", lang="python")
+        projects.add("c", "notes.md", "# notes\n", lang="markdown")
+        self.fake = FakeRunner(Outcome("42\n", "", 0, False, 9.0))
+        use(self, self.fake)
+
+    async def run_file(self, path: str):
+        async def made():
+            CALL.set(CallContext(conversation_id="c"))
+            return await call_tool("run_file", {"path": path})
+        return await asyncio.create_task(made())
+
+    async def test_the_file_runs_with_the_whole_project_beside_it(self) -> None:
+        captured = {}
+
+        async def run(code, project=None):
+            captured.update(code=code, project=project)
+            return self.fake.outcome
+
+        self.fake.run = run
+        result = await self.run_file("app.py")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.summary, "app.py printed: 42")
+        self.assertIn("runpy.run_path('app.py'", captured["code"])
+        self.assertEqual(sorted(captured["project"]), ["app.py", "notes.md", "util.py"])
+
+    async def test_only_a_python_file_of_this_project_runs(self) -> None:
+        self.assertEqual((await self.run_file("notes.md")).error, "not python")
+        missing = await self.run_file("main.py")
+        self.assertEqual(missing.error, "no such file")
+        self.assertIn("app.py, util.py", missing.summary)
+        self.assertEqual((await self.run_file("../app.py")).error, "no such file")
+
+
 @unittest.skipUnless(os.environ.get("AURORA_SANDBOX_TESTS") == "1",
                      "the real sandbox is tested where AURORA_SANDBOX_TESTS=1")
 class RealSandboxTests(unittest.IsolatedAsyncioTestCase):
@@ -238,6 +279,15 @@ class RealSandboxTests(unittest.IsolatedAsyncioTestCase):
         done = await self.run_code("x = bytearray(4 * 1024 ** 3)\nprint('got it')")
         self.assertNotEqual(done.exit_code, 0)
         self.assertNotIn("got it", done.stdout)
+
+    async def test_a_project_file_runs_and_imports_its_neighbours(self) -> None:
+        from app.tools.run_file import launcher
+
+        done = await self.runner.run(launcher("app.py"), project={
+            "app.py": "from util import twice\nprint(twice(21))\n",
+            "util.py": "def twice(n):\n    return 2 * n\n",
+        })
+        self.assertEqual((done.exit_code, done.stdout.strip()), (0, "42"))
 
     async def test_output_is_cut_off_at_its_ceiling(self) -> None:
         done = await self.run_code("print('x' * 500_000)")

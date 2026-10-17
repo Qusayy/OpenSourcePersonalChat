@@ -160,6 +160,7 @@ const KIND_WORDS: Record<string, string> = {
   route: "choice",
   decide: "choice again",
   repair: "sent back",
+  compose: "wrote code",
   fill: "filled in",
   tool: "tool",
   answer: "answer",

@@ -11,6 +11,16 @@ const draw = (card: CardKind, data: CardData, meta?: { label?: string; ms?: numb
 const words = (el: Element) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
 
 const FULL: Record<Exclude<CardKind, "error">, CardData> = {
+  python: {
+    task: "two to the tenth",
+    code: "print(2 ** 10)\n",
+    stdout: "1024\n",
+    stderr: "",
+    exit_code: 0,
+    timed_out: false,
+    ms: 41,
+    truncated: false,
+  },
   search: {
     query: "python release",
     answer: "Python 3.14 is the latest release.",
@@ -216,6 +226,28 @@ describe("each kind of card, with everything the tool can send", () => {
     expect(words(el)).toContain("Newstop stories");
     expect(words(el)).toContain("1.Budget passes after late voteReuters");
     expect(words(el)).not.toContain("NaN");
+  });
+
+  it("a program is shown as it was run, then what it printed, with a Copy for the code", () => {
+    const el = draw("python", FULL.python);
+    expect(words(el)).toContain("Pythonexited 0");
+    expect(el.querySelector(".codeblock")?.getAttribute("data-code")).toBe("print(2 ** 10)\n");
+    expect(el.querySelector("[data-copy]")).not.toBeNull();
+    expect(words(el)).toContain("1024");
+  });
+
+  it("a program that failed keeps the end of its traceback, in the fault colour", () => {
+    const el = draw("python", {
+      code: "1/0",
+      stdout: "",
+      stderr: "Traceback (most recent call last):\nZeroDivisionError: division by zero",
+      exit_code: 1,
+    });
+    expect(words(el)).toContain("exited 1");
+    expect(el.querySelector("pre.text-fault")?.textContent).toContain("ZeroDivisionError");
+    expect(draw("python", { code: "while 1: pass", timed_out: true }).textContent).toContain(
+      "stopped: out of time",
+    );
   });
 
   it("text stats scale each term's bar to the commonest term", () => {

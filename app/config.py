@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     searx_url: str = ""
     # Where the headlines are for: a Google News edition, COUNTRY:language.
     news_region: str = "US:en"
+    # Running Python the model wrote. "auto": wherever the sandbox can run a
+    # program (bubblewrap, user namespaces, the venv below); "off": never.
+    # There is no setting that runs it outside the sandbox.
+    sandbox: str = "auto"
+    # The sandbox's own venv, read-only to it (deploy/build-sandbox.sh).
+    sandbox_venv: str = "/opt/aurora-sandbox/venv"
     # The zone the model is told a message was sent in ("Sent Sat 17 Oct
     # 2026, 14:03 BST."), an IANA name.
     timezone: str = "UTC"

@@ -105,6 +105,7 @@ export type CardKind =
   | "note"
   | "search"
   | "news"
+  | "python"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats

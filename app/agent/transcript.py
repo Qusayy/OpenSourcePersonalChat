@@ -152,6 +152,18 @@ class Transcript:
         self._failed += not ok
         self._add(Part("user", "observation" if ok else "failed", data(tool, text, ok=ok), (tool,)))
 
+    def compose(self, task: str) -> None:
+        """Ask for the program a tool the model chose runs, in a block of its
+        own: what the choice said the program is for."""
+        self._add(Part("user", "compose", (
+            f"Write the Python program for: {task}\n"
+            "Reply with one ```python block and nothing else. It must print its result."
+        )))
+
+    def program(self, raw: str) -> None:
+        """The program the model wrote, as it wrote it."""
+        self._add(Part("assistant", "code", raw))
+
     def rejection(self, reasons: tuple[str, ...]) -> None:
         """A call the model chose that was not made, and why. Said by the
         harness, so it is not wrapped as data."""

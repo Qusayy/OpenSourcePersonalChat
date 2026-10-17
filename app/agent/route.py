@@ -47,6 +47,7 @@ SLASH = {
     "search": "web_search", "web": "web_search", "google": "web_search",
     "news": "news", "headlines": "news",
     "open": "open_result",
+    "python": "python", "py": "python", "run": "python",
 }
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
@@ -74,11 +75,19 @@ def parse_slash(text: str) -> tuple[ToolCall | None, str]:
     if not stripped.startswith("/"):
         return None, text
 
-    head, _, rest = stripped[1:].partition(" ")
+    found = re.match(r"/(\S+)\s*(.*)", stripped, re.S)
+    head, rest = found.group(1), found.group(2)
     tool_name = SLASH.get(head.lower())
     if tool_name is None or tool_name not in REGISTRY:
         return None, text
 
+    if tool_name == "python":
+        # The program is the rest, run as it was written.
+        code = program_of(rest) or rest
+        if not code.strip():
+            return None, text
+        return ToolCall("python", {"task": "run the program as given"}, via="slash",
+                        meta={"program": code}), rest
     rest = rest.strip()
     args = _args_from_free_text(tool_name, rest)
     if args is None:
@@ -173,6 +182,17 @@ WHEN_SAID = re.compile(
 _ASKING = re.compile(r"^(?:hi|hello|hey|ok|so|please)[,!.\s]+", re.I)
 
 
+# A fenced Python block, and the words that ask for one to be run.
+FENCED = re.compile(r"```(?:python|py)[ \t]*\n(.*?)```", re.S | re.I)
+RUN_IT = re.compile(r"\b(?:run|execute|what does (?:this|it) (?:print|output|return)|try this)\b", re.I)
+
+
+def program_of(text: str) -> str:
+    """The program in a fenced Python block, or "" where there is none."""
+    found = FENCED.search(text or "")
+    return found.group(1).strip("\n") + "\n" if found else ""
+
+
 def news_topic(text: str) -> str:
     """What the news asked for is about, or "" for the top stories."""
     body = text.strip().rstrip("?!. ")
@@ -211,6 +231,12 @@ def heuristic(text: str) -> ToolCall | None:
     if not body:
         return None
     low = body.lower()
+
+    # 0. A program given to be run: a fenced Python block, and the word for it.
+    shown = FENCED.search(body)
+    if shown and RUN_IT.search(body) and _offered("python"):
+        return ToolCall("python", {"task": "run the program as given"},
+                        note="a program to run", meta={"program": shown.group(1)})
 
     # 1. A link is unambiguous.
     url = URL_RE.search(body)

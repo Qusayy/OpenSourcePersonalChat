@@ -35,6 +35,7 @@ from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
     CALL, CallContext, Link, Rejection, ToolResult, available, fresh_for, untrusted,
 )
+from ..tools.grammar import PROGRAM, PROGRAM_TOKENS
 from ..tools.results import links_of
 from .context import (
     SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history,
@@ -50,6 +51,7 @@ from .route import (
     free_route,
     news_topic,
     parse_action,
+    program_of,
     search_query,
 )
 from .skills import SAY_SO, Offer, Skill, check_inputs, did_not_work, offered
@@ -569,6 +571,11 @@ class _Run:
                     break
                 made.add(key)
                 self.calls.append(action.call)
+                if self._needs_program(action.call):
+                    async for event in self._compose(transcript, action.call, number):
+                        yield event
+                    if self.stop.is_set():
+                        break
                 # An even share of the room the run has left, so that the
                 # last lookup it may make has as much to read as the first.
                 left = self.run_room - (estimate(transcript.rendered()) - start)
@@ -603,6 +610,43 @@ class _Run:
             # On every way out, however it ends. If a pass of this run is
             # still inside the model the slot goes back when it leaves.
             self.engine.give_slot(self.request_id)
+
+    def _needs_program(self, call: ToolCall) -> bool:
+        tool = REGISTRY.get(call.name)
+        return bool(tool and tool.program and "program" not in call.meta and "refusal" not in call.meta)
+
+    async def _compose(self, transcript: Transcript, call: ToolCall, number: int) -> AsyncIterator[Event]:
+        """The program a tool the model chose is to run, written by the model
+        in a pass of its own: one fenced block under a grammar, read on from
+        the choice, so that it reads only what is new. It goes with the call;
+        without one, the call has nothing to run and says so."""
+        step_id = f"code-{number}"
+        yield "step", {
+            "id": step_id, "kind": "route", "status": "running",
+            "label": "Writing the code", "glyph": "⌨",
+        }
+        task = str(call.args.get("task", ""))
+        transcript.compose(task)
+        said = await self.engine.complete_json(
+            transcript.messages(), PROGRAM, max(PROGRAM_TOKENS, self.engine.cfg.route_max_tokens),
+            request_id=self.request_id, seed=self.seed, held=True,
+        )
+        program = program_of(said.raw)
+        stopped = said.cancelled or self.stop.is_set()
+        error = "stopped" if stopped else said.error or (None if program else "no program in the reply")
+        self.trace.steps.append(self._passed(
+            "compose", said, name=call.name, given={"task": task}, error=error,
+        ))
+        if said.raw:
+            transcript.program(said.raw)
+        call.meta["program"] = program
+        yield "step", {
+            "id": step_id, "kind": "route",
+            "status": "stopped" if stopped else "ok" if program else "failed",
+            "label": "Wrote the code" if program else "No code written", "glyph": "⌨",
+            "ms": round(said.ms, 1), "tokens_in": said.prompt_tokens,
+            "tokens_out": said.completion_tokens,
+        }
 
     def _watch(self) -> Callable[[str], bool] | None:
         """What the answer is watched for, where it is: a claim that there is
@@ -858,7 +902,9 @@ class _Run:
     async def _scoped(self, call: ToolCall) -> ToolResult:
         """The call, made in this run's conversation. Set inside the call's
         own task, so that it reaches the tool and goes no further."""
-        CALL.set(CallContext(conversation_id=self.scope, links=self.links))
+        CALL.set(CallContext(
+            conversation_id=self.scope, links=self.links, program=call.meta.get("program", ""),
+        ))
         return await self.call_tool(call.name, call.args)
 
     async def _call(self, call: ToolCall) -> ToolResult | None:

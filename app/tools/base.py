@@ -93,6 +93,9 @@ class CallContext:
     # The last list of results the model was shown, in its order: what "open
     # result 2" means.
     links: tuple[Link, ...] = ()
+    # A program for the call to run, written in a pass of its own or given by
+    # the user: the python tool's.
+    program: str = ""
 
 
 CALL: ContextVar[CallContext] = ContextVar("tool_call", default=CallContext())
@@ -132,6 +135,11 @@ class Tool:
     links: bool = False
     # What else the configuration must allow for it to be offered at all.
     requires: Callable[[], bool] | None = None
+    # The call carries a program, which the model writes in a pass of its own
+    # after choosing the tool, as a fenced block, and never inside the JSON.
+    program: bool = False
+    # Seconds before the call is abandoned, where it is not the setting's.
+    timeout: float | None = None
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -429,25 +437,27 @@ async def call_tool(name: str, args: dict) -> ToolResult:
             error="offline mode",
         )
     if not enabled(tool):
-        return ToolResult(False, "Notes are switched off on this server.", error="notes off")
+        if tool.notes:
+            return ToolResult(False, "Notes are switched off on this server.", error="notes off")
+        return ToolResult(False, f"{tool.label} is not available on this server.",
+                          error="not available")
 
     clean, rejection = check(tool, args)
     if rejection is not None:
         return ToolResult(False, rejection.summary, error=rejection.code)
 
     t0 = time.perf_counter()
+    limit = tool.timeout or settings.tool_timeout
     try:
         if tool.network:
             async with _net_semaphore:
-                result = await asyncio.wait_for(
-                    tool.run(**clean), timeout=settings.tool_timeout
-                )
+                result = await asyncio.wait_for(tool.run(**clean), timeout=limit)
         else:
-            result = await asyncio.wait_for(tool.run(**clean), timeout=settings.tool_timeout)
+            result = await asyncio.wait_for(tool.run(**clean), timeout=limit)
     except asyncio.TimeoutError:
         return ToolResult(
             False,
-            f"{tool.label} gave up after {settings.tool_timeout} seconds. "
+            f"{tool.label} gave up after {limit:g} seconds. "
             "The source may be slow or unreachable — try again.",
             ms=(time.perf_counter() - t0) * 1000,
             error="timeout",

@@ -106,7 +106,7 @@ export function AboutPage() {
         <Panel>
           <P>
             {
-              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a web search, the headlines, a page reader and a notebook. A command such as "
+              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a web search, the headlines, a page reader, a notebook and, where this server has its sandbox, Python. A command such as "
             }
             <Code>/weather Lisbon</Code>
             {

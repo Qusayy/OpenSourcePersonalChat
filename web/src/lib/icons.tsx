@@ -40,6 +40,7 @@ const SHAPES = {
   ],
 
   search: [P("M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15z"), P("M16 16l5 5")],
+  python: [P("M8 7l-5 5 5 5M16 7l5 5-5 5"), P("M13.5 5l-3 14", ".6")],
   news: [
     P("M4 5h13v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"),
     P("M17 9h3v10a1 1 0 0 1-2 0"),
@@ -72,6 +73,7 @@ const ALIAS = {
   read_url: "url",
   open_result: "url",
   web_search: "search",
+  code: "python",
   text_stats: "textstats",
   remember: "note",
   recall: "note",

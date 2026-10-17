@@ -30,6 +30,16 @@ _CHAR_BYTES = 4
 
 NONE_ACTION = '{"tool": "none"}'
 
+# A program, as the pass that writes one is held to it: one fenced Python
+# block, ended where its fence closes. Inside it anything but three
+# backticks in a row.
+PROGRAM = (
+    'root ::= "```python\\n" body "```"\n'
+    'body ::= ([^`] | "`" [^`] | "``" [^`])*\n'
+)
+# The most tokens a program may take.
+PROGRAM_TOKENS = 768
+
 
 def _rule_name(tool_name: str) -> str:
     return "t-" + tool_name.replace("_", "-")

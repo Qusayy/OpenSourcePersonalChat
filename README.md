@@ -314,6 +314,35 @@ install, and an edited file is never overwritten). The headlines come from
 Google News's RSS feed and need nothing installed; `AURORA_NEWS_REGION` picks
 the edition.
 
+### The Python sandbox
+
+The agent can run a short Python program to work something out exactly. It
+runs under [bubblewrap](https://github.com/containers/bubblewrap), as the
+app's own user: no network, nothing of the server's files but `/usr` and the
+sandbox's own read-only venv, an empty `/work` and `/tmp` that go when it
+ends, and kernel limits on memory (1 GiB), CPU time (10 s), file size and open
+files, with a wall clock that kills the whole process group. What it prints is
+cut off at 64 KB. Where bubblewrap cannot run a program, the tool is not
+offered at all; nothing ever runs outside it.
+
+```bash
+cd /srv/aurora
+bash deploy/build-sandbox.sh   # bubblewrap, and numpy, pandas and sympy in /opt/aurora-sandbox/venv
+sudo cp deploy/aurora.service /etc/systemd/system/ && sudo systemctl daemon-reload
+sudo systemctl restart aurora
+```
+
+The script checks that bubblewrap is not setuid and that unprivileged user
+namespaces are on, builds the venv owned by root, and runs one program in the
+same jail as the app's user. The unit's `TasksMax` bounds a fork bomb.
+
+The model does not write the program inside its JSON choice, where a small
+model's code comes out mangled by escaping. It chooses `python` with the task
+in words, then writes the program in a pass of its own under a grammar that
+allows exactly one fenced block, read on from the choice. A program you give
+yourself, `/python print(2**64)` or a fenced block with "run this", is run as
+you gave it.
+
 Other deployment notes:
 
 * `LimitMEMLOCK=infinity` in the unit is required if you set
@@ -489,6 +518,8 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_SEARX_URL` | *(unset)* | this server's own SearXNG, `http://127.0.0.1:8888`; see [The web search](#the-web-search) |
 | `AURORA_NEWS_REGION` | `US:en` | the Google News edition the headlines are from, `COUNTRY:language` (`GB:en`, `DE:de`) |
 | `AURORA_TIMEZONE` | `UTC` | the zone the model is told each message was sent in |
+| `AURORA_SANDBOX` | `auto` | Python the model writes: `auto` runs it in the sandbox wherever the sandbox can run; `off` never. Nothing runs outside it; see [The Python sandbox](#the-python-sandbox) |
+| `AURORA_SANDBOX_VENV` | `/opt/aurora-sandbox/venv` | the sandbox's own venv, read-only to it |
 | `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B |
 | `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
@@ -506,7 +537,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools and skills
 
-Eleven tools, no API keys anywhere:
+Twelve tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -521,6 +552,7 @@ Eleven tools, no API keys anywhere:
 | `news` | today's headlines, or the news about a topic (Google News RSS) | yes |
 | `read_url` | fetch a page and extract its readable text | yes |
 | `open_result` | read the page behind one of the numbered results, by its number | yes |
+| `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.

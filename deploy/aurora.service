@@ -30,6 +30,9 @@ LimitMEMLOCK=infinity
 # OOM guard: kill and restart rather than dragging the whole VPS down.
 MemoryMax=3G
 MemoryHigh=2600M
+# A program in the Python sandbox runs in this unit's cgroup: this bounds a
+# fork bomb to it, far above what the app's own threads need.
+TasksMax=256
 
 Restart=always
 RestartSec=3

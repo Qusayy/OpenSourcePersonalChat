@@ -400,9 +400,9 @@ class GrammarTests(unittest.TestCase):
         self.assertNotIn("t-remember", root)
         self.assertNotIn("t-recall", root)
 
-    def test_every_registered_tool_has_a_rule(self) -> None:
+    def test_every_tool_on_offer_has_a_rule(self) -> None:
         rules = self.rules()
-        for name in base.REGISTRY:
+        for name in (tool.name for tool in base.available()):
             with self.subTest(tool=name):
                 self.assertIn("t-" + name.replace("_", "-"), rules)
 

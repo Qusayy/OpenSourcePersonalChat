@@ -69,6 +69,9 @@ KINDS = frozenset({
     "summary",      # the turns that no longer fit, in short
     "answer",       # the reply
     "correction",   # what the harness found wrong with the reply
+    "now",          # when the message was sent
+    "compose",      # what a program the model is about to write is for
+    "code",         # the program it wrote
 })
 # What survives of a turn replayed compact, beside the question and answer.
 FOUND = frozenset({"data", "failed", "observation"})

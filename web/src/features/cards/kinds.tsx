@@ -225,6 +225,57 @@ function News({ data, meta }: KindProps) {
   );
 }
 
+/* -------------------------------------------------------------- python -- */
+
+/* The program as it was run, then what it printed. A program the model wrote
+   is shown whole, so what was run is never a guess; a failure keeps the end
+   of its traceback, where Python says what went wrong. */
+function Python({ data, meta }: KindProps) {
+  const code = text(data, "code");
+  const out = text(data, "stdout");
+  const err = text(data, "stderr");
+  const exit = data.exit_code;
+  const timedOut = data.timed_out === true;
+  const failed = timedOut || (typeof exit === "number" && exit !== 0);
+  const note = timedOut
+    ? "stopped: out of time"
+    : typeof exit === "number"
+      ? exit === 0
+        ? "exited 0"
+        : `exited ${exit}`
+      : undefined;
+  return (
+    <Figure tool="python" card="python" name="Python" note={note} meta={meta} failed={failed}>
+      {code ? (
+        <div className="codeblock" data-code={code}>
+          <header>
+            <span>python</span>
+            <button type="button" className="copy-btn" data-copy>
+              Copy
+            </button>
+          </header>
+          <pre>
+            <code>{code}</code>
+          </pre>
+        </div>
+      ) : null}
+      {out ? (
+        <pre className="mt-2 mb-0 text-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{out}</pre>
+      ) : !failed ? (
+        <p className="mt-2 mb-0 text-ink-2">It printed nothing.</p>
+      ) : null}
+      {failed && err ? (
+        <pre className="mt-2 mb-0 text-1 text-fault whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {err.length > 1200 ? `…${err.slice(-1200)}` : err}
+        </pre>
+      ) : null}
+      {data.truncated ? (
+        <p className="mt-1 mb-0 text-ink-2 text-1">The output was cut off.</p>
+      ) : null}
+    </Figure>
+  );
+}
+
 /* ---------------------------------------------------------------- note -- */
 
 // A note kept, or the notes found. The words are the user's own, set as
@@ -503,5 +554,6 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   note: Note,
   search: Search,
   news: News,
+  python: Python,
   error: Failure,
 };

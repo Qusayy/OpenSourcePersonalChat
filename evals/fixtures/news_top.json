@@ -1,0 +1,45 @@
+{
+  "tool": "news",
+  "args": {},
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Top headlines: 1. Parliament passes the new budget after a late-night vote (Reuters, 3 h ago); 2. Storm Imogen brings flooding to the west coast (BBC, 5 h ago); 3. Astronomers find water vapour on a nearby exoplanet (The Guardian, 12 h ago)",
+    "card": "news",
+    "data": {
+      "topic": "",
+      "region": "US:en",
+      "items": [
+        {
+          "title": "Parliament passes the new budget after a late-night vote",
+          "url": "https://news.google.com/rss/articles/one",
+          "source": "Reuters",
+          "site": "reuters.com",
+          "published": "2026-10-17T06:10:00+00:00",
+          "age": "3 h ago",
+          "snippet": ""
+        },
+        {
+          "title": "Storm Imogen brings flooding to the west coast",
+          "url": "https://news.google.com/rss/articles/two",
+          "source": "BBC",
+          "site": "bbc.co.uk",
+          "published": "2026-10-17T04:40:00+00:00",
+          "age": "5 h ago",
+          "snippet": ""
+        },
+        {
+          "title": "Astronomers find water vapour on a nearby exoplanet",
+          "url": "https://news.google.com/rss/articles/three",
+          "source": "The Guardian",
+          "site": "theguardian.com",
+          "published": "2026-10-16T21:00:00+00:00",
+          "age": "12 h ago",
+          "snippet": ""
+        }
+      ]
+    },
+    "error": null
+  }
+}

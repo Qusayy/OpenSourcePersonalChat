@@ -86,7 +86,7 @@ export function AboutPage() {
           <P>
             {"It is a "}
             <b>{`${info.params}-parameter`}</b>
-            {` model at ${info.quant}. Use it for short explanations, quick drafts, summarising something you paste in, and simple code. On its own it gets arithmetic, citations and long chains of reasoning wrong, and knows nothing recent, so for sums, rates, the weather and facts it looks the answer up instead of guessing. How long each answer took is printed under it.`}
+            {` model at ${info.quant}. Use it for short explanations, quick drafts, summarising something you paste in, and simple code. On its own it gets arithmetic, citations and long chains of reasoning wrong, and knows nothing recent, so for sums, rates, the weather, the news and anything current it looks the answer up instead of guessing. How long each answer took is printed under it.`}
           </P>
           <P>
             {"The context window is "}
@@ -106,7 +106,7 @@ export function AboutPage() {
         <Panel>
           <P>
             {
-              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
+              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a web search, the headlines, a page reader and a notebook. A command such as "
             }
             <Code>/weather Lisbon</Code>
             {

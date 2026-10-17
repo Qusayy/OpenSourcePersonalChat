@@ -1,0 +1,37 @@
+{
+  "tool": "web_search",
+  "args": {
+    "query": "what is the latest version of python"
+  },
+  "recorded": null,
+  "source": "written by hand, in the shape the tool returns",
+  "result": {
+    "ok": true,
+    "summary": "Search “what is the latest version of python”: 1. Python 3.14.0 is now available (python.org, 10 days ago); 2. What's new in Python 3.14 (docs.python.org)",
+    "card": "search",
+    "data": {
+      "query": "what is the latest version of python",
+      "engine": "searxng",
+      "answer": "",
+      "items": [
+        {
+          "title": "Python 3.14.0 is now available",
+          "url": "https://www.python.org/downloads/release/python-3140/",
+          "source": "python.org",
+          "published": "2026-10-07T00:00:00+00:00",
+          "age": "10 days ago",
+          "snippet": "Python 3.14.0 is the newest major release of the Python programming language."
+        },
+        {
+          "title": "What's new in Python 3.14",
+          "url": "https://docs.python.org/3/whatsnew/3.14.html",
+          "source": "docs.python.org",
+          "published": null,
+          "age": "",
+          "snippet": "This article explains the new features in Python 3.14, compared to 3.13."
+        }
+      ]
+    },
+    "error": null
+  }
+}

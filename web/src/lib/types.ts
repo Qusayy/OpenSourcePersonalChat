@@ -103,6 +103,8 @@ export type CardKind =
   | "clock"
   | "textstats"
   | "note"
+  | "search"
+  | "news"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats

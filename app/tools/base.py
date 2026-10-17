@@ -72,6 +72,17 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
+class Link:
+    """One entry of a list of results the model was shown: a page it may ask
+    to open by its number."""
+
+    url: str
+    title: str = ""
+    # The site it is from, as the list named it.
+    source: str = ""
+
+
+@dataclass(frozen=True)
 class CallContext:
     """Whom a call is made for. Set by whoever runs the message, inside the
     call's own task, so it reaches the tool and goes no further. Nothing in
@@ -79,6 +90,9 @@ class CallContext:
 
     # The conversation the message belongs to; None outside one.
     conversation_id: str | None = None
+    # The last list of results the model was shown, in its order: what "open
+    # result 2" means.
+    links: tuple[Link, ...] = ()
 
 
 CALL: ContextVar[CallContext] = ContextVar("tool_call", default=CallContext())
@@ -113,6 +127,11 @@ class Tool:
     # It writes: a note. Only ever on the user's own word, never after the
     # run has read text somebody else wrote.
     writes: bool = False
+    # Its results are a numbered list of pages (``data["items"]``), any of
+    # which the model may then ask to open by its number.
+    links: bool = False
+    # What else the configuration must allow for it to be offered at all.
+    requires: Callable[[], bool] | None = None
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -197,6 +216,8 @@ def notes_scope() -> str:
 def enabled(tool: Tool) -> bool:
     """Whether the configuration lets this tool run at all."""
     if tool.network and not settings.allow_outbound:
+        return False
+    if tool.requires is not None and not tool.requires():
         return False
     return not (tool.notes and notes_scope() == "off")
 

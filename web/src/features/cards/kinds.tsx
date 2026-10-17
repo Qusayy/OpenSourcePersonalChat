@@ -7,7 +7,7 @@
  */
 
 import type { ComponentType } from "react";
-import { num, weekdayShort } from "@/lib/format";
+import { ago, num, weekdayShort } from "@/lib/format";
 import { Icon } from "@/lib/icons";
 import { sparkPaths } from "@/lib/meter";
 import type { CardData, CardKind } from "@/lib/types";
@@ -135,6 +135,92 @@ function Wikipedia({ data, meta }: KindProps) {
         en.wikipedia.org
         <Icon name="external" size={12} />
       </a>
+    </Figure>
+  );
+}
+
+/* ------------------------------------------------------ search / news -- */
+
+/* A list the model was shown, numbered as it read it, so "the second one"
+   means the same thing on the page as in the answer. Each entry links to its
+   page; the age is worked out from when it was published, here and now,
+   rather than taken from when it was looked up. */
+
+interface Entry {
+  title: string;
+  url: string;
+  source: string;
+  published: string;
+  snippet: string;
+}
+
+/** When an entry was published, as an age; empty when the date cannot be read. */
+function published(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? "" : ago(at / 1000);
+}
+
+function entries(data: CardData): Entry[] {
+  return list(data, "items").map((raw) => {
+    const e = record(raw);
+    return {
+      title: text(e, "title") || text(e, "url"),
+      url: text(e, "url"),
+      source: text(e, "source"),
+      published: text(e, "published"),
+      snippet: text(e, "snippet"),
+    };
+  });
+}
+
+function Entries({ items, snippets }: { items: Entry[]; snippets: boolean }) {
+  return (
+    <ol className="m-0 p-0 list-none flex flex-col gap-3">
+      {items.map((e, i) => (
+        <li key={e.url || i} className="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-x-1">
+          <span className="text-ink-2 num">{i + 1}.</span>
+          <div className="min-w-0">
+            <a
+              className="font-semibold [overflow-wrap:anywhere]"
+              href={e.url || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {e.title}
+            </a>
+            <div className="text-ink-2 text-1">
+              {[e.source, published(e.published)].filter(Boolean).join(" · ")}
+            </div>
+            {snippets && e.snippet ? <p className="mt-1 mb-0 line-clamp-2">{e.snippet}</p> : null}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function Search({ data, meta }: KindProps) {
+  const answer = text(data, "answer");
+  const query = text(data, "query");
+  return (
+    <Figure
+      tool="search"
+      card="search"
+      name="Web search"
+      note={query ? `“${query}”` : undefined}
+      meta={meta}
+    >
+      {answer ? <p className="mt-0 mb-3">{answer}</p> : null}
+      <Entries items={entries(data)} snippets />
+    </Figure>
+  );
+}
+
+function News({ data, meta }: KindProps) {
+  const topic = text(data, "topic");
+  return (
+    <Figure tool="news" card="news" name="News" note={topic || "top stories"} meta={meta}>
+      <Entries items={entries(data)} snippets={false} />
     </Figure>
   );
 }
@@ -415,5 +501,7 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   clock: Clock,
   textstats: TextStats,
   note: Note,
+  search: Search,
+  news: News,
   error: Failure,
 };

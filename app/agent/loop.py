@@ -31,7 +31,10 @@ from ..llm import Completion, Engine, Stop, engine as default_engine
 from ..llm.usage import blank
 from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
-from ..tools.base import CALL, CallContext, Rejection, ToolResult, available, fresh_for, untrusted
+from ..tools.base import (
+    CALL, CallContext, Link, Rejection, ToolResult, available, fresh_for, untrusted,
+)
+from ..tools.results import links_of
 from .context import (
     SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history,
 )
@@ -95,6 +98,7 @@ def run(
     context: list[Turn] | None = None,
     scope: str | None = None,
     now: datetime | None = None,
+    links: tuple[Link, ...] = (),
 ) -> AsyncIterator[Event]:
     """Answer one message. Yields the events of the run as they happen.
 
@@ -120,6 +124,9 @@ def run(
     ``scope`` is the conversation the run belongs to: the one whose notes a
     note tool keeps and reads.
 
+    ``links`` is the last list of results the conversation was shown, what
+    "open the second one" means until the run is shown another.
+
     ``style`` is how the answer is written; left unset, it is read from the
     message (``style.style_for``). ``now`` is when the message was sent, as
     the model is told it; left unset, it is now, in the site's timezone.
@@ -144,6 +151,7 @@ def run(
         turns=context,
         scope=scope,
         now=now if now is not None else datetime.now(ZoneInfo(settings.timezone)),
+        links=tuple(links),
         max_steps=settings.agent_max_steps,
         max_decisions=settings.agent_max_decisions,
         max_seconds=settings.agent_max_seconds,
@@ -207,6 +215,10 @@ class _Run:
     tainted: bool = False
     # When the message was sent, as the model is told it.
     now: datetime | None = None
+    # The last list of results the model was shown: the pages it may ask to
+    # open by number, and addresses it may go to though the user never wrote
+    # them, since a search, not a page, gave them.
+    links: tuple[Link, ...] = ()
 
     def __post_init__(self) -> None:
         self.said = self.said or self.message
@@ -216,6 +228,12 @@ class _Run:
         """What the run may add to its prompt: its choices and what its tools
         return. More in a larger window."""
         return run_room(self.engine.cfg.n_ctx)
+
+    @property
+    def addresses(self) -> list[str]:
+        """Where the server may go: what the user wrote, and the pages of the
+        last list of results."""
+        return [*self.theirs, *(link.url for link in self.links)]
 
     @cached_property
     def theirs(self) -> list[str]:
@@ -664,7 +682,7 @@ class _Run:
         stands, if it cannot. A skill's inputs are checked as a call's are,
         and the inputs it may go on with are kept with it."""
         if action.kind == "tool":
-            return refusal(action.call, theirs=self.theirs, tainted=self.tainted)
+            return refusal(action.call, theirs=self.addresses, tainted=self.tainted)
         clean, rejection = check_inputs(action.skill, action.values, self.theirs)
         if rejection is None:
             action.values = clean
@@ -741,6 +759,9 @@ class _Run:
         self.trace.calls.append((call, result))
         if result.ok and tool is not None and untrusted(tool):
             self.tainted = True
+        if result.ok and tool is not None and tool.links:
+            # The newest list is the one its numbers mean.
+            self.links = links_of(result.data)
         self.trace.steps.append(Step(
             "tool", name=call.name, via=call.via, input=call.args, output=result.summary,
             total_ms=result.ms, ok=result.ok,
@@ -776,7 +797,7 @@ class _Run:
     async def _scoped(self, call: ToolCall) -> ToolResult:
         """The call, made in this run's conversation. Set inside the call's
         own task, so that it reaches the tool and goes no further."""
-        CALL.set(CallContext(conversation_id=self.scope))
+        CALL.set(CallContext(conversation_id=self.scope, links=self.links))
         return await self.call_tool(call.name, call.args)
 
     async def _call(self, call: ToolCall) -> ToolResult | None:

@@ -124,7 +124,7 @@ export function ChatPage() {
                 and the space between the model's name and the next word is
                 then a hair off. */}
             <p className="arrive text-3 text-pretty" style={{ "--i": 1 } as React.CSSProperties}>
-              {`Sums, conversions, the weather, a link boiled down, a quick draft. The writing comes from ${info.model} on this server, and it looks things up by itself when a question needs it.`}
+              {`Sums, conversions, the weather, the news, a link boiled down, a quick draft. The writing comes from ${info.model} on this server, and it searches the web by itself when a question needs it.`}
             </p>
           </section>
 

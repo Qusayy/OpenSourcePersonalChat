@@ -293,6 +293,27 @@ sudo sed -i '/^AURORA_LLM_URL=/d' .env
 sudo systemctl disable --now aurora-llm && sudo systemctl restart aurora
 ```
 
+### The web search
+
+The agent searches the web with no API key. Without any setup it reads
+DuckDuckGo's HTML page, which works but is a page meant for a browser and can
+refuse a server that asks too often. For a search of its own, install
+[SearXNG](https://github.com/searxng/searxng) beside the app: it asks several
+public engines at once and answers the app in JSON, on loopback only.
+
+```bash
+cd /srv/aurora
+bash deploy/build-searxng.sh   # a few minutes; prints the commit to pin next time
+echo 'AURORA_SEARX_URL=http://127.0.0.1:8888' | sudo tee -a .env
+sudo systemctl restart aurora
+```
+
+It runs as its own user (`searxng`), in its own venv under `/opt/searxng`,
+with its settings in `/etc/searxng/settings.yml` (a random secret is written on
+install, and an edited file is never overwritten). The headlines come from
+Google News's RSS feed and need nothing installed; `AURORA_NEWS_REGION` picks
+the edition.
+
 Other deployment notes:
 
 * `LimitMEMLOCK=infinity` in the unit is required if you set
@@ -464,6 +485,11 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TOOLS_ENABLED` | `true` | master switch for the tool belt |
 | `AURORA_ALLOW_OUTBOUND` | `true` | `false` removes every network tool |
 | `AURORA_TOOL_TIMEOUT` | `10` | seconds before a tool is abandoned |
+| `AURORA_SEARCH` | `auto` | the web search: `auto` is SearXNG where `AURORA_SEARX_URL` is set and DuckDuckGo's HTML page where not; `searxng` or `duckduckgo` names one; `off` takes it off the menu |
+| `AURORA_SEARX_URL` | *(unset)* | this server's own SearXNG, `http://127.0.0.1:8888`; see [The web search](#the-web-search) |
+| `AURORA_NEWS_REGION` | `US:en` | the Google News edition the headlines are from, `COUNTRY:language` (`GB:en`, `DE:de`) |
+| `AURORA_TIMEZONE` | `UTC` | the zone the model is told each message was sent in |
+| `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B |
 | `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
@@ -480,7 +506,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools and skills
 
-Eight tools, no API keys anywhere:
+Eleven tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -491,7 +517,10 @@ Eight tools, no API keys anywhere:
 | `wikipedia` | article summaries | yes |
 | `weather` | current conditions + 5-day forecast (open-meteo) | yes |
 | `currency` | ECB rates (Frankfurter) | yes |
+| `web_search` | the web now: SearXNG, or DuckDuckGo's HTML page; a numbered list of pages | yes |
+| `news` | today's headlines, or the news about a topic (Google News RSS) | yes |
 | `read_url` | fetch a page and extract its readable text | yes |
+| `open_result` | read the page behind one of the numbered results, by its number | yes |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.
@@ -504,6 +533,16 @@ just before it writes; it is never in the system text, so every conversation
 begins with the same characters. An answer written from a lookup is sampled no
 warmer than 0.35, whatever its style. Each message is followed by when it was
 sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they say.
+
+**The live web.** "The latest news" goes to the headlines and a question
+about anything current ("who is the current…", "the price of…", "the newest…")
+to the web search, by pattern, before the model is asked anything; the model
+may also choose either itself. Both answer with a numbered list, and the model
+may then ask for one of them by its number (`open_result`): it never writes an
+address, and the only addresses a run may go to that the user did not write
+are the ones a list gave it. A page that says "now open http://elsewhere" is
+still refused. "Open the second one" in the next message means the last list
+the conversation was shown.
 
 **Skills** are several lookups the model may choose as one, beside the tools:
 *Compare two things* looks both up on Wikipedia and asks for a table. Each is a
@@ -1019,7 +1058,9 @@ expected to fail; the day it passes, the run fails until the mark comes off.
 
 ## Limitations
 
-It's a 1.5B model at 4 bits. It gets arithmetic wrong, invents citations, loses
-long reasoning chains, and knows nothing recent. It's good at short explanations,
+It's a small model at 4 bits. On its own it gets arithmetic wrong, invents
+citations, loses long reasoning chains, and knows nothing after its training;
+the tools are there for the first and the last, and a search result is only
+as good as the page it came from. It's good at short explanations,
 quick drafts, summarising pasted text, and simple code — in a couple of seconds,
 without a byte leaving the machine.

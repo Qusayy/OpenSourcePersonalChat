@@ -63,6 +63,16 @@ class Settings(BaseSettings):
         "Aurora/2.0 (+https://github.com/topics/llama-cpp; self-hosted llama.cpp chat)"
     )
     route_max_tokens: int = 96
+    # Searching the web. "auto": the SearXNG at ``searx_url`` where there is
+    # one, DuckDuckGo's HTML page where there is not. "searxng" and
+    # "duckduckgo" name one; "off" takes the search off the menu.
+    search: str = "auto"
+    # A SearXNG this server runs for itself, on loopback, with its JSON
+    # format on (deploy/searxng). The address is the operator's, never the
+    # model's to choose.
+    searx_url: str = ""
+    # Where the headlines are for: a Google News edition, COUNTRY:language.
+    news_region: str = "US:en"
     # The zone the model is told a message was sent in ("Sent Sat 17 Oct
     # 2026, 14:03 BST."), an IANA name.
     timezone: str = "UTC"

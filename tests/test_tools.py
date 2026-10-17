@@ -390,7 +390,8 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual(
             self.rules()["root"],
             "t-calculator | t-clock | t-convert-units | t-text-stats | t-wikipedia | "
-            "t-weather | t-currency | t-read-url | t-remember | t-recall | t-ask | t-none",
+            "t-weather | t-currency | t-web-search | t-news | t-read-url | t-open-result | "
+            "t-remember | t-recall | t-ask | t-none",
         )
 
     def test_with_notes_off_neither_note_tool_is_offered(self) -> None:
@@ -498,7 +499,7 @@ class GrammarTests(unittest.TestCase):
         rules = self.rules()
         self.assertNotIn("string", rules)
         texts = {name: body for name, body in rules.items() if name.startswith("text-")}
-        self.assertEqual(set(texts), {"text-40", "text-60", "text-80", "text-120", "text-200"})
+        self.assertEqual(set(texts), {"text-40", "text-60", "text-80", "text-100", "text-120", "text-200"})
         for name, body in texts.items():
             with self.subTest(rule=name):
                 self.assertEqual(body, r'"\"" char{1,' + name[5:] + r'} "\""')

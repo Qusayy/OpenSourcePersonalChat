@@ -50,7 +50,7 @@ describe("iconSvg", () => {
   });
 
   it("keeps the quieter strokes quieter", () => {
-    const paths = [...parsed(iconSvg("fact_check")).querySelectorAll("path")];
+    const paths = [...parsed(iconSvg("news")).querySelectorAll("path")];
     expect(paths.map((p) => p.getAttribute("opacity"))).toEqual([null, null, ".6"]);
   });
 
@@ -91,7 +91,7 @@ describe("iconSvg", () => {
 
 describe("hasIcon", () => {
   it("knows every picture and every alias", () => {
-    expect(ICON_NAMES).toHaveLength(22 + 8);
+    expect(ICON_NAMES).toHaveLength(19 + 10);
     for (const name of ICON_NAMES) expect(hasIcon(name)).toBe(true);
   });
 

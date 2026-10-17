@@ -25,6 +25,7 @@ from typing import Any
 
 from ..config import settings
 from ..tools import REGISTRY, tools_to_gbnf
+from ..tools.base import enabled
 from ..tools.currency import CURRENCY_CODES
 from ..tools.grammar import decision_ceiling
 from ..tools.units import TEMPS, UNITS, canon_unit
@@ -43,6 +44,9 @@ SLASH = {
     "stats": "text_stats", "textstats": "text_stats",
     "remember": "remember", "note": "remember",
     "recall": "recall", "notes": "recall",
+    "search": "web_search", "web": "web_search", "google": "web_search",
+    "news": "news", "headlines": "news",
+    "open": "open_result",
 }
 
 URL_RE = re.compile(r"https?://[^\s<>\"')]+", re.I)
@@ -101,6 +105,12 @@ def _args_from_free_text(tool_name: str, rest: str) -> dict | None:
         return {"text": rest} if rest else None
     if tool_name == "recall":
         return {"query": rest}
+    if tool_name == "web_search":
+        return {"query": rest} if rest else None
+    if tool_name == "news":
+        return {"topic": rest} if rest else {}
+    if tool_name == "open_result":
+        return {"number": rest} if rest in [str(n) for n in range(1, 9)] else None
     if tool_name == "convert_units":
         m = re.match(rf"{NUMBER}\s*([^\s]+)\s*(?:to|in|into|->)?\s*([^\s]+)", rest, re.I)
         if not m:
@@ -130,6 +140,60 @@ _STOP_WIKI = re.compile(
     r"latest|current|currently|today|tonight|now|news|headlines|price|prices|score|"
     r"weather|happening)\b", re.I
 )
+
+# News, asked for as news: "the latest news", "headlines", "any news about
+# the election", "football news". What it is about is what is left once the
+# words around asking are taken away.
+NEWS = re.compile(r"\b(?:news|headlines?|breaking)\b", re.I)
+_NEWS_ABOUT = re.compile(r"\b(?:news|headlines?)\s+(?:about|on|regarding|from|in|for|of)\s+(.+)$", re.I)
+_NOT_A_TOPIC = frozenset(
+    "hi hello hey what whats what's are is the latest today todays today's any some top current "
+    "recent breaking give me tell show please news headlines headline me us world new".split()
+)
+# Something that has changed since any model was trained, asked of the web.
+# Only words that say so: "right now" and "today" are as often about the
+# weather or the clock, which have tools of their own, and are left to them
+# or to the model.
+CURRENT = re.compile(
+    r"\b(?:latest|current|newest|recent(?:ly)?|this (?:week|month|year)|price of|"
+    r"stock price|who won|score of|release date|just (?:released|announced)|up to date|"
+    r"202[4-9]|20[3-9]\d)\b",
+    re.I,
+)
+# Something to be made, not looked up: "write a poem about today" is not a search.
+MAKING = re.compile(
+    r"^(?:please\s+)?(?:write|compose|draft|create|make|generate|translate|rewrite|"
+    r"summari[sz]e|fix|code|tell me a (?:joke|story))\b", re.I,
+)
+# When, said after a place: "Paris today" is Paris.
+WHEN_SAID = re.compile(
+    r"\s+(?:today|tonight|tomorrow|now|right now|this (?:morning|afternoon|evening|week|weekend))$",
+    re.I,
+)
+_ASKING = re.compile(r"^(?:hi|hello|hey|ok|so|please)[,!.\s]+", re.I)
+
+
+def news_topic(text: str) -> str:
+    """What the news asked for is about, or "" for the top stories."""
+    body = text.strip().rstrip("?!. ")
+    about = _NEWS_ABOUT.search(body)
+    if about:
+        return about.group(1).strip(" ?!.,")[:60]
+    words = [w for w in re.findall(r"[\w'’.-]+", body.split("news")[0] if "news" in body.lower() else body)
+             if w.lower().strip(".") not in _NOT_A_TOPIC]
+    return " ".join(words)[:60]
+
+
+def search_query(text: str) -> str:
+    """A message as a query: without a greeting before it or the question
+    mark after it."""
+    return _ASKING.sub("", text.strip()).strip(" ?!.")[:100]
+
+
+def _offered(name: str) -> bool:
+    tool = REGISTRY.get(name)
+    return tool is not None and enabled(tool)
+
 
 # A message that needs nothing looked up and is answered as said: a greeting,
 # thanks, a goodbye. Whole, so that "thanks, now what is 2+2" is not one.
@@ -207,7 +271,8 @@ def heuristic(text: str) -> ToolCall | None:
         body, re.I,
     )
     if m:
-        return ToolCall("weather", {"location": m.group(1).strip(" ?.!,")}, note="weather query")
+        place = WHEN_SAID.sub("", m.group(1).strip(" ?.!,"))
+        return ToolCall("weather", {"location": place}, note="weather query")
     if re.match(r"^(?:the )?weather(?: today| now)?\??$", low):
         return None  # no place named — let the model ask
 
@@ -222,7 +287,15 @@ def heuristic(text: str) -> ToolCall | None:
     if re.match(r"^(?:what(?:'s| is) the )?(?:time|date)( now| today)?\??$", low):
         return ToolCall("clock", {"timezone_name": "UTC"}, note="time query")
 
-    # 7. Encyclopaedia. Deliberately narrow: a short noun phrase, no opinion
+    # 7. News, then anything current: the web, not an encyclopaedia, and not
+    #    the model's memory, which stops at its training.
+    if NEWS.search(body) and _offered("news"):
+        topic = news_topic(body)
+        return ToolCall("news", {"topic": topic} if topic else {}, note="news")
+    if CURRENT.search(body) and not MAKING.match(body) and _offered("web_search"):
+        return ToolCall("web_search", {"query": search_query(body)}, note="something current")
+
+    # 8. Encyclopaedia. Deliberately narrow: a short noun phrase, no opinion
     #    words, or "what is the best X" starts hitting Wikipedia for no reason.
     m = re.match(
         r"^(?:who (?:is|was|were)|what (?:is|was|are|were)|tell me about|look up)\s+"

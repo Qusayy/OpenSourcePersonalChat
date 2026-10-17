@@ -554,6 +554,50 @@ test.describe("against a stream the test controls", () => {
     await expect(page.locator("#sr-status")).toHaveText("Weather failed: no such place");
   });
 
+  test("a search lists its pages numbered, each opening in a tab of its own", async ({ page }) => {
+    await ask(page, "who is the current president of France");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "step", {
+      id: "tool-0",
+      kind: "tool",
+      status: "ok",
+      label: "Web search",
+      tool: "web_search",
+      ms: 640,
+    });
+    await push(page, "card", {
+      step_id: "tool-0",
+      card: "search",
+      tool: "web_search",
+      data: {
+        query: "current president of France",
+        answer: "",
+        items: [
+          {
+            title: "Élysée",
+            url: "https://www.elysee.fr/",
+            source: "elysee.fr",
+            snippet: "The presidency.",
+          },
+          {
+            title: "President of France",
+            url: "https://en.wikipedia.org/wiki/President_of_France",
+            source: "en.wikipedia.org",
+          },
+        ],
+      },
+    });
+    const card = answerOf(page).locator('figure[data-card="search"]');
+    await expect(card).toBeVisible();
+    await expect(card.locator("figcaption")).toContainText("Web search");
+    await expect(card.locator("li")).toHaveCount(2);
+    await expect(card.locator("li").first()).toContainText("1.");
+    const link = card.locator("li a").first();
+    await expect(link).toHaveAttribute("href", "https://www.elysee.fr/");
+    await expect(link).toHaveAttribute("target", "_blank");
+    await answer(page, "He is named on the Élysée site.");
+  });
+
   test("an answer that ends while the tab is hidden is held until it is seen", async ({ page }) => {
     await ask(page, "hello");
     await push(page, "conversation", CONVERSATION);

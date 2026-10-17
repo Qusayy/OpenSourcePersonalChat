@@ -15,6 +15,8 @@ from .. import agent
 from ..agent.context import turns_from
 from ..agent.style import style_for
 from ..store import conversations
+from ..tools import REGISTRY
+from ..tools.results import links_of
 from . import deps
 from .keeper import Keeper
 from .sse import SSE_HEADERS, sse
@@ -51,6 +53,7 @@ async def api_chat(payload: ChatRequest):
     context = turns_from(messages, records)
     question_id = conversations.add_message(cid, "user", user_text)
     conversations.touch(cid)
+    links = last_links(cid)
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex
@@ -74,7 +77,7 @@ async def api_chat(payload: ChatRequest):
             keeper = Keeper(cid, trace, question_id, label=style.id)
             run = agent.run(
                 user_text, style=style, history=history, trace=trace,
-                engine=engine, request_id=run_id, context=context, scope=cid,
+                engine=engine, request_id=run_id, context=context, scope=cid, links=links,
             )
             try:
                 # Closed with this response, not whenever it is collected: a
@@ -89,6 +92,16 @@ async def api_chat(payload: ChatRequest):
                 yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=SSE_HEADERS)
+
+
+def last_links(cid: str) -> tuple:
+    """The last list of results the conversation was shown: what "open the
+    second one" means in the next message."""
+    for call in reversed(conversations.tool_calls(cid)):
+        tool = REGISTRY.get(call["tool"])
+        if call["ok"] and tool is not None and tool.links:
+            return links_of(call["data"])
+    return ()
 
 
 @router.post("/api/cancel/{request_id}")

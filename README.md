@@ -293,6 +293,44 @@ sudo sed -i '/^AURORA_LLM_URL=/d' .env
 sudo systemctl disable --now aurora-llm && sudo systemctl restart aurora
 ```
 
+#### Qwen3.5-4B
+
+A 4B model chooses its tools far better than a 1B one, at about a third of
+the speed. [Qwen3.5-4B](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF) is a
+hybrid: 24 of its 32 layers are linear attention with a fixed state, and only
+8 keep a KV cache, about 32 KiB a token, so a 16k window costs 0.5 GB. The
+pinned ik_llama.cpp runs it as it is (dense Qwen3.5 support is from February
+2026), text only.
+
+It thinks before every answer unless told not to, and with its thinking off
+its own template writes an empty `<think>` block before the new answer but
+leaves it out of every earlier one. Each message would then no longer begin
+with the last, and on a model with recurrent layers that means reading the
+whole conversation again. `deploy/templates/qwen3.5.jinja` writes the block
+into every answer, old and new, and `AURORA_THINK_BLOCK` counts it:
+
+```bash
+cd /srv/aurora
+sudo -u aurora curl -L -o models/Qwen3.5-4B-Q4_K_M.gguf \
+  https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf
+sudo tee -a .env >/dev/null <<'EOF'
+AURORA_MODEL_PATH=./models/Qwen3.5-4B-Q4_K_M.gguf
+AURORA_MODEL_LABEL=Qwen3.5-4B
+AURORA_MODEL_QUANT=Q4_K_M
+AURORA_MODEL_PARAMS=4B
+AURORA_N_CTX=16384
+AURORA_KV_KIB_PER_TOKEN=32
+AURORA_THINK_BLOCK=true
+AURORA_LLM_ARGS=--jinja --chat-template-file deploy/templates/qwen3.5.jinja --reasoning-format none
+EOF
+sudo cp deploy/aurora-llm.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart aurora-llm aurora
+```
+
+The later lines of `.env` win, so the old model's lines can stay until the new
+one has been tried. It needs about 3.7 GB, which is why `aurora-llm.service`
+allows 4.5 GB.
+
 ### The web search
 
 The agent searches the web with no API key. Without any setup it reads
@@ -508,6 +546,8 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
+| `AURORA_THINK_BLOCK` | `false` | `true` for a model whose every answer begins with an empty `<think>` block, as Qwen3.5 with `deploy/templates/qwen3.5.jinja`: the token counts then match what it reads |
+| `AURORA_LLM_ARGS` | *(unset)* | read only by `aurora-llm.service`: more `llama-server` options, word by word; see [Qwen3.5-4B](#qwen35-4b) |
 | `AURORA_HARDWARE_LABEL` | *(unset)* | how the machine is described in prose (About page, page description). Unset, it is written from what is measured, e.g. "machine with 2 cores and 3.8 GB of RAM". The status line always shows measured figures, whatever this says |
 | `AURORA_MOCK` | `false` | run the site with no model present |
 | `AURORA_MOCK_DELAY` | `0.085` | seconds between fake tokens; `0` runs the mock at full speed |
@@ -520,7 +560,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_TIMEZONE` | `UTC` | the zone the model is told each message was sent in |
 | `AURORA_SANDBOX` | `auto` | Python the model writes: `auto` runs it in the sandbox wherever the sandbox can run; `off` never. Nothing runs outside it; see [The Python sandbox](#the-python-sandbox) |
 | `AURORA_SANDBOX_VENV` | `/opt/aurora-sandbox/venv` | the sandbox's own venv, read-only to it |
-| `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B |
+| `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B, 32 for Qwen3.5-4B |
 | `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
 | `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
 | `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |

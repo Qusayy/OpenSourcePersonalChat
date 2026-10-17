@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     # What the KV cache holds per token of context, in KiB, for the memory
     # estimate on the Benchmark page: Qwen2.5-1.5B's 28 (28 layers, 2 KV
     # heads of 128, f16). LFM2.5-1.2B keeps a cache in 6 of its 16 layers,
-    # 8 KV heads of 64: 12.
+    # 8 KV heads of 64: 12. Qwen3.5-4B keeps one in 8 of its 32, 4 KV heads
+    # of 256: 32.
     kv_kib_per_token: int = 28
     # 0 is every CPU this process may use, measured at startup (affinity and
     # cgroup quota). A number pins it. A server resized from 2 cores to 4 kept
@@ -45,6 +46,10 @@ class Settings(BaseSettings):
     use_mmap: bool = True
     use_mlock: bool = False
     chat_format: str = "auto"
+    # Every answer begins with an empty <think> block, as Qwen3.5 writes one
+    # with its thinking off: set for a model run with
+    # deploy/templates/qwen3.5.jinja, so the counts match what it reads.
+    think_block: bool = False
 
     # generation ceilings
     max_tokens: int = 512

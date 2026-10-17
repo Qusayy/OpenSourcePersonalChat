@@ -176,7 +176,7 @@ components:
 
 **Creative North Star: "The Sheet and the Status Line"**
 
-Aurora is a plain sheet you write on. The page is three rows and nothing beside them: a top bar, the sheet, and one status line pinned to the bottom edge. There is no sidebar of chats, no centred column of bubbles and no dashboard column of metric cards. History opens on demand as a dialog, and every fact about the machine lives once, in the status line, which comes alive while the model writes.
+Aurora is a plain sheet you write on. The page is three rows: a top bar, the sheet, and one status line pinned to the bottom edge. Only a code project, once an answer writes one, stands beside the thread. There is no sidebar of chats, no centred column of bubbles and no dashboard column of metric cards. History opens on demand as a dialog, and every fact about the machine lives once, in the status line, which comes alive while the model writes.
 
 The material is paper and ink. A near-white sheet tinted toward green-grey, two inks, hairline rules and 4px corners. Structure is drawn with rules and space, never with boxes around text. Colour is almost absent, so that the one aurora green can mean a single thing: this is happening right now. Type is one family, Recursive, proportional for words and switched to its fixed-width cut for numerals, so a figure that ticks sits in a sentence without changing voice or shifting its neighbours.
 
@@ -185,7 +185,7 @@ The system refuses gradients, glass and backdrop blur, glow, pills, message bubb
 There is one exception to the first and third of those, and it has a name: the aurora. It comes in two forms. The curtains hang from the top bar over the head of a page at rest, and go when a conversation starts. The strip rises from the status line while an answer is being produced. The user asked for the strip first, as one live generation effect, and for the curtains later, so that the site would feel like the aurora it is named for. They are the only luminous things on any page.
 
 **Key Characteristics:**
-- Three rows: top bar (56px), sheet, status line. Nothing sits beside them.
+- Three rows: top bar (56px), sheet, status line. Nothing sits beside them but a conversation's project: at 1024px and wider the sheet becomes two columns, the thread and the composer in the first, the project (at least 24rem, 44% at most) in the second under a hairline, with no fill or shadow of its own. Narrower, the project is a drawer from the right like History, opened from the top bar.
 - Everything is centred: the top bar, the reading column and the status line share one axis, with equal margins either side at every width.
 - Two inks and no third. Hierarchy comes from size, weight and space.
 - One live colour, reserved for what is live.
@@ -267,7 +267,7 @@ The chat page has two views. Empty: headline, one paragraph and the composer dir
 
 Responsive behaviour is by need rather than by device. Below 1264px, where the window is narrower than the container, the chat page's status line gives the conversation a row of its own from the start, rather than wrapping at the moment an answer begins. Below 760px keyboard hints go and the status line's small bars go with them, leaving the figures. Below 680px a bar chart row stacks its label and value above a full-width bar. Below 640px a table becomes one block per row with each cell carrying its own heading. Below 620px the headline drops to 2.25rem, the page links move into the history dialog on the chat page, and the status line becomes a corridor (see Components). Touch is detected by `pointer: coarse`, not width: targets take explicit 44px minimums.
 
-**The One Axis Rule.** The top bar, the column, the composer and the status line are centred on one axis, with equal margins left and right. The top bar and the status line share a container and so share both edges. Nothing hangs from a left edge of its own.
+**The One Axis Rule.** The top bar, the column, the composer and the status line are centred on one axis, with equal margins left and right. The top bar and the status line share a container and so share both edges. Nothing hangs from a left edge of its own. With a project open beside the thread, the column and the composer keep one axis of their own, the centre of the first column.
 
 ## Elevation & Depth
 
@@ -317,6 +317,8 @@ Controls are words first. A box appears only where position alone would not say 
 
 ### Lists and rows
 - **Fact lists:** term in the second ink at the left, value at the right, a hairline under each, the full width of the column. The headline figures of a benchmark run are the same list with the numeral given weight.
+- **Project files:** ruled rows, the folder in the second ink before the name; the file shown has a sheet-2 fill and its name at 600. A file being written says so in the live colour, with a dot that breathes. Under the list, the file in the same code block an answer uses, with its path, version and Copy.
+- **A file in an answer:** a ruled row, not the code: its path at 600 and its lines in the second ink (the live colour while it is written). Clicking it opens the file in the project.
 
 ### Cards / Containers
 There are none. A **panel** is a block with 16px above it and a hairline on top. A **caveat** is a ruled note: a caution-coloured mark, then words in ink.
@@ -478,7 +480,7 @@ React draws the page. It does not draw each frame of something that moves. The s
 - **Don't** add a third ink, or set anything below 13px.
 - **Don't** use `live` as a brand, selection, success or emphasis colour.
 - **Don't** use `c1`..`c4` outside the memory budget, or give a single series a hue.
-- **Don't** box running text, or add a sidebar of chats, a centred bubble column or a column of metric cards.
+- **Don't** box running text, or add a sidebar of chats, a centred bubble column or a column of metric cards. The project panel is the one thing beside the thread, and only while a conversation has a project.
 - **Don't** add a theme switch; the scheme follows the OS.
 - **Don't** repeat the cost figures in the status line once a reply has finished.
 - **Don't** put a shadow on anything that sits in the sheet.

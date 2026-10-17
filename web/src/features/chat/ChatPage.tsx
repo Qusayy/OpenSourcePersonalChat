@@ -1,5 +1,12 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useLocation, useNavigationType } from "react-router";
+import {
+  ProjectButton,
+  ProjectDrawer,
+  ProjectPanel,
+  useFileChips,
+  usePanelBeside,
+} from "@/features/project/ProjectPanel";
 import { curtains } from "@/lib/curtains";
 import { cx } from "@/lib/cx";
 import { Button } from "@/shell/Button";
@@ -31,6 +38,8 @@ export function ChatPage() {
   const info = useInfo();
   const wrap = useRef<HTMLDivElement>(null);
   const empty = view === "empty";
+  const beside = usePanelBeside() && !empty;
+  useFileChips();
 
   // The scroller is the controller's to read and write while an answer
   // streams. Coming back to a conversation, it opens at the latest exchange.
@@ -75,6 +84,7 @@ export function ChatPage() {
   return (
     <>
       <TopBarActions>
+        <ProjectButton />
         <Button
           variant="text"
           id="menu-btn"
@@ -90,13 +100,20 @@ export function ChatPage() {
       </TopBarActions>
 
       <HistoryDialog />
+      <ProjectDrawer />
 
       <Main
         data-view={view}
         // A scrollbar that takes room on one side only would pull a centred
         // column off the axis the top bar and status line keep. Room is
         // reserved on both sides, whether or not anything scrolls.
-        className={empty ? "overflow-y-auto [scrollbar-gutter:stable_both-edges]" : undefined}
+        className={
+          empty
+            ? "overflow-y-auto [scrollbar-gutter:stable_both-edges]"
+            : beside
+              ? "project-split"
+              : undefined
+        }
       >
         {/* <main> is a flex column so the thread can take the spare height. On
             the empty sheet nothing should give: a flex item may shrink below
@@ -136,6 +153,7 @@ export function ChatPage() {
         </div>
 
         <Composer />
+        {beside ? <ProjectPanel /> : null}
       </Main>
     </>
   );

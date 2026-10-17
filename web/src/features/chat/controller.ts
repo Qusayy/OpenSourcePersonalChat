@@ -14,6 +14,16 @@
 
 import { flushSync } from "react-dom";
 import { create } from "zustand";
+import { WIDE } from "@/features/project/ProjectPanel";
+import {
+  fileEvent,
+  flushProject,
+  loadProject,
+  projectConversation,
+  resetProject,
+  setProjectOpen,
+  useProject,
+} from "@/features/project/store";
 import { ApiError, api, CHAT_URL } from "@/lib/api";
 import { aurora } from "@/lib/aurora";
 import { bootstrap } from "@/lib/bootstrap";
@@ -244,11 +254,13 @@ export async function send(text: string): Promise<void> {
   const stepMeta = new Map<string, { label: string; ms: number | undefined }>();
   let raw = "";
   let dirty = false;
+  let wroteFiles = false;
   let caretOn = true;
 
   const paint = () => {
     // A backgrounded tab still receives tokens; there is no point laying them
     // out until someone can see them.
+    flushProject();
     if (!dirty || document.hidden) return;
     dirty = false;
     // Read first, then write: measuring the scroll position after the DOM has
@@ -279,6 +291,7 @@ export async function send(text: string): Promise<void> {
           // From here on the run can be stopped by name.
           if (data.request_id) requestId = data.request_id;
           useChat.setState({ conversationId: data.id });
+          projectConversation(data.id);
           if (data.created) void refreshList();
         } else if (event === "queue") {
           if (queueKey === null) queueKey = notice("queue", "");
@@ -319,6 +332,11 @@ export async function send(text: string): Promise<void> {
           if (nearBottom()) scrollBottom();
         } else if (event === "trimmed") {
           notice("", trimmedWording(data.dropped, data.cut));
+        } else if (event === "file") {
+          // The first file of a run opens the panel beside the thread where
+          // there is room for it; on a narrow screen the top bar offers it.
+          wroteFiles = true;
+          if (fileEvent(data) && window.matchMedia(WIDE).matches) setProjectOpen(true);
         } else if (event === "retract") {
           // The answer said it could not look this up. It can, and it will:
           // what was written is taken off the page, and the next answer is
@@ -409,6 +427,9 @@ export async function send(text: string): Promise<void> {
     requestId = null;
     connection = null;
     const final = raw;
+    // The project as it was kept, in place of what the stream showed of it.
+    const projectOf = useProject.getState().cid;
+    if (wroteFiles && projectOf) void loadProject(projectOf);
     if (!final.trim() && !botItem(bot.key)?.cards.length) removeItem(bot.key);
     else patchBot(bot.key, (b) => ({ ...b, live: false, content: final }));
     dom.input?.focus();
@@ -468,6 +489,8 @@ export async function loadConversation(cid: string): Promise<void> {
     }
     commit(() => useChat.setState({ conversationId: cid, items }));
     setContext(ctx);
+    if (convo.project?.length) void loadProject(cid);
+    else resetProject(cid);
     setRail(false);
     setView("thread");
     scrollBottom();
@@ -480,6 +503,7 @@ export async function loadConversation(cid: string): Promise<void> {
 export function newChat(): void {
   if (useChat.getState().streaming) return;
   useChat.setState({ conversationId: null, items: [] });
+  resetProject();
   setView("empty");
   setContext(0);
   setRail(false);

@@ -11,6 +11,7 @@ const draw = (card: CardKind, data: CardData, meta?: { label?: string; ms?: numb
 const words = (el: Element) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
 
 const FULL: Record<Exclude<CardKind, "error">, CardData> = {
+  file: { path: "app.py", version: 2, lang: "python", lines: 40, content: "print(1)\n" },
   python: {
     task: "two to the tenth",
     code: "print(2 ** 10)\n",

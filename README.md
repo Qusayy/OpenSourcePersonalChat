@@ -537,7 +537,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools and skills
 
-Twelve tools, no API keys anywhere:
+Thirteen tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -553,6 +553,7 @@ Twelve tools, no API keys anywhere:
 | `read_url` | fetch a page and extract its readable text | yes |
 | `open_result` | read the page behind one of the numbered results, by its number | yes |
 | `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
+| `read_file` | one file of this conversation's project, as it stands | — |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.
@@ -581,6 +582,19 @@ start of an answer from a run that looked nothing up is watched for that; if
 it says so, the answer is taken back on the page, the search it said it could
 not make is made, and the answer is written again from what came back. Once a
 run, and never after a lookup, which the answer check already covers.
+
+**Code projects.** Ask it to build something of several files (an app, a
+site, a game) and it writes a project: each file as a fenced block with its
+path above it (`### app/main.py`). The answer is read for files as it is
+written; each is kept when its block closes (every version, in
+`project_files`), and the page shows them in a panel beside the thread on a
+wide screen, or a drawer on a narrow one, filling in line by line. In the
+chat a file is one row that opens it there. **Download zip** gets all of
+them, newest versions, in one folder named for the conversation. The next
+message is told the project's files by name, and a change to it is written
+as whole files again; `read_file` reads one back when the answer that wrote it
+no longer fits the window. A project holds at most 64 files, 256 KB each and
+2 MB in all, under plain relative names.
 
 **Skills** are several lookups the model may choose as one, beside the tools:
 *Compare two things* looks both up on Wikipedia and asks for a table. Each is a
@@ -952,6 +966,7 @@ load, and if it did, every token would come off disk.
 |---|---|
 | `POST /api/chat` → SSE | events: `conversation` (with the run's `request_id`), `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error`, and last of all `run`: how the run ended, its steps and model passes, and what they cost together |
 | `GET /api/tools` | the registry, as the UI sees it |
+| `GET /api/conversations/{id}/project` | the project's files as they stand, with their contents; `…/project/files/{path}?version=` one of them; `…/project.zip` all of them |
 | `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
 | `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, the app and its model resident, cgroup limit, load average; plus engine `status`, `busy`, `queued` |

@@ -276,6 +276,23 @@ function Python({ data, meta }: KindProps) {
   );
 }
 
+/* ---------------------------------------------------------------- file -- */
+
+/* A file of the project, read back by the model. The file itself is in the
+   project panel; this says which, and opens it there. */
+function ProjectFileRead({ data, meta }: KindProps) {
+  const path = text(data, "path");
+  const lines = num(data.lines);
+  return (
+    <Figure tool="file" card="file" name="Read file" note={path} meta={meta}>
+      <button type="button" className="file-chip" data-file={path} data-state="done">
+        <span className="file-chip-name">{path}</span>
+        <span className="file-chip-meta num">{`version ${num(data.version)} · ${lines} lines`}</span>
+      </button>
+    </Figure>
+  );
+}
+
 /* ---------------------------------------------------------------- note -- */
 
 // A note kept, or the notes found. The words are the user's own, set as
@@ -555,5 +572,6 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   search: Search,
   news: News,
   python: Python,
+  file: ProjectFileRead,
   error: Failure,
 };

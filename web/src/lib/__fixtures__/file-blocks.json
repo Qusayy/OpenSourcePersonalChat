@@ -35,7 +35,11 @@
     "name": "a Markdown file may hold fenced blocks of its own",
     "answer": "### README.md\n```markdown\n# Title\n```bash\npip install flask\n```\nDone.\n```\nThat is all.",
     "files": [
-      { "path": "README.md", "lang": "markdown", "content": "# Title\n```bash\npip install flask\n```\nDone.\n" }
+      {
+        "path": "README.md",
+        "lang": "markdown",
+        "content": "# Title\n```bash\npip install flask\n```\nDone.\n"
+      }
     ]
   },
   {

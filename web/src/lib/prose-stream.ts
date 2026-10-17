@@ -7,6 +7,7 @@
  * everything inside it alone.
  */
 
+import { foldFiles } from "./files";
 import { reduced } from "./frame";
 import { renderMarkdown, splitBlocks } from "./markdown";
 
@@ -134,7 +135,7 @@ export function proseRenderer(host: Element): ProseRenderer {
     update(raw, caretOn) {
       finished = null;
       const now = performance.now();
-      const blocks = splitBlocks(raw);
+      const blocks = splitBlocks(foldFiles(raw));
       // Commit every block that is now finished, appending rather than
       // rebuilding so existing nodes are left alone.
       while (settled < blocks.length - 1) {
@@ -177,7 +178,7 @@ export function proseRenderer(host: Element): ProseRenderer {
         .map((r) => ({ start: before + r.start, end: before + r.end, at: r.at }));
       // One clean pass at the end so the finished answer is a single tree.
       stable.innerHTML = "";
-      tail.innerHTML = renderMarkdown(raw);
+      tail.innerHTML = renderMarkdown(foldFiles(raw));
       settled = 0;
       written = 0;
       fresh = [];

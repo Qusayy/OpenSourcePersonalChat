@@ -106,6 +106,7 @@ export type CardKind =
   | "search"
   | "news"
   | "python"
+  | "file"
   | "error";
 
 /** A card's payload. Each card type reads its own fields from it and treats
@@ -165,7 +166,41 @@ export interface Conversation {
   messages: StoredMessage[];
   /** Calls whose answer was cancelled before it could be stored. */
   orphan_tool_calls: StoredToolCall[];
+  /** Its project's files, without their contents. */
+  project?: ProjectEntry[];
 }
+
+/* ------------------------------------------------------------ projects -- */
+
+/** One file of a conversation's project, as it stands. */
+export interface ProjectEntry {
+  path: string;
+  version: number;
+  lang: string;
+  bytes: number;
+  lines: number;
+  created_at: number;
+}
+
+/** The same, with what it holds: GET /api/conversations/{id}/project. */
+export interface ProjectFileRow extends ProjectEntry {
+  content: string;
+}
+
+/** What the stream says of a file an answer writes, as it writes it. */
+export type FileEventData =
+  | { type: "open"; path: string; lang: string }
+  | { type: "line"; path: string; text: string }
+  | {
+      type: "close";
+      path: string;
+      lang: string;
+      lines: number;
+      /** Set once the file was kept: its version, or why it was not kept. */
+      version?: number;
+      kept?: boolean;
+      why?: string;
+    };
 
 /* ------------------------------------------------------- the chat stream -- */
 
@@ -285,6 +320,8 @@ export type ChatEvents = {
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
   /** Something had to give for the prompt to fit the window: the oldest
    *  messages, given to the model only in short, or the end of this one. */
+  /** A file the answer is writing: it opens, a line of it arrives, it closes. */
+  file: FileEventData;
   /** The answer so far is taken back: it said it could not look something
    *  up, and the run is looking it up and writing it again. */
   retract: { reason: string };

@@ -47,4 +47,5 @@ register(Tool(
     example="/file app.py",
     budget=900,
     observe=_observe,
+    project=True,
 ))

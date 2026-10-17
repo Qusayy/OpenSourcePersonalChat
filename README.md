@@ -565,8 +565,16 @@ sentences for a quick fact, an explanation otherwise. A style is the answer's
 sampling, the room it is given, and one line the model reads last, in the cue
 just before it writes; it is never in the system text, so every conversation
 begins with the same characters. An answer written from a lookup is sampled no
-warmer than 0.35, whatever its style. Each message is followed by when it was
-sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they say.
+warmer than 0.35, whatever its style. A message whose answer turns on the
+date ("today", "latest", "how old", a weekday, a year) is followed by when it
+was sent, in `AURORA_TIMEZONE`, so those words mean what they say; any other
+message is not, because a small model told the time answers a greeting with it.
+
+**A project** is heard in "create a python project", "init a hello world
+fastapi" or "write the files": once asked for, the conversation goes on writing
+it until it has been written. A new project is written straight away, with no
+tool chosen first, and the tools that read or run project files can only be
+chosen in a conversation that has one.
 
 **The live web.** "The latest news" goes to the headlines and a question
 about anything current ("who is the current…", "the price of…", "the newest…")

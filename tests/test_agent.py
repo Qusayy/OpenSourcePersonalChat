@@ -165,7 +165,7 @@ class WindowTests(AgentCase):
         ])
         sent = trace.prompt[-1]["content"]
         self.assertTrue(sent.startswith("Please read this. word word"))
-        self.assertTrue(sent.split("\n\n(Sent ")[0].endswith("…"))
+        self.assertTrue(sent.split("\n\n")[0].endswith("…"))
         room = 1200 - STYLES["concise"].max_tokens - engine.cfg.reply_headroom
         self.assertLessEqual(engine.prompt_tokens(trace.prompt), room)
         self.assertEqual(trace.steps[-1].input["cut"], True)
@@ -175,7 +175,10 @@ class WindowTests(AgentCase):
         trace = agent.Trace()
         stream = await collect(self.run_message("Hello there", engine, style="concise", tools=False, trace=trace))
         self.assertEqual(only(stream, "trimmed"), [])
-        self.assertTrue(trace.prompt[-1]["content"].startswith("Hello there\n\n(Sent "))
+        self.assertTrue(trace.prompt[-1]["content"].startswith("Hello there\n\n"))
+        # A greeting is not told when it was sent: told, a small model greets
+        # back with the date.
+        self.assertNotIn("(Sent ", trace.prompt[-1]["content"])
 
     async def test_without_tools_the_conversation_is_read_as_it_was_said(self) -> None:
         history = [{"role": "user", "content": "One?"}, {"role": "assistant", "content": "One."},
@@ -185,7 +188,7 @@ class WindowTests(AgentCase):
         await collect(self.run_message("Three?", engine, tools=False, history=history,
                                        trace=trace))
         self.assertEqual(trace.prompt[:-1], [{"role": "system", "content": SYSTEM_WITHOUT_TOOLS}, *history])
-        self.assertTrue(trace.prompt[-1]["content"].startswith("Three?\n\n(Sent "))
+        self.assertTrue(trace.prompt[-1]["content"].startswith("Three?\n\n"))
 
     async def test_without_tools_each_prompt_extends_the_last_and_its_answer(self) -> None:
         engine = self.scripted("One.", "Two.", "Three.")
@@ -1004,7 +1007,7 @@ class FailureTests(AgentCase):
         engine = self.scripted("It is 12.9 degrees in Paris; Atlantis could not be found.")
         trace = agent.Trace()
         run = agent.loop._Run(  # noqa: SLF001 - the prompt is what is under test
-            message="Paris and Atlantis?", style=STYLES["concise"], history=[],
+            message="Paris and Atlantis today?", style=STYLES["concise"], history=[],
             trace=trace, engine=engine, call_tool=None, tools_enabled=True, request_id="run",
             now=datetime(2026, 10, 17, 14, 3, tzinfo=timezone.utc),
         )
@@ -1012,7 +1015,7 @@ class FailureTests(AgentCase):
         run.failures = ["weather: No place called 'Atlantis' was found."]
         self.assertEqual(
             merged(run._prompt())[-1]["content"],  # noqa: SLF001
-            "Paris and Atlantis?\n\n"
+            "Paris and Atlantis today?\n\n"
             "(Sent Sat 17 Oct 2026, 14:03 UTC.)\n\n"
             "Live data, retrieved just now by a tool:\n"
             "- weather: Paris, France: overcast, 12.9°C.\n\n"
@@ -1305,7 +1308,7 @@ class LoopTests(LoopCase):
     async def test_what_the_model_reads_is_one_conversation(self) -> None:
         engine = self.scripted(weather("Paris"), NONE, "Take a coat.")
         support.played_tools(self, {"weather": found("Paris")})
-        _, trace = await self.traced("Do I need a coat in Paris", engine, now=SENT)
+        _, trace = await self.traced("Do I need a coat in Paris today", engine, now=SENT)
         from app.agent.skills import offered
         from app.agent.transcript import CUE_WITH_DATA, system_for
         from app.tools.base import available
@@ -1314,7 +1317,7 @@ class LoopTests(LoopCase):
             trace.prompt,
             [
                 {"role": "system", "content": system_for(offered(available()))},
-                {"role": "user", "content": "Do I need a coat in Paris\n\n" + SENT_LINE},
+                {"role": "user", "content": "Do I need a coat in Paris today\n\n" + SENT_LINE},
                 {"role": "assistant", "content": weather("Paris")},
                 {"role": "user", "content": '<data tool="weather">Paris: overcast, 12.9°C.</data>'},
                 {"role": "assistant", "content": NONE},

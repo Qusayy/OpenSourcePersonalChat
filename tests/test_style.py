@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 try:
     from app.agent.context import Part
+    from app.agent.route import free_route, time_matters
     from app.agent.style import LOOKED_UP_TEMPERATURE, STYLES, style_for
     from app.agent.transcript import Transcript, sent_at, system_for
 except ImportError as exc:  # pragma: no cover - only without the requirements
@@ -38,6 +39,21 @@ class StyleTests(unittest.TestCase):
             with self.subTest(message):
                 self.assertEqual(style_for(message).id, style)
 
+    def test_a_project_is_heard_however_it_is_asked_for(self) -> None:
+        for message in ("I want to create a python project", "start a new project",
+                        "first init a new basic hello world fastapi", "scaffold a django project",
+                        "spin up a small api", "can you create the files and write to them",
+                        "save it to a file", "split this into separate files"):
+            with self.subTest(message):
+                self.assertEqual(style_for(message).id, "project")
+
+    def test_a_question_about_a_framework_is_not_a_project(self) -> None:
+        for message in ("how do I make react re-render less", "why is my flask app slow",
+                        "explain how fastapi works", "make a list of files to back up",
+                        "how do I set up a venv"):
+            with self.subTest(message):
+                self.assertNotEqual(style_for(message).id, "project")
+
     def test_words_that_only_look_like_code_do_not_make_it_code(self) -> None:
         for message in ("how to go to Paris by train", "I love listening to Swift",
                         "explain the class system in India"):
@@ -58,6 +74,21 @@ class StyleTests(unittest.TestCase):
 
 
 class SentTests(unittest.TestCase):
+    def test_only_a_message_that_turns_on_the_date_is_told_it(self) -> None:
+        for message in ("what are the latest news", "is it raining tomorrow", "how old is she",
+                        "what happened in 2024", "And now?", "what's the bitcoin price"):
+            with self.subTest(message):
+                self.assertTrue(time_matters(message))
+        for message in ("Hello dear", "hi", "write a function that sorts a list", "Three?",
+                        "I want to create a python project"):
+            with self.subTest(message):
+                self.assertFalse(time_matters(message))
+
+    def test_a_greeting_with_a_word_after_it_is_still_small_talk(self) -> None:
+        for message in ("Hello dear", "hi there friend", "thanks all!", "good morning everyone"):
+            with self.subTest(message):
+                self.assertEqual(free_route(message), (None, "chat"))
+
     def test_the_time_a_message_was_sent_is_said_in_its_own_zone(self) -> None:
         utc = datetime(2026, 10, 17, 14, 3, tzinfo=timezone.utc)
         self.assertEqual(sent_at(utc), Part("user", "now", "(Sent Sat 17 Oct 2026, 14:03 UTC.)"))

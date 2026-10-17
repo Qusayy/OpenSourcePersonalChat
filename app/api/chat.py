@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .. import agent
 from ..agent.context import turns_from
-from ..agent.style import style_for
+from ..agent.style import asks_for_project, style_for
 from ..store import conversations, projects
 from ..tools import REGISTRY
 from ..tools.results import links_of
@@ -54,7 +54,12 @@ async def api_chat(payload: ChatRequest):
     conversations.touch(cid)
     links = last_links(cid)
     project = projects.manifest(cid)
-    style = style_for(user_text, project=bool(project))
+    # A project asked for a message or two ago, and not written yet, is still
+    # the one being made: "first init a hello world fastapi" goes on with it.
+    wanted = bool(project) or any(
+        asks_for_project(m["content"]) for m in history[-8:] if m["role"] == "user"
+    )
+    style = style_for(user_text, project=wanted)
 
     # The name this run can be stopped by, from here to its last event.
     run_id = uuid.uuid4().hex

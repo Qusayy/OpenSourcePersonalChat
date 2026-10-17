@@ -108,18 +108,33 @@ _IN_LANGUAGE = re.compile(rf"\b(?:in|using|with|into)\s+(?:{_LANGUAGES})\b", re.
 # Something to be written, mended or explained, and a thing made of code.
 _VERB = re.compile(
     r"\b(?:write|implement|code|build|create|make|fix|debug|refactor|convert|port|generate|"
-    r"optimi[sz]e)\b", re.I,
+    r"optimi[sz]e|init(?:iali[sz]e)?|bootstrap|scaffold|set ?up)\b", re.I,
 )
 _CODE_THING = re.compile(
     rf"\b(?:code|function|script|program|snippet|regex(?:p)?|query|class|method|module|api|"
     rf"endpoint|bug|unit tests?|algorithm|cli|app|web ?app|website|web ?page|bot|"
     rf"flask|django|fastapi|express|vue|svelte|numpy|pandas|{_LANGUAGES})\b", re.I,
 )
-# Something made of several files: an app, a site, a game, a service.
+# Something made of several files: an app, a site, a game, a service, or a
+# framework's starting point ("init a hello world fastapi"). A framework
+# counts only as the last word, as what is to be made: "make react re-render
+# less" is a question about it.
 _PROJECT = re.compile(
-    r"\b(?:build|create|make|scaffold|generate|write|start|set up|code)\b(?:\s+[\w'-]+){0,6}?\s+"
-    r"(?:project|app|application|website|web ?site|site|game|bot|api|server|backend|frontend|"
-    r"cli|extension|plugin|dashboard|library|package|service)s?\b",
+    r"\b(?:build|create|make|scaffold|generate|write|start|set ?up|code|init(?:iali[sz]e)?|"
+    r"bootstrap|spin up)\b(?:\s+[\w'-]+){0,6}?\s+"
+    r"(?:(?:project|app|application|website|web ?site|site|game|bot|api|server|backend|frontend|"
+    r"cli|extension|plugin|dashboard|library|package|service|repo|repository|boilerplate|"
+    r"skeleton|codebase)s?\b"
+    r"|(?:fastapi|flask|django|express|streamlit|gradio|electron|next\.?js|nuxt|react|vue|"
+    r"svelte|angular)(?=\s*(?:$|[.!?,;:])))",
+    re.I,
+)
+# Code to be written out as files: "create the files", "save it to a file",
+# "split this into files".
+_TO_FILES = re.compile(
+    r"\b(?:create|write|make|save|put|split|turn|generate|give)\b(?:\s+[\w'-]+){0,4}?\s+"
+    r"(?:(?:the|these|those|real|actual|separate|project|code)\s+files?"
+    r"|(?:as|into|in|to)\s+(?:a\s+|separate\s+|real\s+)?files?)\b",
     re.I,
 )
 # A change to something already made.
@@ -142,19 +157,26 @@ _QUICK_FACT = re.compile(
 _OPEN = re.compile(r"\b(?:why|explain|how (?:does|do|is|are|can|would|should)|what if|teach)\b", re.I)
 
 
+def asks_for_project(message: str) -> bool:
+    """Whether a message asks for a project to be made, or for code to be
+    written out as files."""
+    text = " ".join((message or "").split())
+    return bool(_PROJECT.search(text) or _TO_FILES.search(text))
+
+
 def style_for(message: str, *, project: bool = False) -> Style:
     """The style a message asks for, by what it says.
 
     First, a project: something made of several files to build, or, in a
-    conversation that has a project already (``project``), code or a change
-    asked for. Then, in order: code (code shown, a language named, or code to
+    conversation that has a project or has asked for one (``project``), code
+    or a change asked for. Then, in order: code (code shown, a language named, or code to
     write or mend);
     a list (ideas, suggestions, "five ways to"); a quick answer (asked
     briefly, a word or three such as a greeting, or a short who/what/when
     that is not a why); and otherwise an explanation.
     """
     text = " ".join((message or "").split())
-    if _PROJECT.search(text):
+    if asks_for_project(text):
         return STYLES["project"]
     coded = bool(_SHOWN.search(message or "") or _IN_LANGUAGE.search(text) or (
         _VERB.search(text) and _CODE_THING.search(text)

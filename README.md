@@ -19,8 +19,8 @@ app/                     the server (Python, FastAPI)
   api/           the routes: pages · chat (SSE) and what a run leaves behind · conversations · system · bench
                  frontend.py serves the built interface and writes its first values into the page
   agent/         one message, question to answer: loop · route (slash -> heuristics -> grammar)
-                 policy (what a chosen call may do) · trace · skills · transcript · context (the window)
-                 verify · personas
+                 policy (what a chosen call may do) · trace · skills · style (how an answer is written)
+                 transcript · context (the window) · verify
   llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server); mock
   store/         SQLite (WAL): db (the connection) · conversations · runs (steps and figures) · notes
   tools/         base (registry, arguments, dispatch) · grammar (the menu + GBNF), then one module per tool;
@@ -493,24 +493,24 @@ Eight tools, no API keys anywhere:
 | `currency` | ECB rates (Frankfurter) | yes |
 | `read_url` | fetch a page and extract its readable text | yes |
 
-**Skills** are one-click workflows on top of them — *Summarise a link*,
-*Fact-check*, *Compare two things*, *Weather brief*, *Do the maths*,
-*Explain this code*. Each is a dict entry in `app/agent/skills.py`, not a code path:
-the inputs it needs, the lookups it makes with them, and the prompt the answer
-is written from. A skill reads its inputs out of the message with a pattern of
-its own; *Compare* knows "A vs B", "the difference between A and B", "how does
-A differ from B" and the like. Where the pattern misses ("is Python faster than
-Rust?"), one short pass, held to a grammar of exactly those inputs, fills them
-in, and the answer is written on from it. A link is never filled in that way:
-the model may not supply an address.
+There is one agent, and every message can use every tool. Nothing is chosen
+before sending: no persona, no skill button, no palette.
 
-The Agent may also choose *Compare* itself, as it chooses a tool: it is on its
-menu beside the tools, held to the same grammar. A skill it chooses makes its
-lookups, which count against the run's limits like any other, and the answer is
-asked for in the skill's own words. A skill is offered to the model only where
-it says how its answer is to be asked for; the rest stay buttons. *Fact-check*
-was offered too, until a small model reached for it on nearly any message:
-anything can be read as a claim.
+**How the answer is written** is read from the message (`app/agent/style.py`):
+code first for a programming question, a numbered list for ideas, a few
+sentences for a quick fact, an explanation otherwise. A style is the answer's
+sampling, the room it is given, and one line the model reads last, in the cue
+just before it writes; it is never in the system text, so every conversation
+begins with the same characters. An answer written from a lookup is sampled no
+warmer than 0.35, whatever its style. Each message is followed by when it was
+sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they say.
+
+**Skills** are several lookups the model may choose as one, beside the tools:
+*Compare two things* looks both up on Wikipedia and asks for a table. Each is a
+dict entry in `app/agent/skills.py`, not a code path: the inputs it takes, the
+lookups it makes with them, and how its answer is asked for. It is on the menu
+in the shape of a tool and held to the same grammar, and its lookups count
+against the run's limits like any other.
 
 ### How a 1.5B model is made to route reliably
 
@@ -518,12 +518,12 @@ It isn't, on its own — asked politely for JSON it produces trailing commas,
 prose preambles and invented keys. Five layers, cheapest first:
 
 1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. Free
-   and certain. Press `/` in the composer for the palette.
+   and certain, for whoever knows them; nothing on the page lists them.
 2. **Heuristics** — a pasted link, `1247 * 89`, `15% of 200`, `100 EUR to USD`,
    `what time is it in Tokyo`. Regex, free, and better than the model's
-   judgement. These handle most real traffic with no model call at all.
-3. **Grammar-constrained routing** — only for the *Agent* persona, and only
-   when the first two miss. The model chooses under a GBNF grammar generated
+   judgement. These handle most real traffic with no model call at all. A
+   greeting or a thank-you is caught here too, and answered without a choice.
+3. **Grammar-constrained routing** — when the first two miss. The model chooses under a GBNF grammar generated
    from the tool registry, so malformed output is not unlikely, it is
    unrepresentable. It reads the prompt the answer is later written from:
    the system text with the tool menu, the conversation so far, the message. The grammar holds what goes into a call as well as its
@@ -543,8 +543,9 @@ prose preambles and invented keys. Five layers, cheapest first:
    the person is given beside it, and it is asked to say plainly what could
    not be looked up rather than answer from memory.
 
-A routing pass costs ~2–5 s on 2 vCPU, which is why only the Agent persona pays
-for it. It is announced on the page at the moment it is made and at no other
+A routing pass costs a fraction of a second once the prompt is in the server's
+cache, and every message that no command, pattern or greeting caught pays for
+it. It is announced on the page at the moment it is made and at no other
 time, and the status line says "deciding" while it runs. Under each answer,
 **How it ran** lists every step of the run in order: what the model read of
 its prompt (and how much of it was already in its cache), what it wrote, and
@@ -569,8 +570,8 @@ asks for the same thing again. So the code that runs the loop holds the limits:
 - at most three tool calls and three choices for one message, and ninety
   seconds before the answer must begin (all three are settings);
 - a lookup that has already been made is not made again;
-- a tool the visitor named themselves, by a command, a pattern or a skill,
-  never starts the loop. Those cost exactly what they cost with it off.
+- a tool the visitor named themselves, by a command or a pattern, never
+  starts the loop. Those cost exactly what they cost with it off.
 
 When something other than the model ends the looking-up, the pass that writes
 the answer is told so in one line, so the reply can say what was not found.
@@ -749,9 +750,9 @@ read by the rest from its cache, so three places showing memory use cost one
 request.
 
 **The first values are in the page.** The server writes the model, the machine
-as last measured, the personas, tools, conversations and the benchmark's suite
+as last measured, the tools, conversations and the benchmark's suite
 into `index.html` as one JSON element (`app/api/frontend.py`), so the first paint has
-real figures with no request behind it, and no persona prompt or file path is
+real figures with no request behind it, and no system prompt or file path is
 among them.
 
 **Styling is Tailwind CSS 4, with the design tokens as its only vocabulary.**
@@ -874,7 +875,6 @@ load, and if it did, every token would come off disk.
 |---|---|
 | `POST /api/chat` → SSE | events: `conversation` (with the run's `request_id`), `step`, `card`, `queue`, `start`, `token`, `trimmed`, `done`, `error`, and last of all `run`: how the run ended, its steps and model passes, and what they cost together |
 | `GET /api/tools` | the registry, as the UI sees it |
-| `GET /api/skills` | workflow definitions |
 | `POST /api/cancel/{id}` | stop a run, at any stage, by the `request_id` from its first event |
 | `GET /api/health` | model, status, RSS, queue depth, uptime, and a `system` snapshot |
 | `GET /api/telemetry` | the machine now: usable CPUs, load per core, memory used/total, the app and its model resident, cgroup limit, load average; plus engine `status`, `busy`, `queued` |
@@ -1007,7 +1007,7 @@ task success and seconds per task. That comparison is what decides whether the
 loop stays on. Scripted tasks are written for the loop on.
 
 A wording file (`--rules`) puts other texts in front of the model for one
-run: the loop's rules, and the persona, a tool's or a skill's line on the menu.
+run: the loop's rules, the system text, and a tool's or a skill's line on the menu.
 It is how a rewording is measured before it is made the default, since with a
 model this small a reworded line can move routing either way. The report names
 the file and its digest.

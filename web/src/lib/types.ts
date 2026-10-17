@@ -70,24 +70,7 @@ export interface Health {
   };
 }
 
-/* ------------------------------------------- personas, skills and tools -- */
-
-export interface Persona {
-  id: string;
-  name: string;
-  blurb: string;
-}
-
-export interface Skill {
-  id: string;
-  name: string;
-  glyph: string;
-  blurb: string;
-  /** Tool names, in the order the skill runs them. */
-  pipeline: string[];
-  persona: string;
-  placeholder: string;
-}
+/* ------------------------------------------------------------------ tools -- */
 
 export interface ToolArg {
   name: string;
@@ -132,7 +115,6 @@ export type CardData = Record<string, unknown>;
 export interface ConversationSummary {
   id: string;
   title: string;
-  persona: string;
   created_at: number;
   updated_at: number;
   /** How many messages it holds. */
@@ -175,7 +157,6 @@ export interface StoredMessage {
 export interface Conversation {
   id: string;
   title: string;
-  persona: string;
   created_at: number;
   updated_at: number;
   messages: StoredMessage[];
@@ -189,8 +170,6 @@ export interface Conversation {
 export interface ChatRequest {
   message: string;
   conversation_id?: string | null;
-  persona?: string | null;
-  skill?: string | null;
 }
 
 export interface StepEvent {
@@ -295,8 +274,6 @@ export type ChatEvents = {
     id: string;
     title: string;
     created: boolean;
-    skill: string | null;
-    persona: string;
     /** The run's name, known from the first event: what Stop asks the server
      *  to stop, at whatever stage the run has reached. */
     request_id?: string;
@@ -443,9 +420,6 @@ export interface Bootstrap {
   version: string;
   info: EngineInfo;
   system: SystemSnapshot;
-  personas: Persona[];
-  defaultPersona: string;
-  skills: Skill[];
   tools: Tool[];
   conversations: ConversationSummary[];
   bench: BenchStatic;

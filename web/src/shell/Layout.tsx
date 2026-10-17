@@ -63,7 +63,7 @@ export function Layout() {
 /**
  * Light rising from the status line while a request is being read or written
  * (lib/aurora.ts). Fixed to the window and behind everything, so it can never
- * cover the composer, the palette or a toast. Absent at rest: the script
+ * cover the composer or a toast. Absent at rest: the script
  * shows and hides the element itself, so React only ever says "hidden" once.
  */
 function AuroraStrip() {

@@ -81,7 +81,6 @@ test.describe("against the real stream", () => {
     expect(JSON.parse(chatPosts[0] ?? "{}")).toMatchObject({
       message: "why is the sky blue?",
       conversation_id: null,
-      skill: null,
     });
   });
 

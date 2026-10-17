@@ -86,7 +86,7 @@ export function AboutPage() {
           <P>
             {"It is a "}
             <b>{`${info.params}-parameter`}</b>
-            {` model at ${info.quant}. Use it for short explanations, quick drafts, summarising something you paste in, and simple code. Don't trust it with arithmetic, citations, long chains of reasoning or anything recent. For sums, rates and the weather, use a skill or the Agent: they look the answer up instead of guessing. How long each answer took is printed under it.`}
+            {` model at ${info.quant}. Use it for short explanations, quick drafts, summarising something you paste in, and simple code. On its own it gets arithmetic, citations and long chains of reasoning wrong, and knows nothing recent, so for sums, rates, the weather and facts it looks the answer up instead of guessing. How long each answer took is printed under it.`}
           </P>
           <P>
             {"The context window is "}
@@ -106,11 +106,11 @@ export function AboutPage() {
         <Panel>
           <P>
             {
-              "Switch to the Agent persona and it can use tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
+              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a page reader and a notebook. A command such as "
             }
             <Code>/weather Lisbon</Code>
             {
-              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice."
+              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything, and a greeting is answered without asking it to choose. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice. How the answer is written, code first, a list, a few sentences or an explanation, is read from the message itself."
             }
           </P>
           <P>
@@ -198,10 +198,10 @@ export function AboutPage() {
             {" / "}
             <Code>{"<|im_end|>"}</Code>
             {
-              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at each persona's own temperature ("
+              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at each kind of answer's own temperature ("
             }
-            <Code>0.7</Code>
-            {" for Explainer) with a light "}
+            <Code>0.6</Code>
+            {" for an explanation) with a light "}
             <Code>repeat_penalty</Code>
             {". No dedup hack required."}
           </P>

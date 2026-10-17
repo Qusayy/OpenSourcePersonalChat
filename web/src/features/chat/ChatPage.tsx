@@ -11,15 +11,14 @@ import { dom, leave, newChat, openHistory, useRail } from "./controller";
 import { HistoryDialog } from "./HistoryDialog";
 import { COL } from "./layout";
 import { useChat } from "./run";
-import { SkillsList } from "./SkillsList";
 import { Thread } from "./Thread";
 
 /* The chat page: the empty sheet, the thread, and the composer.
 
    Two views, carried by data-view on <main>:
 
-     empty   headline, paragraph, the composer directly under them, then the
-             skills. Nothing is pinned; the page scrolls as one sheet.
+     empty   headline, paragraph, and the composer directly under them.
+             Nothing is pinned; the page scrolls as one sheet.
      thread  the composer sits above the status line and the thread scrolls
              above it.
 
@@ -101,9 +100,8 @@ export function ChatPage() {
       >
         {/* <main> is a flex column so the thread can take the spare height. On
             the empty sheet nothing should give: a flex item may shrink below
-            its content, and here that stacked the headline, the input and the
-            skills on top of one another on any screen too short to hold all
-            three. */}
+            its content, and here that stacked the headline and the input on
+            top of one another on any screen too short to hold both. */}
         <div
           id="stream-wrap"
           ref={wrap}
@@ -126,7 +124,7 @@ export function ChatPage() {
                 and the space between the model's name and the next word is
                 then a hair off. */}
             <p className="arrive text-3 text-pretty" style={{ "--i": 1 } as React.CSSProperties}>
-              {`Sums, conversions, the weather, a link boiled down, a quick draft. The writing comes from ${info.model} on this server; for facts, a skill or the Agent looks them up.`}
+              {`Sums, conversions, the weather, a link boiled down, a quick draft. The writing comes from ${info.model} on this server, and it looks things up by itself when a question needs it.`}
             </p>
           </section>
 
@@ -138,7 +136,6 @@ export function ChatPage() {
         </div>
 
         <Composer />
-        <SkillsList />
       </Main>
     </>
   );

@@ -22,7 +22,7 @@ import { reduced } from "@/lib/frame";
 import { Meter } from "@/lib/meter";
 import { proseRenderer } from "@/lib/prose-stream";
 import { sseFetch } from "@/lib/sse";
-import type { CardKind, ChatEvents, Skill } from "@/lib/types";
+import type { CardKind, ChatEvents } from "@/lib/types";
 import { livePhase, resetFigures, setContext, showFigures, traceSample } from "@/shell/figures";
 import { refreshConversations } from "@/state/queries";
 import { announce, holdPhase, toast } from "@/state/shell";
@@ -37,7 +37,6 @@ import {
   newKey,
   patchBot,
   patchNotice,
-  personaNow,
   removeItem,
   stepBot,
   type ThreadItem,
@@ -145,12 +144,6 @@ export function setView(view: View, { animate = false } = {}): void {
   else apply();
 }
 
-/** Arm a skill for the next message, or pass null to disarm. */
-export function setSkill(skill: Skill | null): void {
-  useChat.setState({ skill });
-  if (skill) dom.input?.focus();
-}
-
 /* ------------------------------------------------------------ streaming -- */
 
 const meter = new Meter({
@@ -236,7 +229,6 @@ export async function send(text: string): Promise<void> {
   scrollBottom();
   setView("thread", { animate: true });
 
-  const skill = useChat.getState().skill;
   const bot: BotItem = commit(() => addBot({ live: true }));
   scrollBottom();
   // The element React drew for this answer's text, empty. From here on it is
@@ -280,8 +272,6 @@ export async function send(text: string): Promise<void> {
       body: {
         message: text,
         conversation_id: useChat.getState().conversationId,
-        persona: personaNow(),
-        skill: skill ? skill.id : null,
       },
       signal: controller.signal,
       onEvent: (event, data) => {
@@ -412,7 +402,6 @@ export async function send(text: string): Promise<void> {
     const final = raw;
     if (!final.trim() && !botItem(bot.key)?.cards.length) removeItem(bot.key);
     else patchBot(bot.key, (b) => ({ ...b, live: false, content: final }));
-    setSkill(null); // a skill applies to one message, not the whole thread
     dom.input?.focus();
   }
 }
@@ -423,10 +412,7 @@ export async function send(text: string): Promise<void> {
 // conversation, where only its registry name was kept.
 let toolLabels: Map<string, string> | null = null;
 export function toolLabel(name: string): string {
-  toolLabels ??= new Map([
-    ...bootstrap().tools.map((t) => [t.name, t.label || t.name] as const),
-    ...bootstrap().skills.map((s) => [s.id, s.name || s.id] as const),
-  ]);
+  toolLabels ??= new Map(bootstrap().tools.map((t) => [t.name, t.label || t.name] as const));
   return toolLabels.get(name) ?? name;
 }
 
@@ -471,13 +457,7 @@ export async function loadConversation(cid: string): Promise<void> {
       });
       ctx = (m.prompt_tokens || 0) + (m.completion_tokens || 0) || ctx;
     }
-    commit(() =>
-      useChat.setState((s) => ({
-        conversationId: cid,
-        persona: convo.persona || s.persona,
-        items,
-      })),
-    );
+    commit(() => useChat.setState({ conversationId: cid, items }));
     setContext(ctx);
     setRail(false);
     setView("thread");
@@ -492,7 +472,6 @@ export function newChat(): void {
   if (useChat.getState().streaming) return;
   useChat.setState({ conversationId: null, items: [] });
   setView("empty");
-  setSkill(null);
   setContext(0);
   setRail(false);
   void refreshList();

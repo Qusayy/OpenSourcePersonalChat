@@ -3,9 +3,7 @@
 
    Most of the page is utility classes in its components. What is here is what
    they cannot say cleanly: motion that needs keyframes or a starting style,
-   the history drawer (a native dialog with its backdrop and its slide), the
-   persona row (whose widths are decided by the order two media rules come
-   in), and a mark that is placed by script. */
+   and the history drawer (a native dialog with its backdrop and its slide). */
 
 /* ---------------------------------------------------------------- theme -- */
 
@@ -51,105 +49,6 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
-    }
-  }
-
-  /* -------------------------------------------------------- personas -- */
-
-  .persona-row {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: var(--s-1);
-    min-width: 0;
-    margin-left: calc(var(--s-2) * -1);
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .persona-row::-webkit-scrollbar {
-    display: none;
-  }
-
-  /* Plain words. The chosen one is inked and ruled; weight stays the same so
-     choosing never shifts its neighbours. */
-  .persona {
-    appearance: none;
-    padding: var(--s-1) var(--s-2);
-    border: 0;
-    border-radius: var(--r-1);
-    background: none;
-    color: var(--ink-2);
-    font-size: var(--t-2);
-    white-space: nowrap;
-    cursor: pointer;
-    transition:
-      color var(--dur-1),
-      background var(--dur-1);
-  }
-  .persona:hover {
-    color: var(--ink);
-    background: var(--sheet-2);
-  }
-  .persona[aria-pressed="true"] {
-    color: var(--ink);
-    text-decoration: underline;
-    text-decoration-thickness: 2px;
-    text-underline-offset: 6px;
-  }
-
-  /* The mark under the chosen persona is one rule that slides to whichever is
-     chosen, rather than an underline that vanishes from one word and appears
-     under another. PersonaToggle places it; until it has, the plain underline
-     above does the job. */
-  .persona-ink {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 1px;
-    height: 2px;
-    background: var(--ink);
-    transform: translate(var(--x, 0px), var(--y, 0px)) scaleX(var(--w, 0));
-    transform-origin: left center;
-    pointer-events: none;
-  }
-  .persona-ink.moving {
-    transition: transform var(--dur-3) var(--ease);
-  }
-  .persona-row.inked .persona[aria-pressed="true"] {
-    text-decoration: none;
-  }
-
-  @media (max-width: 620px) {
-    /* Five words do not fit one row here, and a row that scrolls sideways hid
-       the last of them with nothing to say it was there. They wrap. */
-    .persona-row {
-      flex-wrap: wrap;
-      overflow: visible;
-    }
-  }
-  @media (pointer: coarse) {
-    .persona {
-      min-height: 44px;
-      padding-inline: var(--s-3);
-    }
-  }
-  /* At phone width the five personas fit one row once the padding between
-     them is trimmed; a full-width word is still a 44px-tall target. Wrapping
-     (set above) remains for screens too narrow even for that. This comes
-     after the touch rule on purpose: on a phone both apply, and this is the
-     padding that must win. */
-  @media (max-width: 620px) {
-    .persona-row {
-      gap: 0;
-      margin-left: -5px;
-    }
-    .persona {
-      padding-inline: 5px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .persona-ink {
-      transition: none !important;
     }
   }
 

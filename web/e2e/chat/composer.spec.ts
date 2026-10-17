@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { forward, reseed } from "../support";
-import { answer, ask, fakeChat, openStored, posts, question } from "./helpers";
+import { ask, fakeChat, openStored, posts, question } from "./helpers";
 
-/* The composer: the input, Send, the personas under it, the skills that can
-   be armed for one message, and the two ways to start over. */
+/* The composer: the input, Send, and the two ways to start over. There is
+   nothing to choose before sending: no persona, no skill, no "/" palette. */
 
 test.beforeEach(async ({ page }) => {
   reseed();
@@ -107,110 +107,28 @@ test.describe("the input", () => {
     await expect(page.getByLabel(/^Message /)).toHaveAttribute("id", "input");
     await expect(page.locator("#input")).toHaveAttribute("aria-describedby", "input-hint");
     await expect(page.locator("#input-hint")).toHaveText(
-      "/ for tools. Enter sends, Shift and Enter adds a line.",
+      "Shift Enter for a new line. Enter sends.",
     );
   });
 });
 
-test.describe("personas", () => {
-  test("one is chosen, marked by a rule under it, and sent with the message", async ({ page }) => {
+test.describe("one agent", () => {
+  test("a message is sent as it is, with nothing chosen beside it", async ({ page }) => {
     await page.goto("/");
-    const row = page.locator("#persona-row");
-    await expect(row.locator('[aria-pressed="true"]')).toHaveCount(1);
-    await expect(row.locator('[aria-pressed="true"]')).toHaveAttribute("data-persona", "explainer");
-    await expect(row).toHaveClass(/inked/);
-
-    const code = row.locator('[data-persona="code"]');
-    await code.click();
-    await expect(code).toHaveAttribute("aria-pressed", "true");
-    await expect(row.locator('[aria-pressed="true"]')).toHaveCount(1);
-    // The rule sits under the chosen word, as wide as its text.
-    await expect
-      .poll(() =>
-        page.evaluate(() => {
-          const chosen = document.querySelector<HTMLElement>('#persona-row [aria-pressed="true"]');
-          const ink = document.querySelector<HTMLElement>("#persona-row .persona-ink");
-          if (!chosen || !ink) return null;
-          const a = chosen.getBoundingClientRect();
-          const b = ink.getBoundingClientRect();
-          const pad = Number.parseFloat(getComputedStyle(chosen).paddingLeft);
-          return {
-            left: Math.abs(b.left - (a.left + pad)) < 1,
-            width: Math.abs(b.width - (a.width - pad * 2)) < 1,
-            under: b.top > a.top + a.height / 2 && b.bottom <= a.bottom + 1,
-          };
-        }),
-      )
-      .toEqual({ left: true, width: true, under: true });
-
+    await expect(page.locator("#persona-row")).toHaveCount(0);
+    await expect(page.locator("#skill-grid")).toHaveCount(0);
+    await expect(page.locator("#skill-active")).toHaveCount(0);
     await ask(page, "write a loop");
-    await expect.poll(async () => (await posts(page)).at(-1)).toMatchObject({ persona: "code" });
+    const sent = (await posts(page)).at(-1);
+    expect(Object.keys(sent ?? {}).sort()).toEqual(["conversation_id", "message"]);
   });
 
-  test("the choice is kept for the next visit, as the bare id", async ({ page }) => {
+  test("a slash is only a character: no palette opens", async ({ page }) => {
     await page.goto("/");
-    await page.locator('#persona-row [data-persona="concise"]').click();
-    expect(await page.evaluate(() => localStorage.getItem("aurora.persona"))).toBe("concise");
-    await page.reload();
-    await expect(page.locator('#persona-row [aria-pressed="true"]')).toHaveAttribute(
-      "data-persona",
-      "concise",
-    );
-  });
-
-  test("a stored conversation brings its own persona with it", async ({ page }) => {
-    await page.goto("/");
-    await openStored(page, 0);
-    await expect(page.locator('#persona-row [aria-pressed="true"]')).toHaveAttribute(
-      "data-persona",
-      "agent",
-    );
-  });
-});
-
-test.describe("skills", () => {
-  test("picking a skill arms it for one message", async ({ page }) => {
-    await page.goto("/");
-    const chip = page.locator("#skill-active");
-    await expect(chip).toBeHidden();
-    const first = page.locator("#skill-grid button").first();
-    const name = (await first.locator("span").first().textContent()) ?? "";
-    const id = await first.getAttribute("data-skill");
-    await first.click();
-
-    await expect(chip).toBeVisible();
-    await expect(chip).toContainText(`Skill${name}`);
-    await expect(page.locator("#input")).toBeFocused();
-    await expect(page.locator("#input")).not.toHaveAttribute("placeholder", "Ask something…");
-
-    await ask(page, "https://example.org/notes");
-    await expect.poll(async () => (await posts(page)).at(-1)).toMatchObject({ skill: id });
-    await answer(page, "Summary.");
-    // A skill applies to one message, not the whole thread.
-    await expect(chip).toBeHidden();
-    await expect(page.locator("#input")).toHaveAttribute("placeholder", "Ask something…");
-  });
-
-  test("Clear disarms it", async ({ page }) => {
-    await page.goto("/");
-    await page.locator("#skill-grid button").nth(1).click();
-    await page.locator("#skill-active").getByRole("button", { name: "Clear" }).click();
-    await expect(page.locator("#skill-active")).toBeHidden();
-    await expect(page.locator("#input")).toHaveAttribute("placeholder", "Ask something…");
-    await ask(page, "plain");
-    await expect.poll(async () => (await posts(page)).at(-1)).toMatchObject({ skill: null });
-  });
-
-  test("each row says what the skill runs through", async ({ page }) => {
-    await page.goto("/");
-    const rows = page.locator("#skill-grid button");
-    await expect(rows).not.toHaveCount(0);
-    for (const row of await rows.all()) {
-      await expect(row.locator("span").nth(2)).toContainText("answer");
-    }
-    // The list is on the empty sheet only.
-    await openStored(page, 1);
-    await expect(page.locator("#skills")).toBeHidden();
+    await page.locator("#input").fill("/");
+    await page.locator("#input").press("End");
+    await expect(page.locator("#palette")).toHaveCount(0);
+    await expect(page.locator('[role="listbox"]')).toHaveCount(0);
   });
 });
 

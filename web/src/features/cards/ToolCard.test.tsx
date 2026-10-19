@@ -251,6 +251,66 @@ describe("each kind of card, with everything the tool can send", () => {
     );
   });
 
+  it("a file read names it, its version and its length, and opens it in the project", () => {
+    const el = draw("file", { ...FULL.file, action: "read" }, { label: "Read file", ms: 2 });
+    expect(el.querySelector("figcaption")?.textContent).toContain("Read fileapp.py");
+    const chip = el.querySelector(".file-chip");
+    expect(chip?.getAttribute("data-file")).toBe("app.py");
+    expect(words(chip as Element)).toBe("app.pyversion 2 · 40 lines");
+    expect(el.querySelector('[data-part="diff"]')).toBeNull();
+    // A stored read from before the action was sent reads the same way.
+    expect(draw("file", FULL.file).querySelector("figcaption")?.textContent).toContain("Read file");
+  });
+
+  it("a file written says whether it was created, and shows no code: the panel has it", () => {
+    const write = { path: "app.py", lang: "python", content: "x = 1\n", version: 1, lines: 1 };
+    const created = draw("file", { ...write, action: "write", created: true });
+    expect(created.querySelector("figcaption")?.textContent).toContain("Created file");
+    const rewritten = draw("file", { ...write, action: "write", created: false, version: 4 });
+    expect(rewritten.querySelector("figcaption")?.textContent).toContain("Wrote file");
+    expect(words(rewritten.querySelector(".file-chip") as Element)).toContain("version 4");
+    expect(rewritten.querySelector(".codeblock")).toBeNull();
+  });
+
+  it("an edit shows the lines it took out and the lines it put in", () => {
+    const el = draw("file", {
+      path: "app/main.py",
+      lang: "python",
+      version: 3,
+      lines: 20,
+      action: "edit",
+      line: 12,
+      removed: ['@app.get("/")'],
+      added: ["app = FastAPI()", "", '@app.get("/")'],
+    });
+    expect(el.querySelector("figcaption")?.textContent).toContain("Edited fileapp/main.py");
+    expect(words(el.querySelector(".file-chip") as Element)).toBe(
+      "app/main.pyversion 3 · 20 lines",
+    );
+    const diff = el.querySelector('[data-part="diff"]') as Element;
+    expect(diff.querySelector("header")?.textContent).toBe("from line 12");
+    const rows = [...diff.querySelectorAll("[data-sign]")];
+    expect(rows.map((r) => r.getAttribute("data-sign"))).toEqual(["-", "+", "+", "+"]);
+    expect(rows.map((r) => r.className)).toEqual(["diff-del", "diff-add", "diff-add", "diff-add"]);
+    expect(rows.map((r) => r.textContent)).toEqual([
+      '- @app.get("/")\n',
+      "+ app = FastAPI()\n",
+      "+ \n",
+      '+ @app.get("/")\n',
+    ]);
+    // The code is text: markup in it is shown, not run.
+    const shown = draw("file", { action: "edit", removed: ["<b>x</b>"], added: [] });
+    expect(shown.querySelector("b")).toBeNull();
+    expect(shown.querySelector("[data-sign]")?.textContent).toBe("- <b>x</b>\n");
+  });
+
+  it("a long edit is cut, and says how much more there was", () => {
+    const added = Array.from({ length: 50 }, (_, i) => `line ${i}`);
+    const el = draw("file", { path: "a.py", action: "edit", removed: ["old"], added });
+    expect(el.querySelectorAll("[data-sign]")).toHaveLength(40);
+    expect(words(el)).toContain("11 more lines changed; the whole file is in the project.");
+  });
+
   it("text stats scale each term's bar to the commonest term", () => {
     const el = draw("textstats", FULL.textstats);
     expect(words(el)).toContain("108words12sentences0.5min read9.0words per sentence");

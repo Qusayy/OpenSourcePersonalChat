@@ -18,7 +18,7 @@ export function forward(route: Route): Promise<APIResponse> {
 }
 
 /**
- * Put the database back to the three seeded conversations (e2e/seed.py). The
+ * Put the database back to the four seeded conversations (e2e/seed.py). The
  * server keeps running; it reads conversations per request. Call it from a
  * `beforeEach` in any spec that sends, deletes, or counts conversations.
  */

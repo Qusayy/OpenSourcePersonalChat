@@ -19,5 +19,7 @@ def blank(**known) -> dict:
         "gen_tps": None,
         "total_ms": None,
         "rss_mb": None,
+        "finish": None,
+        "word": None,
         **known,
     }

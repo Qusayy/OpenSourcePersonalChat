@@ -17,8 +17,8 @@ Design notes that matter on a 2 vCPU box:
 The model can also live in another process: with ``AURORA_LLM_URL`` set, every
 pass goes to a llama-server over HTTP (``app/llm/server.py``) and nothing here
 loads weights. All of the above still holds, because the slot, the queue and
-the worker thread are this module's and only the four places that touch the
-model change: loading, counting tokens, writing, and the grammar. A thread that
+the worker thread are this module's and only the three places that touch the
+model change: loading, counting tokens and writing. A thread that
 stops reading closes its connection, and the server stops writing at its next
 token.
 """
@@ -26,7 +26,6 @@ token.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import platform
 import threading
@@ -34,7 +33,7 @@ import time
 import uuid
 from collections import OrderedDict, deque
 from contextlib import aclosing, contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Iterator
 
 from ..chatml import render_chatml
@@ -64,37 +63,48 @@ SAMPLING_KEYS = (
 
 # What llama-cpp-python uses for a sampling setting a pass does not name. A
 # llama-server has defaults of its own (repeat_penalty 1.1, temperature 0.8),
-# and the routing pass names only three settings; sent these, a pass is the
-# same pass on either engine.
+# and a pass that named only some settings would get those for the rest; sent
+# these, a pass is the same pass on either engine.
 LIBRARY_DEFAULTS = {"temperature": 0.2, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.0}
 
 
-@dataclass(frozen=True)
-class Completion:
-    """What one grammar-constrained pass said, and what it cost.
+class Stops:
+    """Ends a stream of text at the first of some strings, as a model server
+    does: the string itself is not passed on, and neither is anything that
+    could still turn out to be the start of one.
 
-    The token and timing figures are None when the pass never reached the
-    model: the engine was not ready, or the pass failed on the way in.
-    """
+    Used where the app reads the model's text itself (the model in this
+    process, the mock, a script). A model server stops by itself and says
+    which string stopped it."""
 
-    # The reply as a JSON object, or None if it was not one.
-    parsed: dict | None = None
-    raw: str = ""
-    # From the call to the end, the wait for the slot included.
-    ms: float = 0.0
-    # Why there is nothing to read, when there is nothing.
-    error: str | None = None
-    cancelled: bool = False
-    prompt_tokens: int | None = None
-    # Of the prompt, what the model read and what it took from its cache, as a
-    # model server reports them. None where nothing reported them.
-    read_tokens: int | None = None
-    cached_tokens: int | None = None
-    completion_tokens: int | None = None
-    queue_wait_ms: float | None = None
-    ttft_ms: float | None = None
-    # Inside the slot: reading the prompt and writing the reply.
-    total_ms: float | None = None
+    def __init__(self, words: list[str] | None) -> None:
+        self.words = [w for w in (words or ()) if w]
+        self.word: str | None = None
+        self._held = ""
+
+    def feed(self, text: str) -> str:
+        """What of ``text`` may be passed on now."""
+        if self.word is not None:
+            return ""
+        buf = self._held + text
+        found = [(buf.find(w), w) for w in self.words if w in buf]
+        if found:
+            at, self.word = min(found)
+            self._held = ""
+            return buf[:at]
+        keep = 0
+        for w in self.words:
+            for n in range(min(len(w) - 1, len(buf)), 0, -1):
+                if buf.endswith(w[:n]):
+                    keep = max(keep, n)
+                    break
+        self._held = buf[len(buf) - keep:] if keep else ""
+        return buf[:len(buf) - keep]
+
+    def flush(self) -> str:
+        """What was held back, once the text has ended without a stop."""
+        out, self._held = self._held, ""
+        return "" if self.word is not None else out
 
 
 class Stop:
@@ -142,7 +152,6 @@ class Engine:
         self._lock = asyncio.Lock()
         self._waiting: deque[str] = deque()
         self._cancels: dict[str, Stop] = {}
-        self._grammars: dict[int, Any] = {}
         self._busy = False
         self._completed = 0
         # The run that is holding the slot across its passes, if one is, and
@@ -293,28 +302,12 @@ class Engine:
             return max(1, len(text) // 4)  # mock-mode estimate
         return len(self._llm.tokenize(text.encode("utf-8"), add_bos=False, special=True))
 
-    def prompt_tokens(self, messages: list[dict]) -> int:
-        return self.count_tokens(render_chatml(messages))
+    def render(self, messages: list[dict], prefix: str = "") -> str:
+        """The prompt for ``messages``, as this engine's model reads it."""
+        return render_chatml(messages, prefix=prefix, thinking=getattr(self.cfg, "think_mode", None))
 
-    def fit_context(
-        self, messages: list[dict], max_tokens: int
-    ) -> tuple[list[dict], int, int]:
-        """Drop oldest turns until the prompt fits. The system message stays.
-
-        Returns (messages, prompt_tokens, dropped_count).
-        """
-        budget = self.cfg.n_ctx - max_tokens - self.cfg.reply_headroom
-        system = [m for m in messages if m["role"] == "system"][:1]
-        rest = [m for m in messages if m["role"] != "system"]
-        dropped = 0
-
-        while True:
-            candidate = system + rest
-            used = self.prompt_tokens(candidate)
-            if used <= budget or len(rest) <= 1:
-                return candidate, used, dropped
-            rest.pop(0)
-            dropped += 1
+    def prompt_tokens(self, messages: list[dict], prefix: str = "") -> int:
+        return self.count_tokens(self.render(messages, prefix))
 
     # -- info ---------------------------------------------------------------
 
@@ -384,150 +377,91 @@ class Engine:
         messages: list[dict],
         sampling: dict,
         *,
-        grammar: str | None = None,
+        prefix: str = "",
         seed: int | None = None,
         stop: list[str] | None = None,
         reading: Reading | None = None,
     ) -> Iterator[str]:
         """Yield text deltas from the model, wherever it is, or from the mock
-        generator. A model server also fills in ``reading``: how much of the
-        prompt it read and how much it had in its cache. Nothing else reports
-        that, and it is left empty."""
+        generator, and fill in ``reading``: how the reply ended, and, from a
+        model server, how much of the prompt it read and how much it had in
+        its cache."""
+        reading = reading if reading is not None else Reading()
+        limit = sampling.get("max_tokens")
         if self.cfg.mock:
-            yield from mock.chunks(grammar, self.cfg.mock_delay)
+            yield from self._stopped_at(
+                mock.chunks(self.cfg.mock_delay, getattr(self.cfg, "think_mode", "none"), prefix),
+                stop, limit, reading,
+            )
             return
 
+        prompt = self.render(messages, prefix)
         named: dict[str, Any] = {k: sampling[k] for k in SAMPLING_KEYS if k in sampling}
         if self._server is not None:
             # The server is sent llama-cpp-python's defaults for what the pass
-            # leaves unnamed, and the grammar as text: it compiles its own.
-            body: dict[str, Any] = {"messages": messages, **LIBRARY_DEFAULTS, **named}
-            if grammar is not None:
-                body["grammar"] = grammar
+            # leaves unnamed. It stops at a stop string by itself, and says
+            # which one: a reply cut short here would leave tokens in its
+            # cache that the next prompt does not have.
+            body: dict[str, Any] = {"prompt": prompt, **LIBRARY_DEFAULTS, **named}
+            if "max_tokens" in body:
+                body["n_predict"] = body.pop("max_tokens")
             if seed is not None:
                 body["seed"] = seed
             if stop:
-                body["stop"] = stop
+                body["stop"] = list(stop)
             yield from self._server.stream(body, reading)
+            if reading.finish == "word" and reading.word is None and stop and len(stop) == 1:
+                reading.word = stop[0]
             return
 
         # Only what the caller named is passed on. A pass that sets two of
         # these gets the library's own defaults for the rest, not ours.
         kwargs: dict[str, Any] = dict(named)
-        if grammar is not None:
-            kwargs["grammar"] = self._grammar(grammar)
         if seed is not None:
             kwargs["seed"] = seed
-        if stop:
-            kwargs["stop"] = stop
-        stream = self._llm.create_chat_completion(messages=messages, stream=True, **kwargs)
-        try:
+        stream = self._llm.create_completion(prompt=prompt, stream=True, **kwargs)
+        ended = {"limit": False}
+
+        def texts() -> Iterator[str]:
             for chunk in stream:
-                delta = chunk["choices"][0].get("delta") or {}
-                text = delta.get("content")
-                if text:
-                    yield text
+                choice = chunk["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    ended["limit"] = True
+                if choice.get("text"):
+                    yield choice["text"]
+
+        try:
+            yield from self._stopped_at(texts(), stop, None, reading)
+            if reading.finish == "eos" and ended["limit"]:
+                reading.finish = "limit"
         finally:
             close = getattr(stream, "close", None)
             if close is not None:
                 close()
 
-    # -- constrained completion (tool routing) ------------------------------
-
-    def _grammar(self, text: str):
-        """Compile and cache a GBNF grammar."""
-        from llama_cpp import LlamaGrammar
-
-        key = hash(text)
-        cached = self._grammars.get(key)
-        if cached is None:
-            cached = LlamaGrammar.from_string(text, verbose=False)
-            self._grammars[key] = cached
-        return cached
-
-    async def stream_json(
-        self,
-        messages: list[dict],
-        grammar_text: str,
-        max_tokens: int | None = None,
-        *,
-        request_id: str | None = None,
-        seed: int | None = None,
-        held: bool = False,
-    ) -> AsyncIterator[tuple[str, Any]]:
-        """One short grammar-constrained pass, with its wait made visible.
-
-        Yields ``("queue", payload)`` while the pass waits for the slot, then
-        exactly one ``("completion", Completion)``.
-
-        It is an ordinary pass: it queues, runs on a worker thread and gives
-        the slot back from that thread, like an answer. A 2 vCPU box must
-        never run two inferences at once, routing included, and a caller that
-        goes away mid-pass must not be able to free the slot while llama.cpp
-        is still working.
-        """
-        t0 = time.perf_counter()
-        # The grammar decides the shape; greedy picks the content.
-        sampling = {
-            "temperature": 0.0,
-            "top_k": 1,
-            "max_tokens": max_tokens or self.cfg.route_max_tokens,
-        }
-        result = Completion(error="the pass ended without saying anything")
-        try:
-            async with aclosing(
-                self.stream_chat(
-                    messages, sampling, request_id, grammar=grammar_text, seed=seed, held=held
-                )
-            ) as stream:
-                async for event, data in stream:
-                    if event == "queue":
-                        yield event, data
-                    elif event == "error":
-                        result = Completion(error=data["message"])
-                    elif event == "done":
-                        raw = data["text"].strip()
-                        try:
-                            parsed = json.loads(raw)
-                        except json.JSONDecodeError:
-                            parsed = None
-                        result = Completion(
-                            parsed=parsed if isinstance(parsed, dict) else None,
-                            raw=raw,
-                            cancelled=data["cancelled"],
-                            prompt_tokens=data["prompt_tokens"],
-                            read_tokens=data["read_tokens"],
-                            cached_tokens=data["cached_tokens"],
-                            completion_tokens=data["completion_tokens"],
-                            queue_wait_ms=data["queue_wait_ms"],
-                            ttft_ms=data["ttft_ms"],
-                            total_ms=data["total_ms"],
-                        )
-        except Exception as exc:  # noqa: BLE001 — a decision that fails is "no decision", never a broken chat
-            result = Completion(error=f"{type(exc).__name__}: {exc}")
-        yield "completion", replace(result, ms=(time.perf_counter() - t0) * 1000)
-
-    async def complete_json(
-        self,
-        messages: list[dict],
-        grammar_text: str,
-        max_tokens: int | None = None,
-        *,
-        request_id: str | None = None,
-        seed: int | None = None,
-        held: bool = False,
-    ) -> Completion:
-        """``stream_json`` for a caller with nowhere to show a queue."""
-        result = Completion(error="the pass ended without saying anything")
-        async with aclosing(
-            self.stream_json(
-                messages, grammar_text, max_tokens, request_id=request_id, seed=seed, held=held
-            )
-        ) as stream:
-            async for event, data in stream:
-                if event == "completion":
-                    result = data
-        return result
+    @staticmethod
+    def _stopped_at(
+        pieces: Iterator[str], stop: list[str] | None, limit: int | None, reading: Reading,
+    ) -> Iterator[str]:
+        """Text the app reads itself, ended at a stop string or after
+        ``limit`` pieces, with how it ended written into ``reading``."""
+        stops = Stops(stop)
+        count = 0
+        for piece in pieces:
+            if limit is not None and count >= limit:
+                reading.finish = "limit"
+                return
+            count += 1
+            out = stops.feed(piece)
+            if out:
+                yield out
+            if stops.word is not None:
+                reading.finish, reading.word = "word", stops.word
+                return
+        rest = stops.flush()
+        if rest:
+            yield rest
+        reading.finish = "eos"
 
     async def stream_chat(
         self,
@@ -535,16 +469,18 @@ class Engine:
         sampling: dict,
         request_id: str | None = None,
         *,
-        grammar: str | None = None,
+        prefix: str = "",
         seed: int | None = None,
         stop: list[str] | None = None,
         held: bool = False,
     ) -> AsyncIterator[tuple[str, dict]]:
         """Yield (event, payload) tuples: queue | start | token | done | error.
 
-        One pass through the model, whatever it is for. ``grammar`` holds the
-        output to a GBNF grammar, ``seed`` makes the sampling repeatable and
-        ``stop`` ends the output at any of the given strings.
+        One pass through the model, whatever it is for. ``prefix`` is the part
+        of the answer already written, which the pass goes on from. ``seed``
+        makes the sampling repeatable and ``stop`` ends the output at any of
+        the given strings; ``done`` says how it ended (``finish``: word, eos,
+        limit or cancelled) and at which string (``word``).
 
         ``held`` says the run this pass belongs to took the slot with
         ``take_slot`` and is keeping it. The pass then does not wait for the
@@ -590,7 +526,7 @@ class Engine:
                     # up by the block at the end.
                     yield "done", blank(
                         text="", cancelled=True, queue_wait_ms=queue_wait_ms,
-                        rss_mb=process_rss_mb(),
+                        rss_mb=process_rss_mb(), finish="cancelled", word=None,
                     )
                     return
                 self._busy = True
@@ -598,7 +534,7 @@ class Engine:
                 events: asyncio.Queue = asyncio.Queue()
                 SENTINEL = object()
 
-                prompt_tok = self.prompt_tokens(messages)
+                prompt_tok = self.prompt_tokens(messages, prefix)
 
                 def emit(item) -> None:
                     loop.call_soon_threadsafe(events.put_nowait, item)
@@ -611,7 +547,7 @@ class Engine:
                     reading = Reading()
                     try:
                         for text in self._iter_chunks(
-                            messages, sampling, grammar=grammar, seed=seed, stop=stop,
+                            messages, sampling, prefix=prefix, seed=seed, stop=stop,
                             reading=reading,
                         ):
                             if stopped.is_set() or gone.is_set():
@@ -650,6 +586,9 @@ class Engine:
                                     "gen_tps": round(max(produced - 1, 0) / gen_s, 2),
                                     "total_ms": round((now - t_start) * 1000, 1),
                                     "rss_mb": process_rss_mb(),
+                                    "finish": "cancelled" if stopped.is_set() or gone.is_set()
+                                    else reading.finish,
+                                    "word": reading.word,
                                 },
                             )
                         )

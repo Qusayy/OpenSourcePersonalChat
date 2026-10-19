@@ -1,10 +1,11 @@
-"""A conversation's project: every version of every file its answers wrote.
+"""A conversation's project: every version of every file the model wrote.
 
-A file is kept when the answer that writes it closes its block. Writing the
-same path again keeps a new version beside the old ones; the newest of each
-path is the project as it stands, and is what the panel shows and the zip
-holds. A project is held to the limits in ``app/projects/paths.py``: a file
-past them is not kept, and says so.
+A file is kept when the tool that writes it (``write_file``, ``edit_file``)
+is called. Writing the same path again keeps a new version beside the old
+ones, and only of that path; the newest of each path is the project as it
+stands, and is what the panel shows and the zip holds. A file written again
+exactly as it stands is not a new version. A project is held to the limits
+in ``app/projects/paths.py``: a file past them is not kept, and says so.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ def add(cid: str, path: str, content: str, *, lang: str, run_id: str | None = No
     if size > paths.MAX_FILE_BYTES:
         return {"kept": False, "why": f"{path} is larger than {paths.MAX_FILE_BYTES // 1024} KB"}
     now = latest(cid)
+    if path in now and now[path]["content"] == content:
+        return {"kept": False, "why": f"{path} already has exactly this content"}
     if path not in now and len(now) >= paths.MAX_FILES:
         return {"kept": False, "why": f"the project already has {paths.MAX_FILES} files"}
     total = sum(f["bytes"] for p, f in now.items() if p != path) + size

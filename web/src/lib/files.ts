@@ -3,6 +3,11 @@
  * file folded into one line that opens it in the project panel.
  *
  * The two readers are held to one set of cases, in __fixtures__/file-blocks.json.
+ *
+ * Answers no longer write their files this way: the model writes them with
+ * write_file and edit_file. The reading is kept for the answers stored
+ * before then, whose files the project kept from their text, so their chips
+ * still open them.
  */
 
 const PATH = String.raw`(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+`;

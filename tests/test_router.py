@@ -1,29 +1,16 @@
-"""How a message's tools are chosen: by the user's own command, or by the model.
+"""What the user decides themselves: a slash command names its tool.
 
 Needs the app's own requirements; without them the whole module is skipped.
-A command is read from the text. The model's choice is a pass made
-elsewhere; what is tested here is what that pass is held to and how its
-reply is read.
+Everything else is the model's to decide, in its own reply; nothing here
+reads a message for a word that would pick a tool.
 """
 
 from __future__ import annotations
 
-import json
 import unittest
 
 try:
-    from app.agent.route import (
-        ask_reply,
-        decision_grammar,
-        decision_limit,
-        free_route,
-        parse_action,
-        parse_slash,
-    )
-    from app.llm import Completion
-    from app.tools.base import available
-    from app.tools.grammar import decision_ceiling
-    from tests import support
+    from app.agent.route import free_route, parse_slash, program_of
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
@@ -81,134 +68,23 @@ class FreeRouteTests(unittest.TestCase):
                 self.assertEqual(free_route(text), (None, None))
 
 
-class DecisionTests(unittest.TestCase):
-    """What a choice is held to. What the model reads when it chooses is the
-    run's transcript, tested with it."""
+class PythonCommandTests(unittest.TestCase):
+    def test_a_program_given_with_the_command_is_run_as_it_was_given(self) -> None:
+        call, _ = parse_slash("/python\n```python\nprint(sum(range(101)))\n```")
+        self.assertEqual((call.name, call.args, call.via),
+                         ("python", {"code": "print(sum(range(101)))\n"}, "slash"))
 
-    def setUp(self) -> None:
-        support.with_settings(self, allow_outbound=True)
+    def test_a_program_without_a_fence_is_run_as_typed(self) -> None:
+        call, _ = parse_slash("/py print(1)")
+        self.assertEqual(call.args, {"code": "print(1)"})
 
-    def test_it_is_given_enough_tokens_to_finish_the_longest_reply(self) -> None:
-        tools = available()
-        self.assertEqual(decision_limit(tools), decision_ceiling(tools))
-        # A setting above that is honoured; one below it is not, because a
-        # reply cut off before it closes is not a reply.
-        support.with_settings(self, route_max_tokens=5000)
-        self.assertEqual(decision_limit(tools), 5000)
-        support.with_settings(self, route_max_tokens=1)
-        self.assertEqual(decision_limit(tools), decision_ceiling(tools))
+    def test_a_command_with_nothing_to_run_is_not_one(self) -> None:
+        self.assertIsNone(parse_slash("/python   ")[0])
 
-    def test_with_outgoing_requests_off_only_local_tools_are_offered(self) -> None:
-        support.with_settings(self, allow_outbound=False)
-        grammar = decision_grammar(available())
-        self.assertIn("t-calculator", grammar)
-        self.assertNotIn("t-weather", grammar)
+    def test_a_fenced_program_is_found_in_text(self) -> None:
+        self.assertEqual(program_of("x\n```python\nprint(2)\n```\ny"), "print(2)\n")
+        self.assertEqual(program_of("no code"), "")
 
-    def test_asking_the_user_is_on_offer(self) -> None:
-        self.assertIn("t-ask", decision_grammar(available()))
-
-    def test_writing_files_is_on_offer(self) -> None:
-        from tests.gbnf import Grammar
-
-        grammar = Grammar(decision_grammar(available()))
-        self.assertTrue(grammar.accepts('{"tool": "write_files"}'))
-        self.assertLessEqual(len('{"tool": "write_files"}'), decision_limit(available()))
-
-    def test_the_question_is_written_back_as_the_grammar_has_the_model_write_it(self) -> None:
-        from tests.gbnf import Grammar
-
-        grammar = Grammar(decision_grammar(available()))
-        for question in ("Which city do you mean?", 'The "old" town or the new?', "¿Qué ciudad?"):
-            with self.subTest(question=question):
-                self.assertTrue(grammar.accepts(ask_reply(question)))
-
-
-
-class SkillActionTests(unittest.TestCase):
-    """A skill the model was offered, chosen by its name."""
-
-    def test_a_skill_it_was_offered_is_a_skill_with_the_inputs_it_gave(self) -> None:
-        from app.agent.skills import SKILLS
-
-        reply = '{"tool": "compare", "args": {"a": "Python", "b": "Rust"}}'
-        action = parse_action(said(reply), {"compare": SKILLS["compare"]})
-        self.assertEqual((action.kind, action.skill, action.values),
-                         ("skill", SKILLS["compare"], {"a": "Python", "b": "Rust"}))
-
-    def test_a_skill_it_was_not_offered_is_no_choice(self) -> None:
-        action = parse_action(said('{"tool": "compare", "args": {"a": "x", "b": "y"}}'))
-        self.assertEqual((action.kind, action.note), ("final", "model picked an unknown tool: compare"))
-
-
-def said(raw: str = "", **more) -> Completion:
-    """A reply as the engine hands it back."""
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = None
-    return Completion(parsed=parsed if isinstance(parsed, dict) else None, raw=raw, ms=12.5, **more)
-
-
-class ParseActionTests(unittest.TestCase):
-    """Reading the model's reply as something to do."""
-
-    def test_a_call_to_a_real_tool_is_a_call_to_make(self) -> None:
-        raw = '{"tool": "weather", "args": {"location": "Paris"}}'
-        action = parse_action(said(raw))
-        self.assertEqual((action.kind, action.raw, action.note), ("tool", raw, None))
-        self.assertEqual(
-            (action.call.name, action.call.args, action.call.via, action.call.ms, action.call.raw),
-            ("weather", {"location": "Paris"}, "model", 12.5, raw),
-        )
-
-    def test_write_files_is_an_answer_written_as_files(self) -> None:
-        action = parse_action(said('{"tool": "write_files"}'))
-        self.assertEqual(action.kind, "files")
-        self.assertIsNone(action.call)
-
-    def test_none_is_the_end_of_choosing(self) -> None:
-        action = parse_action(said('{"tool": "none"}'))
-        self.assertEqual((action.kind, action.call, action.note), ("final", None, None))
-
-    def test_a_question_is_a_question_to_put_to_the_user(self) -> None:
-        raw = '{"tool": "ask", "args": {"question": " Which city do you mean? "}}'
-        action = parse_action(said(raw))
-        self.assertEqual(
-            (action.kind, action.question, action.call, action.raw, action.note),
-            ("ask", "Which city do you mean?", None, raw, None),
-        )
-
-    def test_asking_nothing_is_not_asking(self) -> None:
-        for raw in ('{"tool": "ask", "args": {"question": "  "}}', '{"tool": "ask", "args": {}}',
-                    '{"tool": "ask"}', '{"tool": "ask", "args": {"question": 7}}'):
-            with self.subTest(raw=raw):
-                action = parse_action(said(raw))
-                self.assertEqual((action.kind, action.question), ("final", None))
-                self.assertEqual(action.note, "asked without a question")
-
-    def test_a_tool_that_does_not_exist_is_no_call_and_is_noted(self) -> None:
-        action = parse_action(said('{"tool": "telescope", "args": {}}'))
-        self.assertEqual((action.kind, action.call), ("final", None))
-        self.assertEqual(action.note, "model picked an unknown tool: telescope")
-
-    def test_a_reply_cut_off_before_it_closed_is_no_call_and_is_noted(self) -> None:
-        cut = '{"tool": "wikipedia", "args": {"query": "the long'
-        action = parse_action(said(cut))
-        self.assertEqual((action.kind, action.raw), ("final", cut))
-        self.assertEqual(action.note, "the reply was not a complete JSON object")
-
-    def test_a_pass_that_failed_or_never_ran_is_no_call_and_has_its_own_reason(self) -> None:
-        for reply in (said(error="ValueError: boom"), said(), said(cancelled=True)):
-            with self.subTest(reply=reply):
-                action = parse_action(reply)
-                self.assertEqual((action.kind, action.call, action.note), ("final", None, None))
-
-    def test_a_call_with_no_usable_arguments_is_a_call_with_none(self) -> None:
-        for raw in ('{"tool": "clock"}', '{"tool": "clock", "args": null}',
-                    '{"tool": "clock", "args": "UTC"}', '{"tool": "clock", "args": []}'):
-            with self.subTest(raw=raw):
-                action = parse_action(said(raw))
-                self.assertEqual((action.kind, action.call.name, action.call.args), ("tool", "clock", {}))
 
 if __name__ == "__main__":
     unittest.main()

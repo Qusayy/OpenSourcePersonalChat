@@ -3,15 +3,19 @@
     AURORA_DB_PATH=/path/to/test.db python web/e2e/seed.py
 
 Run from the repository root. Whatever the database held is removed first, so
-every run starts from the same three conversations:
+every run starts from the same four conversations, newest first:
 
   1. "Every figure a tool can draw": one answer carrying all nine cards, the
      four offline ones computed by the real tools and the four network ones
      from fixed payloads (the tests must not depend on the internet), plus a
-     failed call.
+     failed call. Kept as answers were before their replies were: its cards
+     are drawn above its text.
   2. A long pasted question and an answer that uses every kind of markdown the
      renderer supports.
   3. A short exchange in a right-to-left script.
+  4. A crash fixed in a project, kept as the model said it: what it thought,
+     what it said, an edit and a run where it made them, and what it said
+     after. The server reads that order back from what the answer was sent.
 
 The server can be running: SQLite's write-ahead log lets a second process
 write, and the pages read conversations per request.
@@ -30,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 if not os.environ.get("AURORA_DB_PATH"):
     sys.exit("AURORA_DB_PATH is not set; refusing to touch the default database")
 
-from app.store import conversations, db, runs  # noqa: E402
+from app.store import conversations, db, projects, runs  # noqa: E402
 from app.tools import call_tool  # noqa: E402
 
 WEATHER = {
@@ -144,6 +148,49 @@ See the [project page](https://example.org/aurora) for the rest.
 Naming."""
 
 
+CRASH_QUESTION = "Why does app/main.py crash on start? Fix it."
+
+BROKEN = 'from fastapi import FastAPI\n\n@app.get("/")\ndef home():\n    return {"ok": True}\n'
+FIXED = (
+    'from fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get("/")\n'
+    'def home():\n    return {"ok": True}\n'
+)
+
+# What the model wrote, reply by reply, as a run keeps it: its thinking, what
+# it said, and the call it ended in.
+CRASH_SAID = "The crash is on line 3: `app` is used before it is created. I'll create it first."
+CRASH_DONE = "Fixed. Run it with:\n\n```\nuvicorn app.main:app --reload\n```"
+CRASH_PARTS = [
+    {
+        "role": "assistant", "kind": "call", "tools": ["edit_file"],
+        "content": (
+            "<think>\nThe decorator uses app before app = FastAPI() exists.\n</think>\n\n"
+            f"{CRASH_SAID}\n\n"
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\napp/main.py\n</parameter>\n"
+            '<parameter=old_string>\n@app.get("/")\n</parameter>\n'
+            '<parameter=new_string>\napp = FastAPI()\n\n@app.get("/")\n</parameter>\n'
+            "</function>\n</tool_call>"
+        ),
+    },
+    {"role": "user", "kind": "response", "tools": ["edit_file"],
+     "content": "<tool_response>\nEdited app/main.py (v2).\n</tool_response>"},
+    {
+        "role": "assistant", "kind": "call", "tools": ["run_file"],
+        "content": (
+            "<think>\nRun it to be sure it starts.\n</think>\n\n"
+            "<tool_call>\n<function=run_file>\n<parameter=path>\napp/main.py\n</parameter>\n"
+            "</function>\n</tool_call>"
+        ),
+    },
+    {"role": "user", "kind": "response", "tools": ["run_file"],
+     "content": "<tool_response>\napp/main.py ran and printed nothing.\n</tool_response>"},
+    {
+        "role": "assistant", "kind": "answer", "tools": [],
+        "content": f"<think>\nIt ran cleanly.\n</think>\n\n{CRASH_DONE}",
+    },
+]
+
+
 async def offline(name: str, args: dict):
     result = await call_tool(name, args)
     if not result.ok:
@@ -153,10 +200,64 @@ async def offline(name: str, args: dict):
 
 async def main() -> None:
     db.init()
-    for table in ("steps", "tool_calls", "context_turns", "messages", "conversations", "runs"):
+    for table in ("steps", "tool_calls", "context_turns", "messages", "conversations", "runs",
+                  "project_files"):
         db.write(f"DELETE FROM {table}")  # noqa: SLF001 - a fixture owns the whole file
 
-    # 3. Right-to-left, oldest so it sorts last.
+    # 4. A crash fixed in a project, kept in the order it was said. Oldest, so
+    # the three before it keep their places in the list.
+    cid = conversations.create(CRASH_QUESTION)
+    qid = conversations.add_message(cid, "user", CRASH_QUESTION)
+    projects.add(cid, "app/main.py", BROKEN, lang="python")
+    kept = projects.add(cid, "app/main.py", FIXED, lang="python")
+    fixed_lines = kept["lines"]
+    crash_calls = [
+        conversations.add_tool_call(
+            cid, "edit_file", via="model",
+            args={"path": "app/main.py", "old_string": '@app.get("/")',
+                  "new_string": 'app = FastAPI()\n\n@app.get("/")'},
+            card="file",
+            data={
+                "path": "app/main.py", "lang": "python", "version": kept["version"],
+                "lines": fixed_lines, "content": FIXED, "action": "edit", "line": 3,
+                "removed": ['@app.get("/")'], "added": ["app = FastAPI()", "", '@app.get("/")'],
+                "snippet": "",
+            },
+            summary=f"Edited app/main.py (v{kept['version']}).", ms=3.1,
+        ),
+        conversations.add_tool_call(
+            cid, "run_file", via="model", args={"path": "app/main.py"}, card="python",
+            data={
+                "task": "run app/main.py", "code": FIXED, "path": "app/main.py", "stdout": "",
+                "stderr": "", "exit_code": 0, "timed_out": False, "ms": 812.0, "truncated": False,
+            },
+            summary="app/main.py ran and printed nothing.", ms=812.0,
+        ),
+    ]
+    crash_run = "seeded-crash-run"
+    for idx, (kind, name, ms, tokens) in enumerate((
+        ("call", "edit_file", 9200.0, (1210, 1210, 96)),
+        ("tool", "edit_file", 3.1, (None, None, None)),
+        ("call", "run_file", 2100.0, (1290, 64, 21)),
+        ("tool", "run_file", 812.0, (None, None, None)),
+        ("answer", None, 2600.0, (1330, 40, 30)),
+    )):
+        runs.add_step(
+            crash_run, cid, idx, kind, name=name, via="model" if kind != "answer" else None,
+            total_ms=ms, prompt_tokens=tokens[0], new_tokens=tokens[1], output_tokens=tokens[2],
+            first_token_ms=ms / 4 if tokens[0] else None, queue_ms=0.0 if tokens[0] else None,
+        )
+    mid = conversations.add_message(
+        cid, "assistant", f"{CRASH_SAID}\n\n{CRASH_DONE}",
+        ttft_ms=640.0, gen_tps=10.4, prompt_tokens=1330, completion_tokens=147,
+    )
+    conversations.attach_tool_calls(mid, crash_calls)
+    runs.attach_steps(mid, crash_run)
+    conversations.add_context_turn(
+        cid, crash_run, question_id=qid, answer_id=mid, system_key="seed", parts=CRASH_PARTS,
+    )
+
+    # 3. Right-to-left, older than the two above it.
     cid = conversations.create("ما هو النموذج اللغوي؟")
     conversations.add_message(cid, "user", "ما هو النموذج اللغوي؟")
     conversations.add_message(
@@ -230,11 +331,15 @@ async def main() -> None:
     runs.attach_steps(mid, run_id)
     conversations.touch(cid)
 
-    # The list is ordered by last use. Three rows written in the same instant
-    # would come back in no particular order, so they are spaced out: the
-    # cards a moment ago, the long question an hour ago, the third yesterday.
+    # The list is ordered by last use. Rows written in the same instant would
+    # come back in no particular order, so they are spaced out: the cards a
+    # moment ago, the long question an hour ago, the third yesterday, the
+    # crash two days ago.
     now = time.time()
-    for title_start, age in (("Show me every", 60), ("I pasted the notes", 3600), ("ما هو", 86400)):
+    for title_start, age in (
+        ("Show me every", 60), ("I pasted the notes", 3600), ("ما هو", 86400),
+        ("Why does app/main.py", 2 * 86400),
+    ):
         db.write(  # noqa: SLF001
             "UPDATE conversations SET updated_at = ?, created_at = ? WHERE title LIKE ?",
             (now - age, now - age, title_start + "%"),

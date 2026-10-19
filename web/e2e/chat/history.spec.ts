@@ -28,11 +28,12 @@ test("opens as a modal dialog, lists the conversations, and says so on its butto
   await expect(button).toHaveAttribute("aria-expanded", "true");
   expect(await rail(page).evaluate((el: HTMLDialogElement) => el.matches(":modal"))).toBe(true);
 
-  await expect(rows(page)).toHaveCount(3);
+  await expect(rows(page)).toHaveCount(4);
   await expect(rows(page).first()).toContainText("Show me every figure");
   await expect(rows(page).first()).toContainText(/2 messages · (just now|\d+ min ago)/);
   await expect(rows(page).nth(1)).toContainText(/2 messages · \d+ (min|h) ago/);
   await expect(rows(page).nth(2)).toContainText(/2 messages · \d+ (h|d) ago/);
+  await expect(rows(page).nth(3)).toContainText(/2 messages · \d+ d ago/);
   // Each row is two controls side by side, never one inside the other.
   await expect(
     page.getByRole("button", { name: /^Delete conversation: Show me every figure/ }),
@@ -130,15 +131,15 @@ test("the list is fetched again each time the drawer opens, and after an answer"
 
 test("deleting a conversation removes its row and says so", async ({ page }) => {
   await page.locator("#menu-btn").click();
-  await expect(rows(page)).toHaveCount(3);
+  await expect(rows(page)).toHaveCount(4);
   await page.getByRole("button", { name: /^Delete conversation: I pasted the notes/ }).click();
-  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page)).toHaveCount(3);
   await expect(page.locator("#sr-status")).toHaveText(/^Deleted conversation I pasted the notes/);
   await expect(rail(page)).toBeVisible();
   // It is gone from the server too.
   await page.reload();
   await page.locator("#menu-btn").click();
-  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page)).toHaveCount(3);
 });
 
 test("deleting the conversation on the sheet clears the sheet", async ({ page }) => {
@@ -153,7 +154,7 @@ test("deleting the conversation on the sheet clears the sheet", async ({ page })
 
 test("with nothing stored it says so", async ({ page }) => {
   await page.locator("#menu-btn").click();
-  for (let left = 3; left > 0; left--) {
+  for (let left = 4; left > 0; left--) {
     await expect(rows(page)).toHaveCount(left);
     await page
       .getByRole("button", { name: /^Delete conversation: / })

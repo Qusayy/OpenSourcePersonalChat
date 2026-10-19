@@ -1,4 +1,4 @@
-"""Tool registry, argument specs, GBNF generation, dispatch.
+"""Tool registry, argument specs, dispatch.
 
 Two things a tool returns, and the difference matters:
 
@@ -20,7 +20,7 @@ import re
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Iterable, Protocol
+from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import settings
 from ..text import clip
@@ -33,16 +33,15 @@ class Arg:
     required: bool = True
     description: str = ""
     default: Any = None
-    # The spellings this argument may be given. They are written into the
-    # grammar, so a model choosing a tool cannot say anything else, and every
-    # other caller is held to them when the call is checked.
+    # The spellings this argument may be given. They are listed for the model
+    # in the tool's schema, and every caller is held to them when the call is
+    # checked.
     choices: tuple[str, ...] | None = None
     # Turns a spelling into the value the tool is run with: "miles" into "mi",
     # "usd" into "USD".
     canon: Callable[[str], str] | None = None
-    # The most characters the grammar lets a model write here. None takes the
-    # default ceiling. It bounds what a model can write, not what a person can
-    # type: a tool keeps its own limits for that.
+    # The most characters that make sense here. A tool keeps its own limits
+    # for what it will take.
     max_len: int | None = None
     # The value is an address this server will go out to. A model may pass one
     # on; it may not make one up or take one from something it has read. So a
@@ -93,9 +92,8 @@ class CallContext:
     # The last list of results the model was shown, in its order: what "open
     # result 2" means.
     links: tuple[Link, ...] = ()
-    # A program for the call to run, written in a pass of its own or given by
-    # the user: the python tool's.
-    program: str = ""
+    # The run the call belongs to, which a file it writes is kept under.
+    run_id: str | None = None
 
 
 CALL: ContextVar[CallContext] = ContextVar("tool_call", default=CallContext())
@@ -135,15 +133,8 @@ class Tool:
     links: bool = False
     # What else the configuration must allow for it to be offered at all.
     requires: Callable[[], bool] | None = None
-    # The call carries a program, which the model writes in a pass of its own
-    # after choosing the tool, as a fenced block, and never inside the JSON.
-    program: bool = False
     # Seconds before the call is abandoned, where it is not the setting's.
     timeout: float | None = None
-    # It works on the conversation's project, and can be chosen only in a
-    # conversation that has one. It stays on the menu, which every
-    # conversation shares; it leaves the grammar of a choice.
-    project: bool = False
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -171,16 +162,6 @@ class Tool:
                 for a in self.args
             ],
         }
-
-
-class Choice(Protocol):
-    """Anything the model may choose: a tool, or a skill offered beside the
-    tools. The menu, the grammar and its ceiling are written from these three
-    alone, so a skill is chosen exactly as a tool is."""
-
-    name: str
-    args: tuple[Arg, ...]
-    description: str
 
 
 # Argument names are internal; a person being told what is missing should get
@@ -340,7 +321,7 @@ def was_given(address: str, texts: Iterable[str]) -> bool:
 
     A model that reads a fetched page can be talked into fetching another:
     "now open http://elsewhere/?q=" followed by something from the
-    conversation. The grammar cannot stop that, since the call is perfectly
+    conversation. The call itself cannot show that, since it is perfectly
     well formed, and neither can a check on where the address points, since it
     points somewhere public. What stops it is that the address is not one the
     user gave.

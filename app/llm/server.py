@@ -18,9 +18,14 @@ when the reader goes away; that is how Stop reaches it.
 Every failure is a ``ServerError`` whose message can be shown to a visitor: it
 says what went wrong and never where the server is.
 
-The last piece of a completed answer says what the server did with the prompt:
-how much of it it read and how much it took from its cache. That is kept, as
-far as the server reports it, and nothing is guessed where it does not.
+The prompt is the app's own, written out whole (``app/chatml.py``), and goes
+to ``/completion``: a reply can then be picked up where it stopped, which is
+how a thinking budget and a change of sampling for code are made.
+
+The last piece of a completed reply says what the server did with the prompt
+(how much of it it read and how much it took from its cache) and how the reply
+ended. That is kept, as far as the server reports it, and nothing is guessed
+where it does not.
 """
 
 from __future__ import annotations
@@ -47,36 +52,55 @@ class ServerError(RuntimeError):
 
 @dataclass
 class Reading:
-    """What the server did with one prompt, as it reported it at the end of
-    the answer. A figure it did not report stays None; so does every figure of
-    an answer that was stopped before its end."""
+    """What the server did with one prompt, and how the reply ended, as it
+    reported them on the reply's last piece. A figure it did not report stays
+    None; so does every figure of a reply that was stopped before its end."""
 
-    # The whole prompt, as the server's own template and tokenizer made it.
+    # The whole prompt, as the server's tokenizer made it.
     prompt: int | None = None
     # The part it had to read; the rest it took from its cache.
     read: int | None = None
     cached: int | None = None
+    # How the reply ended: "word" (one of the stop strings, named in
+    # ``word``), "eos" (the model ended it), "limit" (it ran out of tokens),
+    # or None where the server did not say.
+    finish: str | None = None
+    word: str | None = None
 
     def take(self, chunk: dict) -> None:
-        """Keep what one piece of the answer says about the prompt.
+        """Keep what one piece of the reply says about the prompt and the end.
 
         llama-server puts ``timings`` on its last piece (``prompt_n`` read,
-        ``cache_n`` taken from the cache) and, depending on its version,
-        ``usage`` there or on a piece of its own.
+        ``cache_n`` taken from the cache), the prompt's size as
+        ``tokens_evaluated``, and how it stopped: ``stop_type`` and
+        ``stopping_word`` in newer servers, ``stopped_eos``, ``stopped_word``
+        and ``stopped_limit`` in older ones.
         """
         timings = chunk.get("timings")
         if isinstance(timings, dict):
             self.read = _count(timings.get("prompt_n"), self.read)
             self.cached = _count(timings.get("cache_n"), self.cached)
+        self.prompt = _count(chunk.get("tokens_evaluated"), self.prompt)
         usage = chunk.get("usage")
         if isinstance(usage, dict):
             self.prompt = _count(usage.get("prompt_tokens"), self.prompt)
-            details = usage.get("prompt_tokens_details")
-            if isinstance(details, dict):
-                self.cached = _count(details.get("cached_tokens"), self.cached)
+        if not chunk.get("stop"):
+            return
+        kind = chunk.get("stop_type")
+        if kind in ("word", "eos", "limit"):
+            self.finish = kind
+        elif chunk.get("stopped_word"):
+            self.finish = "word"
+        elif chunk.get("stopped_eos"):
+            self.finish = "eos"
+        elif chunk.get("stopped_limit"):
+            self.finish = "limit"
+        word = chunk.get("stopping_word")
+        if isinstance(word, str) and word:
+            self.word = word
 
     def settle(self) -> None:
-        """Fill in the one figure the other two give, once the answer is over:
+        """Fill in the one figure the other two give, once the reply is over:
         the prompt is what was read and what was cached, together."""
         if self.read is None:
             return
@@ -132,16 +156,17 @@ class LlamaServer:
             raise ServerError("the model server sent a token count it could not be read from") from exc
 
     def stream(self, body: dict, reading: Reading | None = None) -> Iterator[str]:
-        """One chat completion, as the pieces of text it is written in.
+        """One completion, as the pieces of text it is written in.
 
-        ``body`` is the request: the messages and the sampling settings. The
-        prompt is always offered to the server's cache, so a conversation's
-        next turn reads only what is new. ``reading``, if given, is filled in
-        with what the server says it read, once the answer has ended.
+        ``body`` is the request: the prompt, written out whole by the app, and
+        the sampling settings. The prompt is always offered to the server's
+        cache, so a reply that goes on from where the last one stopped reads
+        only what is new. ``reading``, if given, is filled in with what the
+        server says it read and how the reply ended.
         """
         payload = {**body, "stream": True, "cache_prompt": True}
         try:
-            with self._client.stream("POST", "/v1/chat/completions", json=payload) as response:
+            with self._client.stream("POST", "/completion", json=payload) as response:
                 if response.status_code != 200:
                     raise ServerError(f"the model server answered {response.status_code}")
                 for line in response.iter_lines():
@@ -158,12 +183,11 @@ class LlamaServer:
                         raise ServerError("the model server failed while writing")
                     if reading is not None:
                         reading.take(chunk)
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    text = (choices[0].get("delta") or {}).get("content")
+                    text = chunk.get("content")
                     if text:
                         yield text
+                    if chunk.get("stop"):
+                        break
         except httpx.HTTPError as exc:
             raise ServerError("the model server is not answering") from exc
         if reading is not None:

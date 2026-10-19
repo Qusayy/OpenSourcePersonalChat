@@ -103,15 +103,21 @@ describe("ledgerRows", () => {
   const label = (name: string) =>
     ({ weather: "Weather", compare: "Compare two things" })[name] ?? name;
 
-  it("lists each pass with what it read of its prompt, what it wrote, and its time", () => {
+  it("lists each reply with what it read of its prompt, what it wrote, and its time", () => {
     const { rows, split } = ledgerRows(
       run([
-        step({ name: "weather", tokens_in: 667, tokens_read: 18, tokens_out: 12, ms: 310 }),
+        step({
+          kind: "call",
+          name: "weather",
+          tokens_in: 667,
+          tokens_read: 18,
+          tokens_out: 12,
+          ms: 310,
+        }),
         step({ kind: "tool", name: "weather", ms: 880 }),
-        step({ kind: "decide", tokens_in: 702, tokens_read: 36, tokens_out: 5, ms: 400 }),
         step({
           kind: "answer",
-          via: null,
+          via: "model",
           tokens_in: 740,
           tokens_read: 61,
           tokens_out: 48,
@@ -122,23 +128,40 @@ describe("ledgerRows", () => {
     );
     expect(rows).toEqual([
       {
-        kind: "choice",
+        kind: "chose",
         name: "Weather",
         tokens: "read 18 of 667 · wrote 12",
         ms: "310ms",
         failed: false,
       },
       { kind: "tool", name: "Weather", tokens: "", ms: "880ms", failed: false },
-      {
-        kind: "choice again",
-        name: "none",
-        tokens: "read 36 of 702 · wrote 5",
-        ms: "400ms",
-        failed: false,
-      },
       { kind: "answer", name: "", tokens: "read 61 of 740 · wrote 48", ms: "2.90s", failed: false },
     ]);
     expect(split).toBe("run 4.48s · waiting 0ms · reading 890ms · writing 2.71s · tools 880ms");
+  });
+
+  it("marks a reply that failed or was stopped", () => {
+    const { rows } = ledgerRows(
+      run([step({ kind: "call", name: "weather", ok: false, error: "stopped" })]),
+      label,
+    );
+    expect(rows[0]).toMatchObject({ kind: "chose", name: "Weather", failed: true });
+  });
+
+  it("keeps the words of a run kept while a separate pass chose the tool", () => {
+    const { rows } = ledgerRows(
+      run([
+        step({ name: "weather", tokens_in: 667, tokens_read: 18, tokens_out: 12, ms: 310 }),
+        step({ kind: "decide", tokens_in: 702, tokens_read: 36, tokens_out: 5, ms: 400 }),
+        step({ kind: "compose", name: "python" }),
+      ]),
+      label,
+    );
+    expect(rows.map((r) => [r.kind, r.name, r.tokens])).toEqual([
+      ["choice", "Weather", "read 18 of 667 · wrote 12"],
+      ["choice again", "none", "read 36 of 702 · wrote 5"],
+      ["wrote code", "python", ""],
+    ]);
   });
 
   it("says what read was not reported by the whole prompt it was given", () => {
@@ -185,139 +208,61 @@ describe("trimmedWording", () => {
 
 describe("applyStep", () => {
   const step = (over: Partial<StepEvent>): StepEvent => ({
-    id: "route",
-    kind: "route",
+    id: "tool-0",
+    kind: "tool",
     status: "running",
-    label: "Choosing a tool",
+    label: "Weather",
+    tool: "weather",
     ...over,
   });
   const none: StepRow[] = [];
 
-  it("draws a routing pass while it runs", () => {
+  it("draws a call while it runs", () => {
     expect(applyStep(none, step({}))).toEqual([
-      {
-        id: "route",
-        status: "running",
-        icon: "route",
-        label: "Choosing a tool",
-        state: "running",
-        ms: "",
-      },
+      { id: "tool-0", icon: "weather", label: "Weather" },
     ]);
   });
 
-  it("keeps a finished routing decision, worded by how it was made", () => {
+  it("takes a call off the line once it has ended, however it ended: its figure says the rest", () => {
     const running = applyStep(none, step({}));
-    const byModel = applyStep(
-      running,
-      step({ status: "ok", label: "Weather", detail: "model", tool: "weather", ms: 2140 }),
-    );
-    expect(byModel).toEqual([
-      { id: "route", status: "ok", icon: "route", label: "Model's choice", state: "", ms: "2.14s" },
-    ]);
-    const byPattern = applyStep(
-      none,
-      step({ status: "ok", label: "Calculator", detail: "heuristic", tool: "calculator", ms: 0.4 }),
-    );
-    expect(byPattern[0]).toMatchObject({ label: "Pattern match", ms: "0ms" });
+    expect(applyStep(running, step({ status: "ok", ms: 412 }))).toEqual([]);
+    expect(applyStep(running, step({ status: "failed", detail: "no such place" }))).toEqual([]);
+    expect(applyStep(running, step({ status: "stopped" }))).toEqual([]);
   });
 
-  it("keeps the server's own label when no tool was chosen", () => {
-    const rows = applyStep(none, step({ status: "ok", label: "No tool needed", detail: "direct" }));
-    expect(rows[0]).toMatchObject({ label: "No tool needed", state: "" });
-  });
-
-  it("names a skill the model chose as the model's choice, as it does a tool", () => {
-    const rows = applyStep(
-      none,
-      step({ status: "ok", label: "Compare two things", detail: "model", tool: "compare" }),
-    );
-    expect(rows[0]).toMatchObject({ icon: "route", label: "Model's choice" });
-  });
-
-  it("drops a slash command's route once decided: the question already is one", () => {
+  it("never draws a reply of the model: the status line and the footer carry it", () => {
+    for (const label of ["Thinking", "Writing", "Answer", "Called Weather"]) {
+      expect(applyStep(none, step({ id: "reply-1", kind: "model", label, tool: null }))).toEqual(
+        [],
+      );
+    }
     const running = applyStep(none, step({}));
-    expect(applyStep(running, step({ status: "ok", detail: "slash", tool: "calculator" }))).toEqual(
-      [],
-    );
-  });
-
-  it("drops a greeting's route once decided: nothing was looked up or chosen", () => {
-    const running = applyStep(none, step({}));
-    expect(applyStep(running, step({ status: "ok", detail: "chat", tool: null }))).toEqual([]);
-  });
-
-  it("draws a tool only while it runs: its figure says the rest", () => {
-    const running = applyStep(
-      none,
-      step({ id: "tool-0", kind: "tool", label: "Weather", tool: "weather" }),
-    );
-    expect(running[0]).toMatchObject({ id: "tool-0", icon: "weather", state: "running" });
-    const done = applyStep(
-      running,
-      step({
-        id: "tool-0",
-        kind: "tool",
-        status: "ok",
-        label: "Weather",
-        tool: "weather",
-        ms: 412,
-      }),
-    );
-    expect(done).toEqual([]);
-    const failed = applyStep(
-      running,
-      step({ id: "tool-0", kind: "tool", status: "failed", label: "Weather", tool: "weather" }),
-    );
-    expect(failed).toEqual([]);
-  });
-
-  it("takes a step off the line when the run was stopped in the middle of it", () => {
-    const choosing = applyStep(none, step({}));
-    expect(applyStep(choosing, step({ status: "stopped", ms: 310 }))).toEqual([]);
-    const fetching = applyStep(
-      none,
-      step({ id: "tool-0", kind: "tool", label: "Weather", tool: "weather" }),
-    );
     expect(
-      applyStep(
-        fetching,
-        step({ id: "tool-0", kind: "tool", status: "stopped", label: "Weather", tool: "weather" }),
-      ),
-    ).toEqual([]);
-    // Only that step: a decision already made stays where it is.
-    let rows = applyStep(
-      none,
-      step({ status: "ok", label: "Weather", detail: "model", tool: "weather" }),
-    );
-    rows = applyStep(rows, step({ id: "tool-0", kind: "tool", label: "Weather", tool: "weather" }));
-    rows = applyStep(
-      rows,
-      step({ id: "tool-0", kind: "tool", status: "stopped", label: "Weather" }),
-    );
-    expect(rows.map((r) => r.id)).toEqual(["route"]);
+      applyStep(running, step({ id: "reply-2", kind: "model", status: "ok", label: "Answer" })),
+    ).toBe(running);
   });
 
-  it("gives a tool with no picture the generic one", () => {
-    const rows = applyStep(
-      none,
-      step({ id: "tool-0", kind: "tool", label: "Mystery", tool: "no_such_tool" }),
+  it("draws nothing for a step that decides, which an older server may still send", () => {
+    const old = { ...step({ id: "route", label: "Choosing a tool" }), kind: "route" };
+    expect(applyStep(none, old as unknown as StepEvent)).toEqual([]);
+  });
+
+  it("gives a tool with no picture the generic one, and a project tool the file", () => {
+    expect(applyStep(none, step({ label: "Mystery", tool: "no_such_tool" }))[0]?.icon).toBe("tool");
+    expect(applyStep(none, step({ label: "Edit file", tool: "edit_file" }))[0]?.icon).toBe(
+      "edit_file",
     );
-    expect(rows[0]?.icon).toBe("tool");
   });
 
-  it("never draws the answer step: the status line and the footer carry it", () => {
-    expect(applyStep(none, step({ id: "answer", kind: "model", label: "Writing" }))).toEqual([]);
-  });
-
-  it("updates a step in place and leaves the others alone", () => {
+  it("updates a call in place and leaves the others alone", () => {
     let rows = applyStep(none, step({}));
-    rows = applyStep(rows, step({ id: "tool-0", kind: "tool", label: "Clock", tool: "clock" }));
-    rows = applyStep(rows, step({ status: "ok", label: "Clock", detail: "model", tool: "clock" }));
-    expect(rows.map((r) => [r.id, r.status])).toEqual([
-      ["route", "ok"],
-      ["tool-0", "running"],
+    rows = applyStep(rows, step({ id: "tool-1", label: "Clock", tool: "clock" }));
+    rows = applyStep(rows, step({ id: "tool-1", label: "World clock", tool: "clock" }));
+    expect(rows.map((r) => [r.id, r.label])).toEqual([
+      ["tool-0", "Weather"],
+      ["tool-1", "World clock"],
     ]);
+    expect(applyStep(rows, step({ status: "ok" })).map((r) => r.id)).toEqual(["tool-1"]);
   });
 });
 

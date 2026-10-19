@@ -85,7 +85,8 @@ export function resetFigures(): void {
   trace.stop();
 }
 
-/** The first token has landed: the figures have something to report. */
+/** The model's first token has landed, thought or said: the figures have
+ *  something to report. */
 export function showFigures(ttftMs?: number | null): void {
   if (els) els.tpsFig.hidden = false;
   trace.start();
@@ -95,17 +96,19 @@ export function showFigures(ttftMs?: number | null): void {
   }
 }
 
-export type LivePhase = "working" | "deciding" | "queued" | "reading" | "writing";
+export type LivePhase = "working" | "queued" | "reading" | "thinking" | "writing";
 
 // The status line's state while a request is in flight. Every phase but
-// "writing" is a wait, so it counts the seconds: on this hardware a wait is
-// long enough that a still label looks like a hang. The count sits with the
-// figures on the right, where it can change width without moving anything.
+// "writing" is a wait for the reader, so it counts the seconds: on this
+// hardware a wait is long enough that a still label looks like a hang, and
+// the model can think for a good while before it says anything. The count
+// sits with the figures on the right, where it can change width without
+// moving anything.
 const PHASE_WORDS: Record<LivePhase, string> = {
   working: "working",
-  deciding: "deciding",
   queued: "queued",
   reading: "reading",
+  thinking: "thinking",
   writing: "writing",
 };
 let phaseClock: ReturnType<typeof setInterval> | undefined;

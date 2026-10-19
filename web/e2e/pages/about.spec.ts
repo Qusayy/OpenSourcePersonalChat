@@ -130,7 +130,19 @@ test("says where the model is held", async ({ page }) => {
 test("says how the Agent works and what it is held to", async ({ page }) => {
   await page.goto("/about");
   const agent = page.locator("#agent");
-  await expect(agent).toContainText("at most three lookups, within ninety seconds");
+  // The model decides: it thinks, and calls a tool itself when it needs one.
+  await expect(agent).toContainText("It thinks first");
+  await expect(agent).toContainText(
+    "calls a tool itself, in the format it was trained to write, only when it judges that one is needed, and a greeting needs none",
+  );
+  await expect(agent).toContainText(
+    "at most eight calls a message, never one it has already made, and its last reply cannot call at all",
+  );
+  await expect(agent).toContainText("write_file");
+  await expect(agent).toContainText("edit_file, which changes only the lines it was asked to");
+  await expect(agent).toContainText("A file written again exactly as it was is refused");
+  // Nothing of the pass that chose a tool before the model answered.
+  await expect(agent).not.toContainText(/grammar|three lookups|pattern it knows|skill/);
   await expect(agent).toContainText("It only opens an address you wrote yourself");
   await expect(agent).toContainText(
     "a figure no lookup returned is named in a line under the answer",

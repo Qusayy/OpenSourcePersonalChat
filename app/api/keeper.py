@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from .. import agent
-from ..store import conversations, projects, runs
+from ..store import conversations, runs
 
 
 class Keeper:
-    """Stores what a run has done, before the page is told it happened.
+    """Stores what a run has done, before the page is told it happened. (The
+    files of a project are kept by the tools that write them.)
 
     The run records each thing it finishes and then says so. ``keep`` is called
     as each event arrives and before it is sent on, so a tool call is in the
@@ -19,13 +20,12 @@ class Keeper:
         self, cid: str, trace: agent.Trace, question_id: str, *, label: str | None = None
     ) -> None:
         self.cid = cid
-        # What the answer's figures are filed under: the style it was written in.
+        # What the answer's figures are filed under.
         self.label = label
         self.trace = trace
         self.question_id = question_id
         self.call_ids: list[str] = []
         self.steps_kept = 0
-        self.files_kept = 0
         self.answered = False
 
     def keep(self) -> None:
@@ -36,19 +36,6 @@ class Keeper:
                 data=result.data, summary=result.summary or result.error or "",
                 ms=result.ms, ok=result.ok,
             ))
-
-        for written in self.trace.files[self.files_kept:]:
-            # Kept before the page hears it closed, and the page is told the
-            # version it was kept as, or why it was not kept.
-            kept = projects.add(
-                self.cid, written["path"], written["content"], lang=written["lang"],
-                run_id=self.trace.run_id,
-            )
-            written["event"].update(
-                {"version": kept["version"], "kept": True} if kept["kept"]
-                else {"kept": False, "why": kept["why"]}
-            )
-            self.files_kept += 1
 
         for step in self.trace.steps[self.steps_kept:]:
             runs.add_step(
@@ -69,10 +56,13 @@ class Keeper:
         if not self.trace.answer.strip():
             return
         usage = self.trace.usage
+        # An answer that wrote nothing, or was stopped, is not a sample of how
+        # fast this machine writes: its speed is not kept, and it is no run.
+        written = bool(usage.get("completion_tokens")) and self.trace.outcome == "answered"
         mid = conversations.add_message(
             self.cid, "assistant", self.trace.answer,
             ttft_ms=usage.get("ttft_ms"),
-            gen_tps=usage.get("gen_tps"),
+            gen_tps=usage.get("gen_tps") if written else None,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             correction=self.trace.correction,
@@ -87,14 +77,11 @@ class Keeper:
                 self.cid, self.trace.run_id, question_id=self.question_id, answer_id=mid,
                 system_key=self.trace.system_key, parts=[p.as_dict() for p in sent],
             )
-        if usage.get("asked"):
-            # A question put back to the visitor was written by a routing
-            # pass. It is a message, and it is not a sample of how fast this
-            # machine writes answers.
+        if not written:
             return
         runs.add_run(
             "chat",
-            label=self.label or self.trace.style,
+            label=self.label or "answer",
             prompt_tokens=usage.get("prompt_tokens"),
             gen_tokens=usage.get("completion_tokens"),
             ttft_ms=usage.get("ttft_ms"),

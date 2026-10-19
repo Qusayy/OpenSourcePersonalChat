@@ -257,17 +257,18 @@ function wake(): void {
 
 export const aurora = {
   /**
-   * Follow a request phase. "reading" is the model taking in the prompt and
-   * "writing" is the model producing tokens: those two light it. "working" is
-   * the moment between sending and the server saying which it will be, and
-   * the answer may be "queued", which is someone else's work and not this
-   * visitor's. Nothing is lit until the server has said the model is on it.
+   * Follow a request phase. "reading" is the model taking in the prompt, and
+   * "thinking" and "writing" are the model producing tokens: those light it.
+   * "working" is the moment between sending and the server saying which it
+   * will be, or a tool at work, and the answer may be "queued", which is
+   * someone else's work and not this visitor's. Nothing is lit until the
+   * server has said the model is on it.
    */
   phase(key: string | null | undefined): void {
     if (!host) return;
     const was = writing;
     waiting = key === "reading";
-    writing = key === "writing";
+    writing = key === "writing" || key === "thinking";
     if (writing && !was) {
       writingSince = performance.now();
       steady = 0;

@@ -278,18 +278,71 @@ function Python({ data, meta }: KindProps) {
 
 /* ---------------------------------------------------------------- file -- */
 
-/* A file of the project, read back by the model. The file itself is in the
-   project panel; this says which, and opens it there. */
-function ProjectFileRead({ data, meta }: KindProps) {
+/* A file of the project that a call read, wrote or edited. The file itself is
+   in the project panel; this says which, at which version, and opens it
+   there. An edit also shows what it changed: the lines it took out and the
+   lines it put in, as a diff in the code block an answer uses. */
+
+// Past this many lines a diff is cut, and the rest is the panel's to show.
+const DIFF_LINES = 40;
+
+const FILE_VERBS: Record<string, string> = {
+  read: "Read file",
+  write: "Wrote file",
+  edit: "Edited file",
+};
+
+function ProjectFile({ data, meta }: KindProps) {
   const path = text(data, "path");
   const lines = num(data.lines);
+  const action = text(data, "action") || "read";
+  const name =
+    action === "write" && data.created === true ? "Created file" : (FILE_VERBS[action] ?? "File");
   return (
-    <Figure tool="file" card="file" name="Read file" note={path} meta={meta}>
+    <Figure tool="file" card="file" name={name} note={path} meta={meta}>
       <button type="button" className="file-chip" data-file={path} data-state="done">
         <span className="file-chip-name">{path}</span>
         <span className="file-chip-meta num">{`version ${num(data.version)} · ${lines} lines`}</span>
       </button>
+      {action === "edit" ? <Diff data={data} /> : null}
     </Figure>
+  );
+}
+
+function Diff({ data }: { data: CardData }) {
+  const lines = (key: string) => list(data, key).map((line) => String(line ?? ""));
+  const all = [
+    ...lines("removed").map((line) => ({ sign: "-", line })),
+    ...lines("added").map((line) => ({ sign: "+", line })),
+  ];
+  if (!all.length) return null;
+  const shown = all.slice(0, DIFF_LINES);
+  const first = typeof data.line === "number" ? data.line : null;
+  return (
+    <div className="codeblock diff mt-3 mb-0" data-part="diff">
+      <header>
+        <span>{first !== null ? `from line ${first}` : text(data, "lang") || "changes"}</span>
+      </header>
+      <pre>
+        <code>
+          {shown.map(({ sign, line }, i) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: a diff is an ordered list of lines, and two may be alike
+              key={i}
+              className={sign === "-" ? "diff-del" : "diff-add"}
+              data-sign={sign}
+            >
+              {`${sign} ${line}\n`}
+            </span>
+          ))}
+        </code>
+      </pre>
+      {all.length > shown.length ? (
+        <p className="m-0 px-4 pb-3 text-ink-2 text-1">
+          {`${all.length - shown.length} more lines changed; the whole file is in the project.`}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -572,6 +625,6 @@ export const KINDS: Record<CardKind, ComponentType<KindProps>> = {
   search: Search,
   news: News,
   python: Python,
-  file: ProjectFileRead,
+  file: ProjectFile,
   error: Failure,
 };

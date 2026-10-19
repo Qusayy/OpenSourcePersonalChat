@@ -10,25 +10,25 @@ reply, and a benchmark page that measures the machine it's running on and plots
 it against reference hardware.
 
 It also gives the model tools — exact arithmetic, a clock, Wikipedia, weather,
-currency, a URL reader, the web, the headlines and a Python sandbox — and the
-model decides which a message needs, or that it needs none, or that the answer
-is a project of files to keep.
+currency, a URL reader, the web, the headlines, a Python sandbox and a project
+of files it writes and edits — and you talk to it: it thinks, answers, and
+calls a tool itself, in its own format, when it judges one is needed.
 
 ```
 app/                     the server (Python, FastAPI)
   main.py        the application: the gate in front, then every group of routes
   api/           the routes: pages · chat (SSE) and what a run leaves behind · conversations · system · bench
                  frontend.py serves the built interface and writes its first values into the page
-  agent/         one message, question to answer: loop · route (slash, else the model's choice)
-                 policy (what a chosen call may do) · trace · skills · style (an answer, or files)
-                 transcript · context (the window) · verify
+  agent/         one message, question to answer: loop · reply (one reply, in phases) · calls (the
+                 model's tool-call format) · route (slash commands) · policy (what a call may do)
+                 trace · style (prose or code sampling) · transcript · context (the window) · verify
   llm/           the engine: one slot, one lock, honest metrics (core); the llama-server client (server); mock
   store/         SQLite (WAL): db (the connection) · conversations · runs (steps and figures) · notes
-  tools/         base (registry, arguments, dispatch) · grammar (the menu + GBNF), then one module per tool;
-                 read_url carries the SSRF guard
+  tools/         base (registry, arguments, dispatch), then one module per tool; read_url carries the
+                 SSRF guard; write_file holds write_file and edit_file
   ops/           telemetry (usable CPUs, per-core load, memory, cgroup limits) · bench (the suite + reference data)
   gate.py        who is let past the cover: the pattern's verifier, sessions, the limit on guesses
-  config.py · text.py · chatml.py · ledger.py   settings · token estimates and excerpts · the chat format · what a run cost
+  config.py · text.py · chatml.py · ledger.py   settings · token estimates and excerpts · the prompt as the model reads it · what a run cost
 web/                     the interface (React 19, TypeScript, Vite, Tailwind CSS 4)
   src/lib/       framework-free: stream reader, markdown, meter, aurora, streaming answer
   src/state/     what the server knows (TanStack Query) and what the frame shows (Zustand)
@@ -303,12 +303,15 @@ hybrid: 24 of its 32 layers are linear attention with a fixed state, and only
 pinned ik_llama.cpp runs it as it is (dense Qwen3.5 support is from February
 2026), text only.
 
-It thinks before every answer unless told not to, and with its thinking off
-its own template writes an empty `<think>` block before the new answer but
-leaves it out of every earlier one. Each message would then no longer begin
-with the last, and on a model with recurrent layers that means reading the
-whole conversation again. `deploy/templates/qwen3.5.jinja` writes the block
-into every answer, old and new, and `AURORA_THINK_BLOCK` counts it:
+It thinks before it answers. The app writes every prompt itself and sends it
+to the server's `/completion` (`app/chatml.py`), so what is counted, what is
+sent and what is replayed next turn are the same characters. An answer is kept
+as the model wrote it, thinking and all: each message then begins with the
+last, which on a model with recurrent layers is the difference between reading
+the new message and reading the whole conversation again. `AURORA_THINKING`
+says how it thinks (`on`, `off` for an empty block, `none` for a model without
+one), and `AURORA_THINK_BUDGET` caps a reply's thinking: at the cap the reply
+goes on with the line Qwen documents for ending a thought early.
 
 ```bash
 cd /srv/aurora
@@ -321,8 +324,8 @@ AURORA_MODEL_QUANT=Q4_K_M
 AURORA_MODEL_PARAMS=4B
 AURORA_N_CTX=16384
 AURORA_KV_KIB_PER_TOKEN=32
-AURORA_THINK_BLOCK=true
-AURORA_LLM_ARGS=--jinja --chat-template-file deploy/templates/qwen3.5.jinja --reasoning-format none
+AURORA_THINKING=on
+AURORA_THINK_BUDGET=1024
 EOF
 sudo cp deploy/aurora-llm.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl restart aurora-llm aurora
@@ -330,7 +333,14 @@ sudo systemctl daemon-reload && sudo systemctl restart aurora-llm aurora
 
 The later lines of `.env` win, so the old model's lines can stay until the new
 one has been tried. It needs about 3.7 GB, which is why `aurora-llm.service`
-allows 4.5 GB.
+allows 4.5 GB. A reply goes on from where it stopped several times (out of its
+thinking, into a file's content, out of it again), always after the server
+stopped at a string it was given, so each request extends the last one
+exactly. Whether the server reuses its cache across those requests is what
+`scripts/eval_agent.py --engine real --probe-cache` shows: a request marked
+`cont` should read only the tokens since the last one. `AURORA_LLM_ARGS` and
+`deploy/templates/qwen3.5.jinja` are only for anyone who asks the server's
+own chat endpoint; the app does not use it.
 
 ### The web search
 
@@ -375,12 +385,10 @@ The script checks that bubblewrap is not setuid and that unprivileged user
 namespaces are on, builds the venv owned by root, and runs one program in the
 same jail as the app's user. The unit's `TasksMax` bounds a fork bomb.
 
-The model does not write the program inside its JSON choice, where a small
-model's code comes out mangled by escaping. It chooses `python` with the task
-in words, then writes the program in a pass of its own under a grammar that
-allows exactly one fenced block, read on from the choice. A program you give
-yourself, `/python print(2**64)` or a fenced block with "run this", is run as
-you gave it.
+The model writes the program as its call's `code`, raw text in its call
+format, so nothing has to be escaped, and the program is sampled as code. A
+program you give yourself, `/python print(2**64)` or `/python` with a fenced
+block, is run as you gave it.
 
 Other deployment notes:
 
@@ -542,13 +550,14 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 |---|---|---|
 | `AURORA_MODEL_PATH` | `./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` | |
 | `AURORA_LLM_URL` | *(unset)* | unset, the model is loaded into the app. An address (`http://127.0.0.1:8081`) sends every pass to the llama-server there; see [The model server](#the-model-server) |
-| `AURORA_N_CTX` | `4096` | ~115 MB of KV cache at f16 |
+| `AURORA_N_CTX` | `16384` | the window: the tools' menu alone is about 2,000 tokens of it. ~0.5 GB of KV cache for Qwen3.5-4B, ~450 MB for Qwen2.5-1.5B |
 | `AURORA_N_THREADS` | `0` | `0` is every CPU the service may use (affinity and cgroup quota, measured at startup). A number pins it. Measured on a 4-vCPU server: 8.9 tok/s at 2 threads, 17.1 at 4 |
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
 | `AURORA_USE_MLOCK` | `false` | `true` on the VPS, with the systemd unit above |
 | `AURORA_CHAT_FORMAT` | `auto` | `auto` uses the GGUF's own template; `chatml` forces Qwen's |
-| `AURORA_THINK_BLOCK` | `false` | `true` for a model whose every answer begins with an empty `<think>` block, as Qwen3.5 with `deploy/templates/qwen3.5.jinja`: the token counts then match what it reads |
-| `AURORA_LLM_ARGS` | *(unset)* | read only by `aurora-llm.service`: more `llama-server` options, word by word; see [Qwen3.5-4B](#qwen35-4b) |
+| `AURORA_THINKING` | *(unset)* | how the model thinks before it answers: `on` (Qwen3.5 thinking), `off` (an empty `<think>` block, Qwen3.5 with its thinking off), `none` (no block). Unset: `off` where the older `AURORA_THINK_BLOCK=true` is set, else `none`. See [Qwen3.5-4B](#qwen35-4b) |
+| `AURORA_THINK_BUDGET` | `1024` | with thinking on, the most tokens a reply thinks for before it is told to answer |
+| `AURORA_LLM_ARGS` | *(unset)* | read only by `aurora-llm.service`: more `llama-server` options, word by word |
 | `AURORA_HARDWARE_LABEL` | *(unset)* | how the machine is described in prose (About page, page description). Unset, it is written from what is measured, e.g. "machine with 2 cores and 3.8 GB of RAM". The status line always shows measured figures, whatever this says |
 | `AURORA_MOCK` | `false` | run the site with no model present |
 | `AURORA_MOCK_DELAY` | `0.085` | seconds between fake tokens; `0` runs the mock at full speed |
@@ -562,10 +571,9 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_SANDBOX` | `auto` | Python the model writes: `auto` runs it in the sandbox wherever the sandbox can run; `off` never. Nothing runs outside it; see [The Python sandbox](#the-python-sandbox) |
 | `AURORA_SANDBOX_VENV` | `/opt/aurora-sandbox/venv` | the sandbox's own venv, read-only to it |
 | `AURORA_KV_KIB_PER_TOKEN` | `28` | the model's KV cache per token, for the memory estimate on Benchmark: 28 for Qwen2.5-1.5B, 12 for LFM2.5-1.2B, 32 for Qwen3.5-4B |
-| `AURORA_AGENT_LOOP` | `true` | let the Agent look something up, read the result and look up something else before it answers. Each extra choice is a pass through the model, in seconds; `false` makes it choose once. See *Looking something up twice* |
-| `AURORA_AGENT_MAX_STEPS` | `3` | with the loop on: tool calls for one message |
-| `AURORA_AGENT_MAX_DECISIONS` | `3` | with the loop on: passes that choose, for one message |
-| `AURORA_AGENT_MAX_SECONDS` | `90` | with the loop on: seconds before the answer must begin |
+| `AURORA_AGENT_LOOP` | `true` | let the model call a tool, read what came back and call another before it answers. Each call costs a reply, in seconds; `false` lets it call one. See *One call after another* |
+| `AURORA_AGENT_MAX_STEPS` | `8` | with the loop on: tool calls for one message |
+| `AURORA_AGENT_MAX_SECONDS` | `600` | with the loop on: seconds after which no further call is begun |
 | `AURORA_NOTES` | `conversation` | notes the Agent keeps when asked to remember something. `conversation`: read back only in the conversation they were made in, and deleted with it. `site`: shared by every conversation, for a private deployment only. `off`: none. See *Notes* |
 | `AURORA_STEPS_KEEP_DAYS` | `30` | days to keep the step-by-step record of each message (which tool, what it was given, what came back, tokens and time per pass). It is a copy of what visitors typed; `0` keeps none |
 | `AURORA_USER_AGENT` | — | **must carry a contact URL** or Wikipedia 403s |
@@ -576,9 +584,9 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ---
 
-## Tools and skills
+## Tools
 
-Fourteen tools, no API keys anywhere:
+Eighteen tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -594,23 +602,43 @@ Fourteen tools, no API keys anywhere:
 | `read_url` | fetch a page and extract its readable text | yes |
 | `open_result` | read the page behind one of the numbered results, by its number | yes |
 | `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
-| `read_file` | one file of this conversation's project, as it stands | — |
+| `read_file` | one file of this conversation's project, as it stands, with line numbers | — |
+| `write_file` | create a file of the project, or replace one whole | — |
+| `edit_file` | replace one exact piece of a file with another, and leave the rest | — |
 | `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
+| `remember` · `recall` | notes kept on the user's word; see *Notes* | — |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.
 
-**The model decides.** Every message but a slash command goes to the model,
-which chooses what it needs: a tool, a question back, files, or nothing. No
-pattern reads the message for a word that would pick a tool or a shape of
-answer. The system text tells it how to judge: to use a tool for anything that
-may have changed since it was trained, for an exact figure, or for a page or
-file that is named; and to fit the answer to the message, a sentence for a
-greeting, a list for ideas, code in a fenced block. Each message is followed by
-when it was sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they
-say. An answer written from a lookup is sampled no warmer than 0.35. This
-needs a model that chooses well; it was built for Qwen3.5-4B (see
-[Qwen3.5-4B](#qwen35-4b)).
+**You talk to it; it decides.** A message goes to the model, which replies:
+it thinks, says what it has to say, and, when it judges a tool would give a
+better answer than its memory, calls one in the middle of its reply, in the
+format Qwen3.5 was trained on:
+
+```
+<tool_call>
+<function=weather>
+<parameter=location>
+Paris
+</parameter>
+</function>
+</tool_call>
+```
+
+The call is made, what came of it goes back to the model as the next turn
+(`<tool_response>`), and the model goes on: another call, or the answer. A
+greeting is one reply and no tool; a lookup is a call and an answer. No
+pattern reads the message for a word that would pick a tool, and there is no
+separate pass that decides first. The system text tells the model how to
+judge: a tool for anything that may have changed since it was trained, for an
+exact figure, or for a page or file that is named; otherwise it answers
+directly, fitting the answer to the message. Each message is followed by when
+it was sent, in `AURORA_TIMEZONE`, so "today" and "latest" mean what they say.
+
+The page shows a reply in the order it was written: the model's thought (a
+collapsed line), what it said, a tool's card where it called the tool, and
+what it said after. A reopened conversation shows the same order.
 
 **The live web.** The web search and the headlines both answer with a
 numbered list, and the model may then ask for one of them by its number
@@ -619,107 +647,90 @@ go to that the user did not write are the ones a list gave it. A page that
 says "now open http://elsewhere" is still refused. "Open the second one" in
 the next message means the last list the conversation was shown.
 
-**Code projects.** When the answer is something to keep as files (an app, a
-site, a script, a change to the project), the model chooses `write_files`
-instead of a tool, and the answer is written as a project: each file as a
-fenced block with its path above it (`### app/main.py`). That answer is held to
-a grammar in which every path is followed by its file and every file has a
-path, so it cannot come out as a description of the files or as one block
-holding them all. The answer is read for files as it is
-written; each is kept when its block closes (every version, in
+**Code projects.** Files the model writes with `write_file` or changes with
+`edit_file` are kept in the conversation's project (every version, in
 `project_files`), and the page shows them in a panel beside the thread on a
-wide screen, or a drawer on a narrow one, filling in line by line. In the
-chat a file is one row that opens it there. **Download zip** gets all of
-them, newest versions, in one folder named for the conversation. The next
-message is told the project's files by name, and a change to it is written
-as whole files again; `read_file` reads one back when the answer that wrote it
-no longer fits the window. Where the server has its sandbox, `run_file` runs
-one of its Python files there, the rest of the project beside it, read-only.
-A project holds at most 64 files, 256 KB each and 2 MB in all, under plain
-relative names.
+wide screen, or a drawer on a narrow one, filling in line by line as the
+model writes them. In the chat each change is a card that opens the file;
+an edit shows the lines it took out and put in. **Download zip** gets all of
+them, newest versions, in one folder named for the conversation. Each message
+is told the project's files by name and version. A change asked for is that
+change: one file edited, the rest left as they were. A file written again
+exactly as it stands is not kept, and the model is told so in a sentence it
+can act on. An edit whose text is not in the file is sent back the same way,
+with the nearest line, and `read_file` shows a file with line numbers, so a
+traceback's line leads straight to it. When the user pastes an error, the
+model is told to find the line that causes it, say the cause in one sentence,
+and fix it there. Where the server has its sandbox, `run_file` runs one of the
+project's Python files, the rest of the project beside it, read-only, and the
+model reads the end of what it printed on failure, where a traceback names
+the error. A project holds at most 64 files, 256 KB each and 2 MB in all,
+under plain relative names.
 
-**Skills** are several lookups the model may choose as one, beside the tools:
-*Compare two things* looks both up on Wikipedia and asks for a table. Each is a
-dict entry in `app/agent/skills.py`, not a code path: the inputs it takes, the
-lookups it makes with them, and how its answer is asked for. It is on the menu
-in the shape of a tool and held to the same grammar, and its lookups count
-against the run's limits like any other.
+### How a call is kept honest
 
-### How the model's choice is kept well-formed
+The model writes its own calls, so what keeps them usable is in the code that
+reads them:
 
-Asked politely for JSON a small model produces trailing commas, prose
-preambles and invented keys. Four layers:
-
-1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`. The
-   user names the tool and no choice is made; nothing on the page lists them.
-2. **Grammar-constrained choice** — everything else. The model chooses under a GBNF grammar generated
-   from the tool registry, so malformed output is not unlikely, it is
-   unrepresentable. It reads the prompt the answer is later written from:
-   the system text with the tool menu, the conversation so far, the message. The grammar holds what goes into a call as well as its
-   shape. Text has a ceiling, so a reply always closes instead of being cut
-   off mid-string by the token limit. An argument with a known set of values
-   can only be given one of them: the model cannot invent a currency, and a
-   unit is its own name or a word for it. An optional argument may be given
-   or left out. And where the message leaves out something a tool must have,
-   the pass may reply with one short question for the user instead of
-   guessing; their reply is then read after that question, like any message
-   after the one before it.
-3. **One second try** — a call the tool still cannot take is sent back to the
-   model once, with what was wrong, stated as fact. After that it is not
-   argued with.
+1. **Slash commands** — `/calc 1247*89`, `/weather Paris`, `/read <url>`,
+   `/python <code>`. The user names the tool; the call is put into the
+   conversation as if the model had made it, and the model answers from what
+   came of it. Nothing on the page lists them.
+2. **Read leniently, checked strictly.** A call is read out of the reply
+   whatever is missing at its end, and its arguments are checked against the
+   tool's: a number written as text becomes a number, an argument with a known
+   set of values must be one of them (the model cannot invent a currency), a
+   required one must be there. A call that names no tool there is, or cannot be
+   read at all, or was already made in this message, is not made.
+3. **Sent back, stated as fact.** Whatever was wrong goes back to the model as
+   the call's result, in one sentence ("That call was not made: …"), and it
+   goes on from there: it may call again, or answer.
 4. **Failure is visible** — a tool that errors or times out renders as a failed
-   step in the timeline. The model is told too: what happened, not the advice
-   the person is given beside it, and it is asked to say plainly what could
-   not be looked up rather than answer from memory.
+   card. The model is told too: for a tool that goes out to the web, what
+   happened and not the advice a person is given beside it; for one of this
+   machine's, the whole sentence, since it says what to do.
 
-A choosing pass costs a second or two once the prompt is in the server's
-cache, and every message but a command pays for it, a greeting included. It is announced on the page at the moment it is made and at no other
-time, and the status line says "deciding" while it runs. Under each answer,
-**How it ran** lists every step of the run in order: what the model read of
-its prompt (and how much of it was already in its cache), what it wrote, and
-how long each step took, then the run's time split into waiting, reading,
-writing and tools. It is read back from the steps the answer kept, so a
-reopened conversation shows the same.
+**Sampling follows what is being written.** A reply is written in phases, and
+each change of phase is a stop the model server makes at a string it was
+given, followed by a request that goes on from there: the thinking (to its
+budget), the prose, and inside a call the value of a parameter that holds
+code (a file's content, an edit's old and new text, a program), sampled as
+Qwen recommends for code, with no presence penalty, so an edit can copy a
+line exactly. Then prose again.
 
-The grammar cannot be compiled without llama.cpp, so where the tests run it is
-read instead: `tests/gbnf.py` understands the subset of GBNF the generator
-emits and says what a grammar accepts and what it refuses.
+Under each answer, **How it ran** lists every step of the run in order: each
+reply (what it read of its prompt, how much of it was already in the server's
+cache, what it wrote and how long it took), each call, then the run's time
+split into waiting, reading, writing and tools. It is read back from the steps
+the answer kept, so a reopened conversation shows the same.
 
-### Looking something up twice
+### One call after another
 
-A message that reaches the model can look something up, read what came back,
-and decide to look up something else: a tool the model chose earns it another
-choice. `AURORA_AGENT_LOOP=false` turns that off. The model then chooses once,
-from the same prompt, and the answer follows that one lookup.
+A reply that ends in a call is followed by another reply, which may call
+again. `AURORA_AGENT_LOOP=false` turns that off: the model may call one tool,
+then answers.
 
-The model is not trusted to know when to stop. A small one stops too early, or
-asks for the same thing again. So the code that runs the loop holds the limits:
+The model is not trusted to know when to stop. So the code that runs the loop
+holds the limits:
 
-- at most three tool calls and three choices for one message, and ninety
-  seconds before the answer must begin (all three are settings);
-- a lookup that has already been made is not made again;
-- a tool the visitor named themselves, by a command, never starts the
-  loop. Those cost exactly what they cost with it off.
+- at most eight tool calls for one message, and no further call begun after
+  ten minutes (both are settings);
+- a call that has already been made is not made again;
+- when a limit is reached, the last result says so in one line, and the last
+  reply cannot call: it answers with what it has.
 
-When something other than the model ends the looking-up, the pass that writes
-the answer is told so in one line, so the reply can say what was not found.
-
-Two things keep the extra passes cheap. The whole run is one transcript that
-only grows, and every pass reads it from the top, so each pass after the first
+Two things keep the extra replies cheap. The whole run is one transcript that
+only grows, and every reply reads it from the top, so each one after the first
 is charged only for what is new. And the run takes the inference slot once and
 keeps it, so nobody else's prompt replaces it in the model's cache part-way
 through; if a tool goes out to the network while somebody is waiting, the slot
 is lent to them for that time.
 
-Whether a second choice by a small model is worth its seconds is a question
-for the model, not the code: `scripts/eval_agent.py --engine real --single`
-makes every task choose once, to set beside a run with the loop.
-
 ### What the next message reads
 
 Each answered message keeps what the model was sent for it, from the message
-to the answer: what was looked up, as it was read, and the choices the model
-made on the way. The next message is read with that, as it was. A follow-up
+to the answer: every reply as the model wrote it, thinking and calls
+included, and what came of each call, as it was read. The next message is read with that, as it was. A follow-up
 can then use an earlier result ("and is that warm for October?" after the
 weather was looked up), and a model server that keeps its cache reads little
 more than the new message, since the prompt begins with the last one and its
@@ -795,16 +806,17 @@ path or a query string the user did not write is a different address. This is
 checked in code and does not depend on the model noticing anything.
 
 What a tool returns is given to the model as reading matter: wrapped in a
-`<data>` tag, with the model told once that what is inside one is material and
-never an instruction, and with anything in it that looks like that tag or like
-a control token of the chat format taken out first. That is a convention and
-not a wall, which is why the rule above is enforced in code.
+`<tool_response>` tag, with the model told once that what is inside one is
+material and never an instruction, and with anything in it that looks like
+that tag, like a call of its own, or like a control token of the chat format
+taken out first. That is a convention and not a wall, which is why the rule
+above is enforced in code.
 
 The calculator parses with `ast` and a node whitelist. It never calls `eval`,
 and rejects attribute access, comprehensions, lambdas and `__import__`.
 
 Set `AURORA_ALLOW_OUTBOUND=false` to drop every network tool from the registry,
-the grammar and the UI in one move.
+the menu and the UI in one move.
 
 > Wikipedia returns **403** for a User-Agent with no contact details. Set
 > `AURORA_USER_AGENT` to something including your repository URL or email.
@@ -851,9 +863,10 @@ its prompt to the server's cache.
 text behaves like a base model: it rambles, repeats, and never stops cleanly. The
 usual response — clamp temperature to ~0 and bolt on a repeated-sentence
 detector — makes it worse, because greedy decoding is what produces loops.
-Routing every turn through `<|im_start|>` / `<|im_end|>` lets the model stop on
-its own token and lets sampling sit at a normal `0.7` with a light
-`repeat_penalty`.
+Writing every turn in `<|im_start|>` / `<|im_end|>` lets the model stop on its
+own token and lets sampling sit at the model's own recommended settings: a
+normal temperature with a presence penalty for prose, a cooler one with none
+for code (`app/agent/style.py`).
 
 **The front-end is built ahead of time, and everything it needs is served from
 this machine.** It is React 19 and TypeScript, built by Vite into one script,
@@ -1062,8 +1075,9 @@ server runs. `test_engine.py` is about the one inference slot: that two passes
 never overlap, and that a reader who leaves mid-pass cannot free the slot while
 llama.cpp is still working. `test_agent.py` drives a run directly, and stops it
 at each stage. `test_chat_stream.py` does the same over HTTP and reads what was
-stored. `test_router.py`, `test_tools.py` and `test_steps.py` cover routing,
-argument checking and the stored trace. No test sleeps to let something happen,
+stored. `test_calls.py` is the call format, `test_router.py` the slash
+commands, `test_tools.py` argument checking, `test_projects.py` the files a
+run writes and edits, and `test_steps.py` the stored trace. No test sleeps to let something happen,
 and a test that tries to resolve a hostname fails.
 
 **The interface's unit tests** (Vitest) cover the modules that are algorithms:
@@ -1097,7 +1111,7 @@ right one opening the page that was asked for.
 ### Does it do the right thing
 
 The benchmark says how fast. This says whether, given a message, the right
-thing happened: the right tool, the right arguments, no pass that was not
+thing happened: the right tool, the right arguments, no reply that was not
 needed. `evals/tasks.jsonl` is a file of tasks, one per line, each with what to
 send and what must be true afterwards. Tool results come from
 `evals/fixtures`, so no task touches the network, and nothing is written to the
@@ -1107,10 +1121,9 @@ database.
 python scripts/eval_agent.py                                   # scripted: no model needed
 python scripts/eval_agent.py --engine real --out evals/reports/today.json
 python scripts/eval_agent.py --engine real --compare evals/reports/before.json
-python scripts/eval_agent.py --engine real --single            # one choice where a task does not ask for more
-python scripts/eval_agent.py --engine real --probe-routing     # one first choice, cold then warm
-python scripts/eval_agent.py --engine real --probe-cache       # what each pass of three turns read
-python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt   # another wording, this run only
+python scripts/eval_agent.py --engine real --single            # one call where a task does not ask for more
+python scripts/eval_agent.py --engine real --probe-cache       # what each request of four turns read
+python scripts/eval_agent.py --engine real --rules evals/rules/fewer-calls.txt   # another wording, this run only
 ```
 
 **Scripted**, each task brings what the model says, so the run measures the
@@ -1118,9 +1131,9 @@ code around the model and nothing about the model. It takes a second and runs
 with the server's tests. Its report says its token counts are estimates and
 carries no timings.
 
-**Real** loads the model as the site does and gives every pass the same seed.
+**Real** loads the model as the site does and gives every request the same seed.
 It is the only source of a number about what the agent can do: task success,
-routing accuracy, argument match, steps and passes, tokens, and seconds per
+routing accuracy, argument match, steps and replies, tokens, and seconds per
 task split into waiting, reading and writing. Stop the web service first: a
 second process loads a second copy of the model and shares the cores, exactly
 as the benchmark would. With the model in a llama-server, stop `aurora` and
@@ -1129,16 +1142,15 @@ its one slot would each keep a queue the other cannot see.
 
 The loop is on or off for a run of the suite as the settings say. A task that
 is about the loop asks for it itself, so it runs with the loop on whatever the
-settings say; `--single` makes all the others choose once. Run the suite both
-ways and compare: the report says how many runs made a second lookup, how many
-were ended by a limit and how many by asking for the same thing twice, beside
-task success and seconds per task. That comparison is what decides whether the
-loop stays on. Scripted tasks are written for the loop on.
+settings say; `--single` lets all the others call once. Run the suite both
+ways and compare: the report says how many runs made a second call, how many
+were ended by a limit and how many calls repeated one already made, beside
+task success and seconds per task. Scripted tasks are written for the loop on.
 
 A wording file (`--rules`) puts other texts in front of the model for one
-run: the loop's rules, the system text, and a tool's or a skill's line on the menu.
+run: who the model is, the rules for using tools, and a tool's description.
 It is how a rewording is measured before it is made the default, since with a
-model this small a reworded line can move routing either way. The report names
+model this small a reworded line can move what it does either way. The report names
 the file and its digest.
 
 A task marked `pending` is a known gap, written down with its reason. It is

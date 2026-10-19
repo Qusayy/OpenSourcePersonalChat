@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Iterator
 
-from ..projects.parse import GRAMMAR as FILES
+from ..chatml import THINK_CLOSE
 
 MOCK_VOCAB = (
     "Quantization stores each weight in fewer bits, so the model file shrinks "
@@ -20,31 +20,18 @@ MOCK_VOCAB = (
     "second.\n"
 ).split(" ")
 
-# What the mock engine answers when asked to choose under a grammar.
-MOCK_DECISION = '{"tool": "none"}'
-# What it writes when the answer is a project, held to the file-block grammar.
-MOCK_PROJECT = (
-    "A small app to start from.\n\n"
-    "### app/main.py\n```python\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n\n"
-    "@app.get(\"/\")\ndef root():\n    return {\"message\": \"Hello, World!\"}\n```\n\n"
-    "### requirements.txt\n```text\nfastapi\nuvicorn\n```\n\n"
-    "Install the requirements, then run `uvicorn app.main:app --reload`."
-)
+# What it thinks first, where the model thinks.
+MOCK_THOUGHT = "The question is about speed on a CPU, so I will explain what quantization saves.".split(" ")
 
 
-def chunks(grammar: str | None, delay: float) -> Iterator[str]:
-    """What a pass writes without a model."""
-    if grammar == FILES:
-        for i, line in enumerate(MOCK_PROJECT.splitlines(keepends=True)):
+def chunks(delay: float, thinking: str = "none", prefix: str = "") -> Iterator[str]:
+    """What a pass writes without a model: a short thought where the model
+    thinks and has not yet, then the same paragraph every time."""
+    if thinking == "on" and THINK_CLOSE not in prefix:
+        for i, word in enumerate(MOCK_THOUGHT):
             time.sleep(delay)
-            yield line
-        return
-    if grammar is not None:
-        # Any other pass held to a grammar is a decision, and without a model the
-        # only honest one is "no tool". It is said at once: there is nothing
-        # here whose speed is worth imitating.
-        yield MOCK_DECISION
-        return
+            yield ("" if i == 0 else " ") + word
+        yield "\n" + THINK_CLOSE + "\n\n"
     for i, word in enumerate(MOCK_VOCAB):
         time.sleep(delay)  # ~11 tok/s by default
         yield ("" if i == 0 else " ") + word

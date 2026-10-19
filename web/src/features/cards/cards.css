@@ -72,4 +72,29 @@
   .face .pin {
     fill: var(--ink);
   }
+
+  /* -------------------------------------------------------------- diff -- */
+
+  /* An edit's lines, in the code block an answer uses: what it took out and
+     what it put in. The sign at the head of each line says which; the inks
+     say it again. A line taken out recedes into the second ink; a line put
+     in stands in ink on a faint ink tint, the full width of the block. No
+     hue: a removed line is not a fault, and an added one is not live. */
+  .diff pre code {
+    display: block;
+    min-width: fit-content;
+  }
+  .diff-del,
+  .diff-add {
+    display: block;
+    margin-inline: calc(-1 * var(--s-4));
+    padding-inline: var(--s-4);
+  }
+  .diff-del {
+    color: var(--ink-2);
+  }
+  .diff-add {
+    color: var(--ink);
+    background: color-mix(in oklab, var(--ink) 7%, var(--sheet-2));
+  }
 }

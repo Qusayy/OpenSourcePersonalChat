@@ -106,11 +106,20 @@ export function AboutPage() {
         <Panel>
           <P>
             {
-              "There is nothing to switch on. Every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a web search, the headlines, a page reader, a notebook and, where this server has its sandbox, Python. A command such as "
+              "There is nothing to switch on. You talk to the model, and every message can use the tools: a calculator, a clock, a unit converter, text statistics, Wikipedia, the weather, exchange rates, a web search, the headlines, a page reader, a notebook, the conversation's project and, where this server has its sandbox, Python. It thinks first; what it thought is folded away above what it says. Then it calls a tool itself, in the format it was trained to write, only when it judges that one is needed, and a greeting needs none. A command such as "
             }
             <Code>/weather Lisbon</Code>
             {
-              ", or a pattern it knows (a sum, a pasted link), picks the tool before the model is asked anything, and a greeting is answered without asking it to choose. Otherwise the model chooses, under a grammar that only lets it write a call the tool can take. It may look something up, read the result and look up something else: at most three lookups, within ninety seconds, never the same one twice. How the answer is written, code first, a list, a few sentences or an explanation, is read from the message itself."
+              " names the tool for it. It may look something up, read the result and call again: at most eight calls a message, never one it has already made, and its last reply cannot call at all. How the answer is shaped, code, a list or a few sentences, is its own choice."
+            }
+          </P>
+          <P>
+            {"A project's files are written with "}
+            <Code>write_file</Code>
+            {" and changed with "}
+            <Code>edit_file</Code>
+            {
+              ", which changes only the lines it was asked to and leaves the rest as they were; each change shows what it took out and what it put in. A file written again exactly as it was is refused, so a fix has to change something."
             }
           </P>
           <P>
@@ -198,12 +207,12 @@ export function AboutPage() {
             {" / "}
             <Code>{"<|im_end|>"}</Code>
             {
-              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at each kind of answer's own temperature ("
+              " format the model was fine-tuned on, so it stops on its own token, and sampling can sit at the settings its makers give for it, one for prose and one for code ("
             }
             <Code>0.6</Code>
-            {" for an explanation) with a light "}
+            {" for code), with no "}
             <Code>repeat_penalty</Code>
-            {". No dedup hack required."}
+            {" at all. No dedup hack required."}
           </P>
         </Panel>
       </Section>

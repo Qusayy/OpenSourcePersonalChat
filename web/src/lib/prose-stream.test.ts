@@ -281,6 +281,17 @@ describe("proseRenderer: while the answer is being written", () => {
     expect(tail.textContent).toBe("Four");
   });
 
+  it("shows a file written out in a reply as code: its files are written with calls", async () => {
+    const { prose, host } = await world();
+    const reply = "Like this:\n\n### app.py\n```python\nprint(1)\n```\n\nDone.";
+    prose.update(reply, true);
+    expect(host.querySelector(".file-chip")).toBeNull();
+    expect(host.querySelector("pre code")?.textContent).toBe("print(1)");
+    prose.finish(reply);
+    expect(host.querySelector(".file-chip")).toBeNull();
+    expect(host.querySelector("pre code")?.textContent).toBe("print(1)");
+  });
+
   it("puts the caret inside whatever kind of block is being written", async () => {
     const { prose, tail } = await world();
     prose.update("- a\n- b", true);

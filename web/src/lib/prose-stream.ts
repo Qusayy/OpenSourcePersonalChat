@@ -5,9 +5,11 @@
  * across each rebuild by hand; that only works if nothing else writes to the
  * same nodes. The page gives `proseRenderer` an empty element and leaves
  * everything inside it alone.
+ *
+ * A reply being written writes its files with calls, so nothing in its text
+ * is folded into a file chip: a fenced block is code, shown as code.
  */
 
-import { foldFiles } from "./files";
 import { reduced } from "./frame";
 import { renderMarkdown, splitBlocks } from "./markdown";
 
@@ -135,7 +137,7 @@ export function proseRenderer(host: Element): ProseRenderer {
     update(raw, caretOn) {
       finished = null;
       const now = performance.now();
-      const blocks = splitBlocks(foldFiles(raw));
+      const blocks = splitBlocks(raw);
       // Commit every block that is now finished, appending rather than
       // rebuilding so existing nodes are left alone.
       while (settled < blocks.length - 1) {
@@ -178,7 +180,7 @@ export function proseRenderer(host: Element): ProseRenderer {
         .map((r) => ({ start: before + r.start, end: before + r.end, at: r.at }));
       // One clean pass at the end so the finished answer is a single tree.
       stable.innerHTML = "";
-      tail.innerHTML = renderMarkdown(foldFiles(raw));
+      tail.innerHTML = renderMarkdown(raw);
       settled = 0;
       written = 0;
       fresh = [];

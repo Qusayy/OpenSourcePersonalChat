@@ -128,7 +128,7 @@ test.describe("with reduced motion", () => {
     await page.goto("/");
     await page.locator("#menu-btn").click();
     await expect(page.locator("#rail")).toBeVisible();
-    await expect(page.locator("#convo-list [data-id]")).toHaveCount(3);
+    await expect(page.locator("#convo-list [data-id]")).toHaveCount(4);
     await expect(page.locator("#convo-list")).not.toHaveClass(/stagger/);
     expect(await moving(page, "#rail")).toBe(0);
     const translate = await page.locator("#rail").evaluate((el) => getComputedStyle(el).translate);

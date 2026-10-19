@@ -19,7 +19,7 @@ try:
     from fastapi.testclient import TestClient
 
     from app import main
-    from app.agent.transcript import SYSTEM
+    from app.agent.transcript import TOOL_RULES, WHO
     from app.api import frontend, pages
     from app.llm import Engine
     from app.store import db
@@ -209,7 +209,8 @@ class AppRoutingTests(unittest.TestCase):
     def test_the_bootstrap_carries_no_prompts_and_no_paths(self) -> None:
         text = self.client.get("/").text
         embedded(text)
-        self.assertNotIn(SYSTEM, text)
+        self.assertNotIn(WHO, text)
+        self.assertNotIn(TOOL_RULES, text)
         self.assertNotIn(str(REPO), text)
         self.assertNotIn(str(REPO).replace("\\", "\\\\"), text)
         self.assertNotIn(".gguf", text)

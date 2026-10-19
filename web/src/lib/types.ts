@@ -155,7 +155,19 @@ export interface StoredMessage {
   /** How the answer was arrived at, while its steps are kept. */
   run?: StoredRun | null;
   tool_calls: StoredToolCall[];
+  /** The answer as it was said, in order: what the model thought, what it
+   *  said, and where each of its calls came. Null or absent for an answer
+   *  kept before replies were kept this way; it is then drawn as its cards
+   *  followed by its text. */
+  segments?: Segment[] | null;
 }
+
+/** One piece of a stored answer, in the order it was said. A card names its
+ *  call by its place in the message's `tool_calls`. */
+export type Segment =
+  | { kind: "thought"; text: string }
+  | { kind: "text"; text: string }
+  | { kind: "card"; call: number };
 
 /** GET /api/conversations/{id} */
 export interface Conversation {
@@ -211,34 +223,36 @@ export interface ChatRequest {
 }
 
 export interface StepEvent {
-  /** "route", "tool-0", "tool-1", …, "answer". */
+  /** "reply-1", "reply-2", … for the model's replies; "tool-0", "tool-1", …
+   *  for the calls they made. */
   id: string;
-  kind: "route" | "tool" | "model";
+  /** "model": one reply of the model, which ends in an answer or a call.
+   *  "tool": one call being made. */
+  kind: "model" | "tool";
   /** "stopped": the run was stopped while this step was under way. */
   status: "running" | "ok" | "failed" | "stopped";
+  /** A reply: "Thinking" or "Writing" while it runs, then "Answer" or
+   *  "Called <tool>". A call: the tool's name on screen. */
   label: string;
   glyph?: string;
-  /** For a route: how it was decided ("skill", "slash", "heuristic", "model", "direct"). For a failed tool: why. */
+  /** For a failed tool: why. */
   detail?: string | null;
   tool?: string | null;
   args?: Record<string, unknown>;
   ms?: number;
-  /** On a step that was a pass through the model, once it has ended: the
-   *  tokens it read and the tokens it wrote. Null if the pass never ran. */
+  /** On a reply, once it has ended: the tokens it read and the tokens it
+   *  wrote, and how many of those it spent thinking. */
   tokens_in?: number | null;
   tokens_out?: number | null;
-  /** Which choice of the run this is, counting from one, when a run may make
-   *  several: "route" is the first, "route-2" the second, and so on. */
-  pass?: number;
+  think_tokens?: number | null;
 }
 
 /** The whole run in a line, sent last, after `done` or `error`. */
 export interface RunEvent {
   /** The run's name: the `request_id` it was announced under. */
   id: string;
-  /** "asked": the reply was a question put back to the user. */
-  outcome: "answered" | "asked" | "stopped" | "failed";
-  /** Everything it did: routing, each tool, the answer. */
+  outcome: "answered" | "stopped" | "failed";
+  /** Everything it did: each reply of the model and each call it made. */
   steps: number;
   /** How many of those were passes through the model. */
   passes: number;
@@ -258,11 +272,12 @@ export interface RunEvent {
 
 /** One step of a run, as its ledger lists it. */
 export interface LedgerStep {
-  /** route | fill | decide | repair | tool | answer: one row per pass. */
+  /** call (a reply that ended in a call) | tool | answer: one row per step.
+   *  Runs kept before replies were also route | decide | repair | fill | compose. */
   kind: string;
-  /** The tool or skill; "ask" for a question put back; null for no tool. */
+  /** The tool called; null for none. Older runs: "ask" for a question put back. */
   name: string | null;
-  /** How it was chosen: slash | heuristic | skill | model. */
+  /** How it was chosen: model | slash; older runs also heuristic | skill. */
   via: string | null;
   ok: boolean;
   error: string | null;
@@ -291,14 +306,15 @@ export interface DoneEvent {
   read_tokens?: number | null;
   cached_tokens?: number | null;
   completion_tokens: number;
+  /** Of the tokens written, how many were thinking. */
+  think_tokens?: number | null;
   prefill_tps: number | null;
   gen_tps: number | null;
   total_ms: number | null;
   rss_mb: number | null;
   tool_calls: number;
-  /** Set when the reply is a question the model put back to the user in place
-   *  of an answer. The figures are then those of the pass that chose to ask. */
-  asked?: boolean;
+  /** How many requests the run made of the model: one per reply. */
+  requests?: number;
   /** The figures in the answer that nothing it looked up returned, and the
    *  line said about them under the answer. Absent where it was not checked. */
   unsupported?: string[];
@@ -317,14 +333,13 @@ export type ChatEvents = {
     request_id?: string;
   };
   step: StepEvent;
+  /** A call's result, to be drawn where it came in the reply: after the
+   *  words written so far, before any written after it. */
   card: { step_id: string; card: CardKind; tool: string; data: CardData };
+  /** A file a call is writing: it opens, a line of it arrives, it closes. */
+  file: FileEventData;
   /** Something had to give for the prompt to fit the window: the oldest
    *  messages, given to the model only in short, or the end of this one. */
-  /** A file the answer is writing: it opens, a line of it arrives, it closes. */
-  file: FileEventData;
-  /** The answer so far is taken back: it said it could not look something
-   *  up, and the run is looking it up and writing it again. */
-  retract: { reason: string };
   trimmed: {
     dropped: number;
     /** Earlier turns read whole, and earlier turns given only in short. */
@@ -335,10 +350,15 @@ export type ChatEvents = {
   };
   /** Waiting for the one engine. `position` is how many are ahead. */
   queue: { position: number; first: boolean };
-  /** The pass that writes the answer has the engine. `request_id` is the
+  /** A reply of the model has the engine: once per reply, so a run that
+   *  calls a tool and replies again says it again. `request_id` is the
    *  run's, the same one `conversation` carried. */
   start: { request_id: string; queue_wait_ms: number; prompt_tokens: number; n_ctx: number };
-  /** One piece of text. The first of a response also carries `ttft_ms`. */
+  /** A piece of what the model is thinking. The first piece of a reply may
+   *  carry `ttft_ms`. */
+  think: { t: string; ttft_ms?: number };
+  /** A piece of what the model says. The first piece of a reply may carry
+   *  `ttft_ms`, where its thinking did not. */
   token: { t: string; ttft_ms?: number };
   done: DoneEvent;
   error: { message: string };

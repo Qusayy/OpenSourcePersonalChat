@@ -1,5 +1,5 @@
 """The Python sandbox: the jail a program runs in, the tool that runs one,
-and the pass in which the model writes it.
+and the call in which the model writes it.
 
 Most of this needs no sandbox: a stand-in runner takes the program and says
 what it did. The tests at the end run real programs in the real jail, and
@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 
 try:
     from app import agent
+    from app.agent.calls import render_call
+    from app.agent.reply import CODE_END
     from app.agent.route import free_route
     from app.sandbox import runner as sandbox
     from app.sandbox.runner import BwrapRunner, Outcome, argv
@@ -29,9 +31,7 @@ try:
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
-NONE = '{"tool": "none"}'
-CHOOSE = '{"tool": "python", "args": {"task": "two to the tenth"}}'
-PROGRAM = "```python\nprint(2 ** 10)\n```"
+CHOOSE = render_call("python", {"code": "print(2 ** 10)\n"})
 
 
 @dataclass
@@ -88,11 +88,11 @@ class JailTests(unittest.TestCase):
 class ToolTests(unittest.IsolatedAsyncioTestCase):
     async def run_program(self, program: str):
         async def made():
-            CALL.set(CallContext(program=program))
-            return await call_tool("python", {"task": "a sum"})
+            CALL.set(CallContext())
+            return await call_tool("python", {"code": program})
         return await asyncio.create_task(made())
 
-    async def test_it_runs_the_program_it_was_handed_and_says_what_it_printed(self) -> None:
+    async def test_it_runs_the_program_it_was_given_and_says_what_it_printed(self) -> None:
         fake = FakeRunner()
         use(self, fake)
         result = await self.run_program("print(2 ** 10)\n")
@@ -110,6 +110,16 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         read = REGISTRY["python"].observation(result, "")
         self.assertIn("exited with code 1", read)
         self.assertIn("ZeroDivisionError", read)
+
+    async def test_a_long_traceback_is_read_from_its_end_where_the_error_is(self) -> None:
+        frames = "".join(f'  File "/usr/lib/x.py", line {n}, in f\n    g()\n' for n in range(400))
+        err = "Traceback (most recent call last):\n" + frames + "NameError: name 'totl' is not defined\n"
+        use(self, FakeRunner(Outcome("a line printed\n" * 200, err, 1, False, 5.0)))
+        result = await self.run_program("print(totl)")
+        read = REGISTRY["python"].observation(result, "", 500)
+        self.assertIn("NameError: name 'totl' is not defined", read)
+        self.assertIn("It printed:", read)
+        self.assertLessEqual(len(read.encode("utf-8")), 500 * 3)
 
     async def test_a_program_out_of_time_is_a_failed_call(self) -> None:
         use(self, FakeRunner(Outcome("", "", None, True, 10000.0)))
@@ -136,8 +146,9 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("python", [t.name for t in available()])
 
 
-class ProgramPassTests(unittest.IsolatedAsyncioTestCase):
-    """The model chooses the tool, then writes the program in a pass of its own."""
+class ProgramCallTests(unittest.IsolatedAsyncioTestCase):
+    """The model writes the program as its call's code: raw text, sampled as
+    code, with nothing to escape."""
 
     def setUp(self) -> None:
         support.no_network(self)
@@ -150,34 +161,33 @@ class ProgramPassTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(engine.settled)
         return engine
 
-    async def test_the_program_is_written_then_run_then_read(self) -> None:
-        engine = self.scripted(CHOOSE, PROGRAM, NONE, "It is 1024.")
+    async def test_the_program_is_written_in_the_call_then_run_then_read(self) -> None:
+        engine = self.scripted(CHOOSE, "It is 1024.")
         trace = agent.Trace()
         stream = await collect(agent.run("what is two to the tenth, worked out", history=[],
                                          trace=trace, engine=engine))
         self.assertEqual(self.fake.programs, ["print(2 ** 10)\n"])
-        self.assertEqual([s.kind for s in trace.steps], ["route", "compose", "tool", "decide", "answer"])
-        written = support.step(stream, "code-1", "ok")
-        self.assertEqual(written["label"], "Wrote the code")
-        # The program pass is held to the grammar of one fenced block, and reads
-        # on from the choice.
-        self.assertIn("```python", engine.passes[1].grammar)
-        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt + CHOOSE))
-        self.assertIn(PROGRAM, engine.passes[2].prompt)
+        self.assertEqual([s.kind for s in trace.steps], ["call", "tool", "answer"])
+        # Up to the code, the code itself sampled as code, the end of the call;
+        # then the answer.
+        self.assertEqual([p.stop for p in engine.passes][1], [CODE_END])
+        self.assertEqual(engine.passes[1].sampling["presence_penalty"], 0.0)
+        # After the tag, the format's line break, then the program.
+        self.assertEqual(engine.passes[1].output, "\nprint(2 ** 10)\n")
+        self.assertTrue(engine.passes[1].prompt.startswith(engine.passes[0].prompt))
         self.assertIn("It printed:\n1024", engine.passes[3].prompt)
         card = only(stream, "card")[0]
         self.assertEqual((card["card"], card["data"]["stdout"]), ("python", "1024\n"))
         self.assertTrue(engine.free)
 
-    async def test_a_reply_with_no_program_in_it_runs_nothing(self) -> None:
-        engine = self.scripted(CHOOSE, "I would use pow.", NONE, "About a thousand.")
+    async def test_a_call_with_no_program_in_it_runs_nothing(self) -> None:
+        engine = self.scripted(render_call("python", {"code": "  "}), "About a thousand.")
         trace = agent.Trace()
-        stream = await collect(agent.run("what is two to the tenth, worked out", history=[],
-                                         trace=trace, engine=engine))
+        await collect(agent.run("what is two to the tenth, worked out", history=[],
+                                trace=trace, engine=engine))
         self.assertEqual(self.fake.programs, [])
-        self.assertIs(trace.steps[1].ok, False)
-        self.assertEqual(support.step(stream, "code-1", "failed")["label"], "No code written")
         self.assertEqual(trace.calls[0][1].error, "no program")
+        self.assertIn("Error: There was no program to run.", engine.passes[-1].prompt)
 
     async def test_a_program_the_user_gave_is_run_as_they_gave_it(self) -> None:
         for message in ("/python print(6 * 7)", "/python\n```python\nprint(6 * 7)\n```"):

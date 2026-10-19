@@ -141,16 +141,97 @@ export const DONE = {
   tool_calls: 0,
 };
 
+/** A text as the stream sends it: a word at a time, each with its space. */
+const pieces = (text: string): string[] => text.match(/\S+\s*/g) ?? [text];
+
 /** A whole answer down the newest stream: start, the text in pieces, done. */
 export async function answer(page: Page, text: string, done: object = DONE): Promise<void> {
   await push(page, "conversation", CONVERSATION);
   await push(page, "start", START);
-  const pieces = text.match(/\S+\s*/g) ?? [text];
-  for (const [i, t] of pieces.entries()) {
+  for (const [i, t] of pieces(text).entries()) {
     await push(page, "token", i === 0 ? { t, ttft_ms: 86.4 } : { t });
   }
   await push(page, "done", done);
   await end(page);
+}
+
+/**
+ * One reply of the model down the newest stream, as the server tells it: its
+ * step begins, it has the engine, it thinks and says what it was given in
+ * pieces, and its step ends, as the answer or as the call it made (`called`,
+ * the tool's name on screen). What comes of the call is the test's to send.
+ */
+export async function reply(
+  page: Page,
+  n: number,
+  { think, say, called }: { think?: string; say?: string; called?: string } = {},
+): Promise<void> {
+  const id = `reply-${n}`;
+  const label = think ? "Thinking" : "Writing";
+  await push(page, "step", { id, kind: "model", status: "running", label, glyph: "✦" });
+  await push(page, "start", START);
+  let first = true;
+  for (const [event, text] of [
+    ["think", think],
+    ["token", say],
+  ] as const) {
+    if (!text) continue;
+    for (const t of pieces(text)) {
+      await push(page, event, first ? { t, ttft_ms: 86.4 } : { t });
+      first = false;
+    }
+  }
+  await push(page, "step", {
+    id,
+    kind: "model",
+    status: "ok",
+    label: called ? `Called ${called}` : "Answer",
+    glyph: "✦",
+    ms: 1200,
+    tokens_in: 56,
+    tokens_out: 12,
+    think_tokens: think ? 6 : 0,
+  });
+}
+
+/** One call made, down the newest stream: its step runs and ends, then its card. */
+export async function called(
+  page: Page,
+  index: number,
+  {
+    label,
+    tool,
+    card,
+    data,
+    ms = 400,
+  }: {
+    label: string;
+    tool: string;
+    card: string;
+    data: object;
+    ms?: number;
+  },
+): Promise<void> {
+  const id = `tool-${index}`;
+  await push(page, "step", { id, kind: "tool", status: "running", label, tool });
+  await push(page, "step", { id, kind: "tool", status: "ok", label, tool, ms });
+  await push(page, "card", { step_id: id, card, tool, data });
+}
+
+/** What an answer is made of, top to bottom: "thought", "text", "cards" (a
+ *  run of cards), "file" (a file being written) and "calls" (calls under way). */
+export function order(page: Page, n = 0): Promise<string[]> {
+  return answerOf(page)
+    .nth(n)
+    .evaluate((el) =>
+      [
+        ...el.querySelectorAll(
+          ':scope .prose, :scope [data-part="cards"], :scope [data-part="thought"], :scope [data-part="file"], :scope [data-part="calls"]',
+        ),
+      ].map((node) =>
+        node.classList.contains("prose") ? "text" : ((node as HTMLElement).dataset.part ?? ""),
+      ),
+    );
 }
 
 /** Type a question and press Enter. */

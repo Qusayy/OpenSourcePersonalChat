@@ -66,9 +66,8 @@ register(Tool(
     run=_run_file,
     card="python",
     example="/runfile app.py",
-    budget=200,
+    budget=500,
     observe=_observe,
     timeout=sandbox.WALL_SECONDS + 5,
-    project=True,
     requires=lambda: settings.sandbox != "off" and sandbox.runner().available(),
 ))

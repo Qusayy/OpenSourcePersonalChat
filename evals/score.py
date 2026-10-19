@@ -10,13 +10,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.skills import SKILLS
-
 from .tasks import Task, Turn
 
 # What a call that never reached its tool fails with: a call refused before it
-# was made, by the run or by the dispatcher.
-REFUSED = frozenset({"not allowed", "bad input", "missing input"})
+# was made, by the run or by the dispatcher; one the model wrote that named no
+# tool there is or could not be read; and one it had already made.
+REFUSED = frozenset({
+    "not allowed", "bad input", "missing input", "bad call", "unknown tool", "repeated",
+})
+# Of those, the calls that named no tool at all.
+NO_TOOL = frozenset({"bad call", "unknown tool"})
 
 
 def _plain(value: Any) -> Any:
@@ -32,39 +35,22 @@ def _plain(value: Any) -> Any:
 
 
 def chosen(turn: Turn) -> tuple[str | None, dict | None, str | None]:
-    """The first thing a turn decided to do: ``(tool, arguments, tier)``.
+    """The first thing a turn did: ``(tool, arguments, tier)``.
 
-    For a skill the tool is the first one its plan called; otherwise it is the
-    tool the routing step named, which is None when it named none. The
-    arguments are what the tool was actually run with.
+    The tool is the first one called, by the user's command (tier "slash") or
+    by the model ("model"): the first call that was made, or where every one
+    was refused, the first that named a tool. A call that named no tool is no
+    tool. With no call at all the tool is None and the tier is "model" if the
+    model replied: it chose to answer. The arguments are what the tool was
+    called with.
     """
     steps = turn.trace.steps
-    route = next((s for s in steps if s.kind == "route"), None)
-    if route is None:
-        return None, None, None
-    ran = next((s for s in steps if s.kind == "tool"), None)
-    tool = (ran.name if ran else None) if route.via == "skill" else route.name
-    if tool == "ask":
-        tool = None  # a question put back to the user, not a tool
-    args = ran.input if ran else (route.input if route.via == "slash" else None)
-    return tool, args, route.via
-
-
-def skill_of(turn: Turn) -> str | None:
-    """The skill a turn ran: the last choice the model made that held. None
-    for none."""
-    steps = turn.trace.steps
-    chose = [s.name for s in steps
-             if s.model and s.kind in ("route", "decide", "repair") and s.ok and s.name in SKILLS]
-    return chose[-1] if chose else None
-
-
-def skill_match(task: Task, turn: Turn) -> bool | None:
-    """Whether the run ran the skill the task says it should have; None when
-    the task does not say."""
-    if "skill" not in task.expect:
-        return None
-    return skill_of(turn) == task.expect["skill"]
+    tools = [s for s in steps if s.kind == "tool" and s.error not in NO_TOOL]
+    ran = next((s for s in tools if s.error not in REFUSED), tools[0] if tools else None)
+    if ran is not None:
+        return ran.name, ran.input, ran.via
+    replied = any(s.model for s in steps)
+    return None, None, "model" if replied else None
 
 
 def route_match(task: Task, turn: Turn) -> tuple[bool | None, bool | None]:
@@ -106,9 +92,6 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
                 if _plain(got.get(key)) != _plain(value):
                     failed.append(f"route: {key} was {got.get(key)!r}, expected {value!r}")
 
-    if skill_match(task, turn) is False:
-        failed.append(f"skill: ran {skill_of(turn)!r}, expected {expect['skill']!r}")
-
     # The calls that were made. One the run refused, or the dispatcher did,
     # never reached its tool; the refusal is on the step that chose it.
     called = [s.name for s in trace.steps if s.kind == "tool" and s.error not in REFUSED]
@@ -123,8 +106,12 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             f"passes: {passes} through the model, at most {expect['max_model_passes']} expected"
         )
 
-    if "style" in expect and trace.style != expect["style"]:
-        failed.append(f"style: written as {trace.style!r}, expected {expect['style']!r}")
+    for path, wanted in (expect.get("file_contains") or {}).items():
+        content = written(turns, path)
+        if content is None:
+            failed.append(f"file: {path} was never written")
+            continue
+        failed += [f"file: {path} does not contain {t!r}" for t in wanted if t not in content]
 
     outcome = expect.get("outcome", "answered")
     if trace.outcome != outcome:
@@ -134,7 +121,7 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
     wanted_out = expect.get("prompt_not_contains") or []
     if wanted_in or wanted_out:
         if not trace.prompt:
-            failed.append("prompt: no answer pass was made, so there is no prompt to read")
+            failed.append("prompt: no reply was made, so there is no prompt to read")
         else:
             # All of it, not only the last turn: what an earlier turn carried
             # forward is as much a part of what the model read.
@@ -158,3 +145,14 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
         for t in expect.get("answer_not_contains") or [] if t.casefold() in answer
     ]
     return failed
+
+
+def written(turns: list[Turn], path: str) -> str | None:
+    """A project file as the task's turns left it: the content of the last
+    call that wrote or edited it and was kept. None if none was."""
+    content = None
+    for turn in turns:
+        for call, result in turn.trace.calls:
+            if call.name in ("write_file", "edit_file") and result.ok and result.data.get("path") == path:
+                content = result.data.get("content")
+    return content

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # address (http://127.0.0.1:8081): every pass goes to the llama-server
     # there instead, which deploy/aurora-llm.service runs from this same file.
     llm_url: str = ""
-    n_ctx: int = 4096
+    n_ctx: int = 16384
     # What the KV cache holds per token of context, in KiB, for the memory
     # estimate on the Benchmark page: Qwen2.5-1.5B's 28 (28 layers, 2 KV
     # heads of 128, f16). LFM2.5-1.2B keeps a cache in 6 of its 16 layers,
@@ -46,10 +46,14 @@ class Settings(BaseSettings):
     use_mmap: bool = True
     use_mlock: bool = False
     chat_format: str = "auto"
-    # Every answer begins with an empty <think> block, as Qwen3.5 writes one
-    # with its thinking off: set for a model run with
-    # deploy/templates/qwen3.5.jinja, so the counts match what it reads.
+    # How the model thinks before it answers (app/chatml.py). "on": it thinks
+    # first, in a <think> block, for at most ``think_budget`` tokens a reply.
+    # "off": every answer begins with an empty block, as Qwen3.5 answers with
+    # its thinking off. "none": no block at all, for a model without one.
+    # Empty: "off" where the older AURORA_THINK_BLOCK=true is set, else "none".
+    thinking: str = ""
     think_block: bool = False
+    think_budget: int = 1024
 
     # generation ceilings
     max_tokens: int = 512
@@ -58,7 +62,7 @@ class Settings(BaseSettings):
     # tools
     tools_enabled: bool = True
     # One switch to make the whole install offline-only. Network tools vanish
-    # from the registry, the grammar, and the UI.
+    # from the registry, the menu, and the UI.
     allow_outbound: bool = True
     tool_timeout: float = 10.0
     # Wikimedia's robot policy returns 403 for a User-Agent with no contact
@@ -67,7 +71,6 @@ class Settings(BaseSettings):
     user_agent: str = (
         "Aurora/2.0 (+https://github.com/topics/llama-cpp; self-hosted llama.cpp chat)"
     )
-    route_max_tokens: int = 96
     # Searching the web. "auto": the SearXNG at ``searx_url`` where there is
     # one, DuckDuckGo's HTML page where there is not. "searxng" and
     # "duckduckgo" name one; "off" takes the search off the menu.
@@ -89,16 +92,12 @@ class Settings(BaseSettings):
     timezone: str = "UTC"
 
     # the loop
-    # Off, a message that reaches the model makes one choice of tool and then
-    # answers. On, a tool the model chose earns it another choice: it may look
-    # something up, read what came back, and look up something else. Every
-    # choice is a pass through the model and costs seconds, so the loop is
-    # bounded three ways, and a tool the visitor named themselves (a command,
-    # a pattern, a skill) never starts it.
+    # The model calls a tool when it judges it needs one, reads what came back
+    # and goes on: it may call another. Every reply costs seconds, so a
+    # message is bounded two ways. Off, it may call one tool, then answers.
     agent_loop: bool = True
-    agent_max_steps: int = 3        # tool calls for one message
-    agent_max_decisions: int = 3    # passes that choose, for one message
-    agent_max_seconds: float = 90.0  # for everything before the answer
+    agent_max_steps: int = 8          # tool calls for one message
+    agent_max_seconds: float = 600.0  # after this, no further call is begun
 
     # notes
     # What the Agent may keep when asked to remember something, and who can
@@ -140,6 +139,14 @@ class Settings(BaseSettings):
     # Seconds between fake tokens in mock mode. The default imitates this
     # hardware; drop it to near zero to drive the UI quickly in tests.
     mock_delay: float = 0.085
+
+    @property
+    def think_mode(self) -> str:
+        """How the model thinks: "on", "off" or "none"."""
+        mode = (self.thinking or "").strip().lower()
+        if mode in ("on", "off", "none"):
+            return mode
+        return "off" if self.think_block else "none"
 
     @property
     def resolved_model_path(self) -> Path:

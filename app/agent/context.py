@@ -40,19 +40,19 @@ SUMMARY_TOKENS = 150
 # as it was sent is replayed whole: cutting it would cost the model a re-read
 # of everything after it.
 TURN_ROOM = 800
-# Tokens kept free, when a looping run's conversation is fitted to the window,
-# for what the run itself will add: its choices and what its tools return.
-# With that room left at the start, the beginning of the prompt does not have
-# to change part-way through the run. The least of it; a larger window gives a
-# run more (``run_room``), so a search can be read at length.
+# Tokens kept free, when a run's conversation is fitted to the window, for
+# what the run itself will add: its replies, its calls and what its tools
+# return. With that room left at the start, the beginning of the prompt does
+# not have to change part-way through the run. The least of it; a larger
+# window gives a run more (``run_room``), so a file can be read whole.
 RUN_ROOM = 600
-RUN_ROOM_MOST = 2000
+RUN_ROOM_MOST = 4096
 
 
 def run_room(n_ctx: int) -> int:
-    """The room a run is given in a window of ``n_ctx`` tokens: an eighth of
+    """The room a run is given in a window of ``n_ctx`` tokens: a quarter of
     it, and never less than ``RUN_ROOM`` or more than ``RUN_ROOM_MOST``."""
-    return max(RUN_ROOM, min(RUN_ROOM_MOST, n_ctx // 8))
+    return max(RUN_ROOM, min(RUN_ROOM_MOST, n_ctx // 4))
 # Old turns are dropped in blocks of about this many tokens, never fewer.
 TRIM_STEP = 600
 
@@ -73,9 +73,12 @@ KINDS = frozenset({
     "compose",      # what a program the model is about to write is for
     "code",         # the program it wrote
     "project",      # the files of the conversation's project, by name
+    "call",         # a reply of the model that ended in a call to a tool
+    "response",     # what came of that call, as the model read it
+    "note",         # a line from the harness at the end of a turn
 })
 # What survives of a turn replayed compact, beside the question and answer.
-FOUND = frozenset({"data", "failed", "observation"})
+FOUND = frozenset({"data", "failed", "observation", "response"})
 
 # What a result that is out of date is replayed as.
 STALE = "This was looked up earlier and is out of date now."
@@ -212,6 +215,8 @@ def turns_from(messages: Iterable[dict], records: Iterable[dict]) -> list[Turn]:
 def stale(part: Part) -> Part:
     """A part whose results are out of date, as it is replayed from then on.
     The same text every time, so the prompt changes once."""
+    if part.content.startswith("<tool_response>"):
+        return Part(part.role, part.kind, f"<tool_response>\n{STALE}\n</tool_response>", part.tools)
     if part.content.startswith("<data"):
         tool = part.tools[0] if part.tools else ""
         return Part(part.role, part.kind, f'<data tool="{tool}">{STALE}</data>', part.tools)

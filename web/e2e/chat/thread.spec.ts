@@ -1,15 +1,20 @@
 import { expect, test } from "@playwright/test";
-import { reseed } from "../support";
+import { forward, reseed } from "../support";
 import {
   answer,
   answerOf,
   ask,
   CONVERSATION,
+  called,
+  DONE,
+  end,
   fakeChat,
   openStored,
+  order,
   posts,
   push,
   question,
+  reply,
   START,
 } from "./helpers";
 
@@ -137,7 +142,9 @@ test.describe("a stored conversation", () => {
     await expect(answerOf(page).locator(".prose code")).toHaveText("print(1 + 1)");
   });
 
-  test("its tool results are drawn above the answer they informed", async ({ page }) => {
+  test("one kept before its replies were draws its tool results above its text", async ({
+    page,
+  }) => {
     await openStored(page, 0);
     const cards = answerOf(page).locator('[data-part="cards"] > *');
     // Eight results and one failure.
@@ -148,6 +155,141 @@ test.describe("a stored conversation", () => {
       return Boolean(cardsEl && prose && cardsEl.bottom <= prose.top);
     });
     expect(box).toBe(true);
+    expect(await order(page)).toEqual(["cards", "text"]);
+    await expect(answerOf(page).locator('[data-part="thought"]')).toHaveCount(0);
+  });
+
+  test("one kept as it was said is drawn in that order: thoughts, words and cards", async ({
+    page,
+  }) => {
+    await openStored(page, 3);
+    await expect(question(page)).toHaveText("Why does app/main.py crash on start? Fix it.");
+    expect(await order(page)).toEqual([
+      "thought",
+      "text",
+      "cards",
+      "thought",
+      "cards",
+      "thought",
+      "text",
+    ]);
+    // Each thought is folded, and how long it took was not kept.
+    const thoughts = answerOf(page).locator('[data-part="thought"]');
+    await expect(thoughts.locator("summary")).toHaveText(["Thought", "Thought", "Thought"]);
+    await expect(thoughts.first()).not.toHaveAttribute("open", "");
+    await thoughts.first().locator("summary").click();
+    await expect(thoughts.first().locator("summary + div")).toHaveText(
+      "The decorator uses app before app = FastAPI() exists.",
+    );
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose.first()).toContainText("is used before it is created.");
+    await expect(prose.first().locator("code")).toHaveText("app");
+    // The edit, with what it changed, where it was made; then the run.
+    const edit = answerOf(page).locator('figure[data-card="file"]');
+    await expect(edit.locator("figcaption")).toContainText("Edited fileapp/main.py");
+    await expect(edit.locator('[data-sign="-"]')).toHaveText(['- @app.get("/")']);
+    await expect(edit.locator('[data-sign="+"]')).toHaveCount(3);
+    const run = answerOf(page).locator('figure[data-card="python"]');
+    await expect(run.locator("figcaption")).toContainText("exited 0");
+    await expect(prose.nth(1).locator(".codeblock pre")).toHaveText(
+      "uvicorn app.main:app --reload",
+    );
+    // The file chip opens the file as the project kept it.
+    await edit.locator(".file-chip").click();
+    await expect(page.locator("#project-viewer code")).toContainText("app = FastAPI()");
+
+    // How it ran, in the words of a run whose replies chose their calls.
+    await answerOf(page).locator('[data-act="ledger"]').click();
+    const rows = answerOf(page).locator('[data-part="ledger"] li');
+    await expect(rows).toHaveCount(5);
+    await expect(rows.nth(0)).toContainText("chose");
+    await expect(rows.nth(0)).toContainText("Edit file");
+    await expect(rows.nth(1)).toContainText("tool");
+    await expect(rows.nth(2)).toContainText("Run file");
+    await expect(rows.nth(4)).toContainText("answer");
+    await expect(answerOf(page).locator('[data-part="cost"]')).toContainText("10.4 tok/s");
+  });
+
+  test("Copy on an answer said in parts copies all it said and none of what it thought", async ({
+    page,
+  }) => {
+    await openStored(page, 3);
+    // What the page hands the clipboard, kept where the test can read it.
+    await page.evaluate(() => {
+      const kept = window as unknown as { __copied?: string };
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            kept.__copied = text;
+          },
+        },
+      });
+    });
+    // The answer's own Copy, not a code block's.
+    await answerOf(page).locator('[data-act="copy"]').click();
+    await expect(page.locator("#toasts")).toContainText("Answer copied");
+    const copied = await page.evaluate(
+      () => (window as unknown as { __copied?: string }).__copied ?? "",
+    );
+    expect(copied).toContain("is used before it is created.");
+    expect(copied).toContain("uvicorn app.main:app --reload");
+    expect(copied).not.toContain("The decorator uses app");
+  });
+});
+
+test.describe("a file written out in an answer's text", () => {
+  const said = "Here it is.\n\n### app.py\n```python\nprint('hi')\n```";
+
+  /** Serve the right-to-left conversation with an answer that wrote a file
+   *  out in its text, kept with these segments (null: kept before them). */
+  async function storedWith(page: import("@playwright/test").Page, segments: unknown) {
+    await page.unrouteAll();
+    await page.route(/\/api\/conversations\/[0-9a-f]+$/, async (route) => {
+      const response = await forward(route);
+      const body = await response.json();
+      for (const m of body.messages) {
+        if (m.role !== "assistant") continue;
+        m.content = said;
+        m.segments = segments;
+        m.tool_calls = [];
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await openStored(page, 2);
+  }
+
+  test("is a chip in an answer kept from before files were written with calls", async ({
+    page,
+  }) => {
+    await storedWith(page, null);
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose.locator(".file-chip")).toContainText("app.py");
+    await expect(prose.locator(".file-chip")).toContainText("1 line");
+    await expect(prose.locator("pre")).toHaveCount(0);
+  });
+
+  test("is code in an answer kept as it was said", async ({ page }) => {
+    await storedWith(page, [{ kind: "text", text: said }]);
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose.locator(".codeblock pre")).toHaveText("print('hi')");
+    await expect(prose.locator(".file-chip")).toHaveCount(0);
+  });
+
+  test("is code in a reply being written: its files are written with calls", async ({ page }) => {
+    await ask(page, "show me");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "start", START);
+    await push(page, "token", { t: "Here it is.\n\n### app.py\n```python\n", ttft_ms: 50 });
+    await push(page, "token", { t: "print('hi')\n" });
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose.locator("pre code")).toContainText("print('hi')");
+    await expect(prose.locator(".file-chip")).toHaveCount(0);
+    await push(page, "token", { t: "```" });
+    await push(page, "done", DONE);
+    await end(page);
+    await expect(prose.locator(".codeblock pre")).toHaveText("print('hi')");
+    await expect(prose.locator(".file-chip")).toHaveCount(0);
   });
 });
 
@@ -258,6 +400,46 @@ test.describe("while an answer is being written", () => {
     await expect(prose.locator(":scope > div").nth(1).locator("p .caret")).toHaveCount(1);
     // New words fade in, and the fade is not restarted by the next rebuild.
     await expect(prose.locator(".fresh").first()).toBeAttached();
+  });
+
+  test("words written after a card start a part of their own, below it", async ({ page }) => {
+    await ask(page, "what time is it in Tokyo?");
+    await push(page, "conversation", CONVERSATION);
+    await reply(page, 1, { say: "Checking the clock.", called: "Clock" });
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose).toHaveText("Checking the clock.");
+    // The caret is where the writing is: here, until the call.
+    await expect(prose.locator(".caret")).toHaveCount(1);
+    await called(page, 0, {
+      label: "Clock",
+      tool: "clock",
+      card: "clock",
+      data: { time: "09:30", date: "Tuesday", zone: "Asia/Tokyo" },
+    });
+    // The words before the call are finished; nothing is being written.
+    await expect(prose.locator(".caret")).toHaveCount(0);
+    expect(await order(page)).toEqual(["text", "cards"]);
+
+    await push(page, "step", { id: "reply-2", kind: "model", status: "running", label: "Writing" });
+    await push(page, "start", START);
+    await push(page, "token", { t: "It is half past ", ttft_ms: 70 });
+    await push(page, "token", { t: "nine." });
+    await expect(prose).toHaveCount(2);
+    await expect(prose.nth(1)).toContainText("It is half past nine.");
+    // The first part kept what it was; the caret moved to the new one.
+    await expect(prose.first()).toHaveText("Checking the clock.");
+    await expect(prose.nth(1).locator(".caret")).toHaveCount(1);
+    expect(await order(page)).toEqual(["text", "cards", "text"]);
+    const below = await answerOf(page).evaluate((el) => {
+      const card = el.querySelector('[data-part="cards"]')?.getBoundingClientRect();
+      const after = el.querySelectorAll(".prose")[1]?.getBoundingClientRect();
+      return Boolean(card && after && card.bottom <= after.top);
+    });
+    expect(below).toBe(true);
+    await push(page, "done", DONE);
+    await end(page);
+    await expect(prose.nth(1)).toHaveText("It is half past nine.");
+    await expect(prose.locator(".caret")).toHaveCount(0);
   });
 
   test("the thread follows the answer only while the reader is at the bottom", async ({ page }) => {

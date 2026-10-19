@@ -18,7 +18,8 @@ const ESC: Record<string, string> = {
 };
 
 /** The line `foldFiles` (./files) folds a file into, drawn as a chip that
- *  opens the file in the project panel. */
+ *  opens the file in the project panel. Only an answer kept from before
+ *  files were written with calls is folded (`renderAnswer`). */
 function fileChip(path: string, lines: number, writing: boolean): string {
   const count = `${lines} line${lines === 1 ? "" : "s"}`;
   return (
@@ -126,10 +127,20 @@ export function splitBlocks(src: string | null | undefined): string[] {
   return blocks;
 }
 
-/** An answer as the chat shows it: markdown, with each file it writes as a
- *  chip. The text copied from it stays the answer as it was written. */
-export function renderAnswer(src: string | null | undefined): string {
-  return renderMarkdown(foldFiles(String(src ?? "")));
+/**
+ * An answer as the chat shows it: markdown. With `files`, each file it wrote
+ * out in its text is folded into a chip that opens it in the project. That
+ * is only for an answer kept from when files were written that way and kept
+ * from the text; a reply now writes its files with a call, and a file in its
+ * text is code to be read, which the project may not have. The text copied
+ * from an answer stays the answer as it was written either way.
+ */
+export function renderAnswer(
+  src: string | null | undefined,
+  { files = false }: { files?: boolean } = {},
+): string {
+  const text = String(src ?? "");
+  return renderMarkdown(files ? foldFiles(text) : text);
 }
 
 export function renderMarkdown(src: string | null | undefined): string {

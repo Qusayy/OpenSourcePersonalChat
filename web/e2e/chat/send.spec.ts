@@ -6,13 +6,16 @@ import {
   answerOf,
   ask,
   CONVERSATION,
+  called,
   DONE,
   end,
   fakeChat,
   notice,
+  order,
   posts,
   push,
   question,
+  reply,
   START,
   STOPPED,
   transitions,
@@ -275,31 +278,16 @@ test.describe("against a stream the test controls", () => {
     await answer(page, "Fine.");
   });
 
-  test("the route line shows a step while it runs and keeps only the decision", async ({
+  test("a call is drawn while it runs, and its card comes where the reply made it", async ({
     page,
   }) => {
     await ask(page, "what is the weather in Paris?");
     await push(page, "conversation", CONVERSATION);
-    await push(page, "step", {
-      id: "route",
-      kind: "route",
-      status: "running",
-      label: "Choosing a tool",
-    });
-    const route = answerOf(page).locator('[data-part="route"]');
-    await expect(route).toHaveText("Choosing a toolrunning");
-    await expect(route.locator('[data-status="running"]')).toHaveCount(1);
-
-    await push(page, "step", {
-      id: "route",
-      kind: "route",
-      status: "ok",
-      label: "Weather",
-      detail: "model",
-      tool: "weather",
-      ms: 2140,
-    });
-    await expect(route).toHaveText("Model's choice2.14s");
+    const calls = answerOf(page).locator('[data-part="calls"]');
+    // A reply of the model is never drawn as a row: the status line carries it.
+    await reply(page, 1, { say: "Let me look that up.", called: "Weather" });
+    await expect(answerOf(page).locator(".prose")).toHaveText("Let me look that up.");
+    await expect(calls).toHaveCount(0);
 
     await push(page, "step", {
       id: "tool-0",
@@ -307,10 +295,15 @@ test.describe("against a stream the test controls", () => {
       status: "running",
       label: "Weather",
       tool: "weather",
+      args: { location: "Paris" },
     });
-    await expect(route.locator("[data-id]")).toHaveCount(2);
-    await expect(route).toContainText("Weatherrunning");
-    // A finished tool is named and timed by its own figure, so its step goes.
+    await expect(calls).toHaveText("Weatherrunning");
+    await expect(calls.locator('[data-status="running"]')).toHaveCount(1);
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "working");
+    // Under what was said before it, where its result will come.
+    expect(await order(page)).toEqual(["text", "calls"]);
+
+    // A finished call is named and timed by its own figure, so its row goes.
     await push(page, "step", {
       id: "tool-0",
       kind: "tool",
@@ -319,112 +312,79 @@ test.describe("against a stream the test controls", () => {
       tool: "weather",
       ms: 412,
     });
-    await expect(route.locator("[data-id]")).toHaveCount(1);
+    await expect(calls).toHaveCount(0);
     await push(page, "card", {
       step_id: "tool-0",
       card: "weather",
       tool: "weather",
       data: { place: "Paris", temperature: 12 },
     });
-    await expect(answerOf(page).locator('[data-part="cards"] > *')).toHaveCount(1);
+    const card = answerOf(page).locator('figure[data-card="weather"]');
+    await expect(card.locator("figcaption")).toContainText("412ms");
 
-    // The answer step is never drawn here: the status line carries it.
-    await push(page, "step", { id: "answer", kind: "model", status: "running", label: "Writing" });
-    await expect(route.locator("[data-id]")).toHaveCount(1);
-    await answer(page, "It is mild.");
-    await expect(route).toHaveText("Model's choice2.14s");
+    // What the next reply says comes under the card, in a part of its own.
+    await reply(page, 2, { say: "It is mild." });
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "writing");
+    expect(await order(page)).toEqual(["text", "cards", "text"]);
+    await push(page, "done", { ...DONE, tool_calls: 1 });
+    await end(page);
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    expect(await order(page)).toEqual(["text", "cards", "text"]);
+    const prose = answerOf(page).locator(".prose");
+    await expect(prose.first()).toHaveText("Let me look that up.");
+    await expect(prose.nth(1)).toHaveText("It is mild.");
+    await expect(prose.locator(".caret")).toHaveCount(0);
+    // Nothing anywhere says a tool was being chosen.
+    await expect(answerOf(page)).not.toContainText(/Choosing a tool|Model's choice|No tool needed/);
   });
 
-  test("each choice of a run is a row of its own in the route line", async ({ page }) => {
-    const choosing = (id: string, pass: number) =>
-      push(page, "step", {
-        id,
-        kind: "route",
-        status: "running",
-        label: "Choosing a tool",
-        pass,
-      });
-    const lookedUp = async (index: number, place: string) => {
-      const id = `tool-${index}`;
-      await push(page, "step", {
-        id,
-        kind: "tool",
-        status: "running",
+  test("a run that calls twice reads in order, and How it ran lists each reply", async ({
+    page,
+  }) => {
+    const weather = (index: number, place: string) =>
+      called(page, index, {
         label: "Weather",
         tool: "weather",
-      });
-      await push(page, "step", {
-        id,
-        kind: "tool",
-        status: "ok",
-        label: "Weather",
-        tool: "weather",
-        ms: 400,
-      });
-      await push(page, "card", {
-        step_id: id,
         card: "weather",
-        tool: "weather",
         data: { place, temperature: 12 },
       });
-    };
     await ask(page, "is Paris or Lisbon warmer right now?");
     await push(page, "conversation", CONVERSATION);
-    const route = answerOf(page).locator('[data-part="route"]');
-
-    await choosing("route", 1);
-    await expect(route).toHaveText("Choosing a toolrunning");
-    await push(page, "step", {
-      id: "route",
-      kind: "route",
-      status: "ok",
-      label: "Weather",
-      detail: "model",
-      tool: "weather",
-      ms: 3100,
-      pass: 1,
+    await reply(page, 1, {
+      think: "Two places, so two lookups.",
+      say: "I'll check both.",
+      called: "Weather",
     });
-    await lookedUp(0, "Paris");
-
-    // The second choice is being made: the first stays, a second row runs.
-    await choosing("route-2", 2);
-    await expect(route).toHaveText("Model's choice3.10sChoosing a toolrunning");
-    await push(page, "step", {
-      id: "route-2",
-      kind: "route",
-      status: "ok",
-      label: "Weather",
-      detail: "model",
-      tool: "weather",
-      ms: 2600,
-      pass: 2,
-    });
-    await lookedUp(1, "Lisbon");
-
-    await choosing("route-3", 3);
-    await push(page, "step", {
-      id: "route-3",
-      kind: "route",
-      status: "ok",
-      label: "No tool needed",
-      detail: "model",
-      tool: null,
-      ms: 2200,
-      pass: 3,
-    });
-    // Three passes were paid for, and each is there with what it cost.
-    await expect(route).toHaveText("Model's choice3.10sModel's choice2.60sNo tool needed2.20s");
-    await expect(route.locator("[data-id]")).toHaveCount(3);
-    await expect(answerOf(page).locator('[data-part="cards"] > *')).toHaveCount(2);
-
-    await push(page, "start", START);
-    await push(page, "token", { t: "Lisbon.", ttft_ms: 86.4 });
+    await weather(0, "Paris");
+    // The second reply calls at once, saying nothing: its card joins the first.
+    await reply(page, 2, { called: "Weather" });
+    await weather(1, "Lisbon");
+    await reply(page, 3, { say: "Lisbon." });
     await push(page, "done", { ...DONE, tool_calls: 2 });
     // The last event of every stream: the whole run, step by step.
+    const pass = (tokens_read: number, tokens_out: number) => ({
+      via: "model",
+      ok: true,
+      error: null,
+      tokens_in: 667,
+      tokens_read,
+      tokens_out,
+    });
+    const tool = {
+      kind: "tool",
+      name: "weather",
+      via: "model",
+      ok: true,
+      error: null,
+      tokens_in: null,
+      tokens_read: null,
+      tokens_out: null,
+      ms: 400,
+    };
     await push(page, "run", {
       id: "req-1",
       outcome: "answered",
-      steps: 4,
+      steps: 5,
       passes: 3,
       total_ms: 9800,
       waiting_ms: 0,
@@ -433,55 +393,19 @@ test.describe("against a stream the test controls", () => {
       tools_ms: 800,
       wall_ms: 9850,
       ledger: [
-        {
-          kind: "route",
-          name: "weather",
-          via: "model",
-          ok: true,
-          error: null,
-          tokens_in: 667,
-          tokens_read: 18,
-          tokens_out: 12,
-          ms: 3100,
-        },
-        {
-          kind: "tool",
-          name: "weather",
-          via: "model",
-          ok: true,
-          error: null,
-          tokens_in: null,
-          tokens_read: null,
-          tokens_out: null,
-          ms: 800,
-        },
-        {
-          kind: "decide",
-          name: null,
-          via: "model",
-          ok: true,
-          error: null,
-          tokens_in: 702,
-          tokens_read: 36,
-          tokens_out: 5,
-          ms: 2600,
-        },
-        {
-          kind: "answer",
-          name: null,
-          via: null,
-          ok: true,
-          error: null,
-          tokens_in: 740,
-          tokens_read: 61,
-          tokens_out: 4,
-          ms: 3300,
-        },
+        { kind: "call", name: "weather", ms: 3100, ...pass(18, 12) },
+        tool,
+        { kind: "call", name: "weather", ms: 2600, ...pass(36, 5) },
+        tool,
+        { kind: "answer", name: null, ms: 3300, ...pass(61, 4) },
       ],
     });
     await end(page);
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
-    await expect(route).toHaveText("Model's choice3.10sModel's choice2.60sNo tool needed2.20s");
+
+    expect(await order(page)).toEqual(["thought", "text", "cards", "text"]);
+    await expect(answerOf(page).locator('[data-part="cards"] > figure')).toHaveCount(2);
+    await expect(answerOf(page).locator(".prose").last()).toHaveText("Lisbon.");
     // What it cost step by step is there when asked for, and not before.
     const ledger = answerOf(page).locator('[data-part="ledger"]');
     await expect(ledger).toHaveCount(0);
@@ -489,55 +413,98 @@ test.describe("against a stream the test controls", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(ledger.locator("li")).toHaveCount(4);
-    await expect(ledger.locator("li").first()).toContainText("read 18 of 667 · wrote 12");
+    const rows = ledger.locator("li");
+    await expect(rows).toHaveCount(5);
+    await expect(rows.first()).toContainText("chose");
+    await expect(rows.first()).toContainText("Weather");
+    await expect(rows.first()).toContainText("read 18 of 667 · wrote 12");
+    await expect(rows.nth(1)).toContainText("tool");
+    await expect(rows.nth(4)).toContainText("answer");
     await expect(ledger).toContainText("run 9.80s · waiting 0ms · reading 5.20s");
     await toggle.click();
     await expect(ledger).toHaveCount(0);
-    await expect(answerOf(page).locator(".prose")).toHaveText("Lisbon.");
     await expect(notice(page)).toHaveCount(0);
   });
 
-  test("a run that waits before its first choice stops saying so once it chooses", async ({
+  test("the line says when the model reads, thinks and writes, and the thought folds away", async ({
     page,
   }) => {
     await ask(page, "is Paris or Lisbon warmer right now?");
     await push(page, "conversation", CONVERSATION);
-    // It waits for the engine once, for all its passes, before its first step.
+    // It waits for the engine once, for all its replies, before its first step.
     await push(page, "queue", { position: 1, first: true });
     await expect(page.locator("#status")).toHaveAttribute("data-phase", "queued");
     await expect(notice(page)).toHaveCount(1);
 
     await push(page, "step", {
-      id: "route",
-      kind: "route",
+      id: "reply-1",
+      kind: "model",
       status: "running",
-      label: "Choosing a tool",
-      pass: 1,
+      label: "Thinking",
     });
     await expect(notice(page)).toHaveCount(0);
-    // The model is choosing, and the status line says so.
-    await expect(page.locator("#status")).toHaveAttribute("data-phase", "deciding");
-    await expect(page.locator("#b-state")).toContainText("deciding");
-    await expect(answerOf(page).locator('[data-part="route"]')).toHaveText(
-      "Choosing a toolrunning",
-    );
-
-    await push(page, "step", {
-      id: "route",
-      kind: "route",
-      status: "ok",
-      label: "No tool needed",
-      detail: "model",
-      tool: null,
-      ms: 2200,
-      pass: 1,
-    });
-    // It has chosen: working again until the answer is being read.
     await expect(page.locator("#status")).toHaveAttribute("data-phase", "working");
-    await answer(page, "Lisbon, probably.");
+    await push(page, "start", START);
+    await expect(page.locator("#status")).toHaveAttribute("data-phase", "reading");
+
+    await push(page, "think", { t: "Lisbon is further ", ttft_ms: 412 });
+    await push(page, "think", { t: "south." });
+    const line = page.locator("#status");
+    await expect(line).toHaveAttribute("data-phase", "thinking");
+    await expect(line.locator("#b-state")).toContainText("thinking");
+    // The figures come up with the first token, thought or said.
+    await expect(line.locator(".st-tps")).toBeVisible();
+    await expect(line.locator("#ttft-value")).toHaveText("412ms");
+    // Folded away, saying so quietly; what it thinks is there to be opened.
+    const thought = answerOf(page).locator('[data-part="thought"]');
+    await expect(thought).toHaveCount(1);
+    await expect(thought.locator("summary")).toHaveText("Thinking…");
+    await expect(thought).not.toHaveAttribute("open", "");
+    await expect(answerOf(page).locator(".prose")).toHaveCount(0);
+
+    await push(page, "token", { t: "Lisbon, " });
+    await push(page, "token", { t: "probably." });
+    await expect(line).toHaveAttribute("data-phase", "writing");
+    await expect(thought.locator("summary")).toHaveText(/^Thought for \d+ s$/);
+    await expect(answerOf(page).locator(".prose")).toContainText("Lisbon, probably.");
+    expect(await order(page)).toEqual(["thought", "text"]);
+
+    await thought.locator("summary").click();
+    await expect(thought).toHaveAttribute("open", "");
+    await expect(thought.locator("summary + div")).toHaveText("Lisbon is further south.");
+    await push(page, "done", DONE);
+    await end(page);
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
-    await expect(notice(page)).toHaveCount(0);
+    await expect(thought.locator("summary")).toHaveText(/^Thought for \d+ s$/);
+    await expect(thought.locator("summary + div")).toHaveText("Lisbon is further south.");
+    // What it said is set apart from what it thought.
+    await expect(answerOf(page).locator(".prose")).toHaveText("Lisbon, probably.");
+  });
+
+  test("a reply that only thinks before it is stopped keeps its thought", async ({ page }) => {
+    await ask(page, "think about it");
+    await push(page, "conversation", CONVERSATION);
+    await push(page, "step", {
+      id: "reply-1",
+      kind: "model",
+      status: "running",
+      label: "Thinking",
+    });
+    await push(page, "start", START);
+    await push(page, "think", { t: "Where to begin.", ttft_ms: 80 });
+    await expect(answerOf(page).locator('[data-part="thought"]')).toHaveCount(1);
+    await push(page, "step", {
+      id: "reply-1",
+      kind: "model",
+      status: "stopped",
+      label: "Thinking",
+    });
+    await push(page, "done", { ...DONE, cancelled: true });
+    await end(page);
+    await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    const thought = answerOf(page).locator('[data-part="thought"]');
+    await expect(thought.locator("summary")).toHaveText(/^Thought for \d+ s$/);
+    await expect(answerOf(page).locator('[data-part="cost"]')).toContainText("stopped");
   });
 
   test("a failed tool is announced", async ({ page }) => {
@@ -552,26 +519,6 @@ test.describe("against a stream the test controls", () => {
       detail: "no such place",
     });
     await expect(page.locator("#sr-status")).toHaveText("Weather failed: no such place");
-  });
-
-  test("an answer taken back leaves nothing of itself, and the next is written in its place", async ({
-    page,
-  }) => {
-    await ask(page, "how did the vote go");
-    await push(page, "conversation", CONVERSATION);
-    await push(page, "start", START);
-    await push(page, "token", { t: "I don't have real-time access ", ttft_ms: 80 });
-    await push(page, "token", { t: "to current events." });
-    const prose = answerOf(page).locator(".prose");
-    await expect(prose).toContainText("real-time access");
-    await push(page, "retract", { reason: "It said it could not look this up, so it will." });
-    await expect(prose).not.toContainText("real-time access");
-    await push(page, "start", START);
-    await push(page, "token", { t: "The motion passed.", ttft_ms: 60 });
-    await expect(prose).toContainText("The motion passed.");
-    await push(page, "done", DONE);
-    await end(page);
-    await expect(prose).toHaveText("The motion passed.");
   });
 
   test("a search lists its pages numbered, each opening in a tab of its own", async ({ page }) => {
@@ -671,35 +618,38 @@ test.describe("against a stream the test controls", () => {
     await expect(notice(page)).toHaveCount(0);
   });
 
-  test("Stop while a tool is being chosen takes the step off the line", async ({ page }) => {
+  test("Stop while a call is being made takes it off the line", async ({ page }) => {
     const cancels: string[] = [];
     page.on("request", (r) => {
       if (r.url().includes("/api/cancel/")) cancels.push(new URL(r.url()).pathname);
     });
     await ask(page, "do I need a coat in Paris");
     await push(page, "conversation", CONVERSATION);
+    await reply(page, 1, { called: "Weather" });
     await push(page, "step", {
-      id: "route",
-      kind: "route",
+      id: "tool-0",
+      kind: "tool",
       status: "running",
-      label: "Choosing a tool",
+      label: "Weather",
+      tool: "weather",
     });
-    const route = answerOf(page).locator('[data-part="route"]');
-    await expect(route).toContainText("Choosing a tool");
+    const calls = answerOf(page).locator('[data-part="calls"]');
+    await expect(calls).toContainText("Weather");
 
     await page.locator("#send").click();
     await expect.poll(() => cancels).toEqual(["/api/cancel/req-1"]);
     await push(page, "step", {
-      id: "route",
-      kind: "route",
+      id: "tool-0",
+      kind: "tool",
       status: "stopped",
-      label: "Choosing a tool",
-      ms: 310,
+      label: "Weather",
+      tool: "weather",
     });
-    await expect(route.locator("[data-id]")).toHaveCount(0);
+    await expect(calls).toHaveCount(0);
     await push(page, "done", STOPPED);
     await end(page);
     await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+    // It said nothing and found nothing: nothing is left but the question.
     await expect(answerOf(page)).toHaveCount(0);
   });
 

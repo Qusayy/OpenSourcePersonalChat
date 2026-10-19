@@ -20,19 +20,25 @@ except ImportError as exc:  # pragma: no cover - only without the requirements
 URL = "http://127.0.0.1:8081"
 
 
-def sse(*chunks: dict, done: bool = True) -> list[bytes]:
-    """A streamed chat completion: one ``data:`` line per chunk."""
+def sse(*chunks: dict, done: bool = False) -> list[bytes]:
+    """A streamed completion: one ``data:`` line per chunk."""
     lines = [f"data: {json.dumps(c)}\n\n".encode() for c in chunks]
     if done:
         lines.append(b"data: [DONE]\n\n")
     return lines
 
 
-def delta(text: str | None = None, **extra) -> dict:
-    piece = dict(extra)
+def piece(text: str | None = None, **extra) -> dict:
+    """One piece of a completion as llama-server streams it."""
+    out = {"stop": False, **extra}
     if text is not None:
-        piece["content"] = text
-    return {"choices": [{"delta": piece}]}
+        out["content"] = text
+    return out
+
+
+def last(**extra) -> dict:
+    """The last piece: it says how the reply ended and what was read."""
+    return {"content": "", "stop": True, **extra}
 
 
 class Body(httpx.SyncByteStream):
@@ -74,33 +80,38 @@ class Server:
 
 
 class StreamTests(unittest.TestCase):
-    def test_the_text_is_the_content_of_each_delta_in_order(self) -> None:
+    def test_the_text_is_the_content_of_each_piece_in_order(self) -> None:
         server = Server(httpx.Response(200, stream=Body(sse(
-            delta(role="assistant"), delta("Hi"), delta(" there"), delta(),
+            piece("Hi"), piece(" there"), piece(), last(stop_type="eos"),
         ))))
-        self.assertEqual(list(server.client().stream({"messages": []})), ["Hi", " there"])
+        self.assertEqual(list(server.client().stream({"prompt": "x"})), ["Hi", " there"])
 
-    def test_done_ends_the_stream_whatever_follows(self) -> None:
-        parts = sse(delta("one")) + sse(delta("two"), done=False)
+    def test_the_last_piece_ends_the_stream_whatever_follows(self) -> None:
+        parts = sse(piece("one"), last(stop_type="eos"), piece("two"))
         server = Server(httpx.Response(200, stream=Body(parts)))
-        self.assertEqual(list(server.client().stream({"messages": []})), ["one"])
+        self.assertEqual(list(server.client().stream({"prompt": "x"})), ["one"])
+
+    def test_done_ends_it_too(self) -> None:
+        parts = sse(piece("one"), done=True) + sse(piece("two"))
+        server = Server(httpx.Response(200, stream=Body(parts)))
+        self.assertEqual(list(server.client().stream({"prompt": "x"})), ["one"])
 
     def test_lines_that_are_not_data_are_skipped(self) -> None:
-        parts = [b": keep-alive\n\n", *sse(delta("a"), {"choices": []}, delta("b"))]
+        parts = [b": keep-alive\n\n", *sse(piece("a"), piece(), piece("b"), last())]
         server = Server(httpx.Response(200, stream=Body(parts)))
-        self.assertEqual(list(server.client().stream({"messages": []})), ["a", "b"])
+        self.assertEqual(list(server.client().stream({"prompt": "x"})), ["a", "b"])
 
-    def test_the_request_is_the_body_given_streamed_and_offered_to_the_cache(self) -> None:
-        server = Server(httpx.Response(200, stream=Body(sse(delta("x")))))
-        asked = {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.0, "grammar": 'root ::= "x"'}
+    def test_the_prompt_goes_to_completion_streamed_and_offered_to_the_cache(self) -> None:
+        server = Server(httpx.Response(200, stream=Body(sse(piece("x"), last()))))
+        asked = {"prompt": "<|im_start|>user\nhi<|im_end|>\n", "temperature": 0.0, "stop": ["</think>"]}
         list(server.client().stream(asked))
         request = server.asked[0]
-        self.assertEqual((request.method, request.url.path), ("POST", "/v1/chat/completions"))
+        self.assertEqual((request.method, request.url.path), ("POST", "/completion"))
         self.assertEqual(server.body(), {**asked, "stream": True, "cache_prompt": True})
 
     def test_a_reader_that_stops_early_hangs_up(self) -> None:
-        body = Body(sse(delta("one"), delta("two"), delta("three")))
-        stream = Server(httpx.Response(200, stream=body)).client().stream({"messages": []})
+        body = Body(sse(piece("one"), piece("two"), piece("three"), last()))
+        stream = Server(httpx.Response(200, stream=body)).client().stream({"prompt": "x"})
         self.assertEqual(next(stream), "one")
         stream.close()
         self.assertTrue(body.closed, "the server only stops writing when the connection closes")
@@ -109,19 +120,19 @@ class StreamTests(unittest.TestCase):
     def test_an_error_status_is_said_without_the_address(self) -> None:
         server = Server(httpx.Response(500, stream=Body([b'{"error": "boom"}'])))
         with self.assertRaises(ServerError) as caught:
-            list(server.client().stream({"messages": []}))
+            list(server.client().stream({"prompt": "x"}))
         self.assertEqual(str(caught.exception), "the model server answered 500")
 
     def test_a_server_that_is_not_there_is_said_without_the_address(self) -> None:
         server = Server(httpx.ConnectError(f"[Errno 111] Connection refused to {URL}"))
         with self.assertRaises(ServerError) as caught:
-            list(server.client().stream({"messages": []}))
+            list(server.client().stream({"prompt": "x"}))
         self.assertEqual(str(caught.exception), "the model server is not answering")
         self.assertNotIn("127.0.0.1", str(caught.exception))
 
     def test_an_error_in_the_middle_of_the_stream_ends_it(self) -> None:
-        parts = sse(delta("half"), {"error": {"message": "out of memory"}}, delta("never"))
-        stream = Server(httpx.Response(200, stream=Body(parts))).client().stream({"messages": []})
+        parts = sse(piece("half"), {"error": {"message": "out of memory"}}, piece("never"))
+        stream = Server(httpx.Response(200, stream=Body(parts))).client().stream({"prompt": "x"})
         self.assertEqual(next(stream), "half")
         with self.assertRaises(ServerError):
             next(stream)
@@ -129,64 +140,70 @@ class StreamTests(unittest.TestCase):
     def test_a_line_that_is_not_json_ends_it(self) -> None:
         server = Server(httpx.Response(200, stream=Body([b"data: {not json\n\n"])))
         with self.assertRaises(ServerError):
-            list(server.client().stream({"messages": []}))
+            list(server.client().stream({"prompt": "x"}))
 
 
 class ReadingTests(unittest.TestCase):
-    """What the server says it did with the prompt, kept from its last piece."""
+    """What the server says it did with the prompt and how the reply ended,
+    kept from its last piece."""
 
     def read(self, *chunks: dict) -> Reading:
         reading = Reading()
         server = Server(httpx.Response(200, stream=Body(sse(*chunks))))
-        list(server.client().stream({"messages": []}, reading))
+        list(server.client().stream({"prompt": "x"}, reading))
         return reading
 
     def test_what_was_read_and_what_was_cached_come_from_the_timings(self) -> None:
         reading = self.read(
-            delta("Hi"),
-            {"choices": [{"delta": {}, "finish_reason": "stop"}],
-             "usage": {"prompt_tokens": 312, "completion_tokens": 1},
-             "timings": {"prompt_n": 12, "cache_n": 300, "prompt_ms": 150.0}},
+            piece("Hi"),
+            last(stop_type="eos", tokens_evaluated=312,
+                 timings={"prompt_n": 12, "cache_n": 300, "prompt_ms": 150.0}),
         )
-        self.assertEqual(reading, Reading(prompt=312, read=12, cached=300))
+        self.assertEqual(reading, Reading(prompt=312, read=12, cached=300, finish="eos"))
 
-    def test_usage_on_a_piece_of_its_own_is_read_too(self) -> None:
-        reading = self.read(
-            delta("Hi"),
-            {"choices": [{"delta": {}, "finish_reason": "stop"}], "timings": {"prompt_n": 40}},
-            {"choices": [], "usage": {"prompt_tokens": 340,
-                                      "prompt_tokens_details": {"cached_tokens": 300}}},
-        )
-        self.assertEqual(reading, Reading(prompt=340, read=40, cached=300))
+    def test_the_string_a_reply_stopped_at_is_kept(self) -> None:
+        reading = self.read(piece("Hmm"), last(stop_type="word", stopping_word="</think>"))
+        self.assertEqual((reading.finish, reading.word), ("word", "</think>"))
+
+    def test_an_older_server_says_how_it_ended_in_its_own_words(self) -> None:
+        for flags, finish in (({"stopped_word": True}, "word"), ({"stopped_eos": True}, "eos"),
+                              ({"stopped_limit": True}, "limit")):
+            with self.subTest(finish=finish):
+                reading = self.read(piece("x"), last(stopping_word="</tool_call>" if finish == "word" else "", **flags))
+                self.assertEqual(reading.finish, finish)
+        self.assertEqual(self.read(piece("x"), last(stopped_word=True, stopping_word="</think>")).word,
+                         "</think>")
+
+    def test_a_server_that_does_not_say_how_it_ended_leaves_it_unknown(self) -> None:
+        self.assertIsNone(self.read(piece("x"), last()).finish)
 
     def test_the_one_figure_the_other_two_give_is_filled_in(self) -> None:
-        cached = self.read(delta("x"), {"choices": [], "usage": {"prompt_tokens": 90},
-                                        "timings": {"prompt_n": 10}})
-        self.assertEqual(cached, Reading(prompt=90, read=10, cached=80))
-        whole = self.read(delta("x"), {"choices": [], "timings": {"prompt_n": 10, "cache_n": 80}})
-        self.assertEqual(whole, Reading(prompt=90, read=10, cached=80))
+        cached = self.read(piece("x"), last(tokens_evaluated=90, timings={"prompt_n": 10}))
+        self.assertEqual((cached.prompt, cached.read, cached.cached), (90, 10, 80))
+        whole = self.read(piece("x"), last(timings={"prompt_n": 10, "cache_n": 80}))
+        self.assertEqual((whole.prompt, whole.read, whole.cached), (90, 10, 80))
 
     def test_a_server_that_reports_nothing_leaves_every_figure_empty(self) -> None:
-        self.assertEqual(self.read(delta("Hi"), delta(" there")), Reading())
+        self.assertEqual(self.read(piece("Hi"), piece(" there")), Reading())
 
     def test_a_figure_the_server_does_not_have_is_not_taken(self) -> None:
-        reading = self.read(delta("x"), {"choices": [], "timings": {"prompt_n": -1, "cache_n": -1}})
-        self.assertEqual(reading, Reading())
+        reading = self.read(piece("x"), last(timings={"prompt_n": -1, "cache_n": -1}))
+        self.assertEqual((reading.prompt, reading.read, reading.cached), (None, None, None))
 
     def test_an_answer_stopped_before_its_end_reports_nothing(self) -> None:
         reading = Reading()
-        body = Body(sse(delta("one"), delta("two"),
-                        {"choices": [], "timings": {"prompt_n": 5, "cache_n": 95}}))
-        stream = Server(httpx.Response(200, stream=body)).client().stream({"messages": []}, reading)
+        body = Body(sse(piece("one"), piece("two"),
+                        last(stop_type="eos", timings={"prompt_n": 5, "cache_n": 95})))
+        stream = Server(httpx.Response(200, stream=body)).client().stream({"prompt": "x"}, reading)
         self.assertEqual(next(stream), "one")
         stream.close()
         self.assertEqual(reading, Reading())
 
     def test_without_a_reading_to_fill_the_stream_is_the_same(self) -> None:
         server = Server(httpx.Response(200, stream=Body(sse(
-            delta("Hi"), {"choices": [], "timings": {"prompt_n": 3}},
+            piece("Hi"), last(timings={"prompt_n": 3}),
         ))))
-        self.assertEqual(list(server.client().stream({"messages": []})), ["Hi"])
+        self.assertEqual(list(server.client().stream({"prompt": "x"})), ["Hi"])
 
 
 class TokenizeTests(unittest.TestCase):

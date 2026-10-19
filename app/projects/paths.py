@@ -59,6 +59,27 @@ def safe(raw: str) -> str | None:
     return path
 
 
+def safe_folder(raw: str) -> str | None:
+    """``raw`` as a folder of a project, or None when it cannot be one: the
+    same rules as a file's path, but its last part needs no extension. A
+    slash at its end is left off; the project's root is no folder."""
+    path = (raw or "").strip().strip("`'\"").replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    path = path.rstrip("/")
+    if not path or len(path) > MAX_PATH or path.startswith("/") or ":" in path:
+        return None
+    parts = path.split("/")
+    if len(parts) > MAX_DEPTH - 1:
+        return None
+    for part in parts:
+        if part in ("", ".", "..") or not _SEGMENT.match(part) or _RESERVED.match(part):
+            return None
+        if part.endswith("."):
+            return None
+    return path
+
+
 def language(path: str, said: str = "") -> str:
     """The language a file is in: what its fence said, or what its name says."""
     if said:

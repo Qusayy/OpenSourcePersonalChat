@@ -41,6 +41,7 @@ EXPECTATIONS = {
     "max_model_passes",     # at most this many replies of the model
     "outcome",              # answered | stopped | failed; "answered" if left out
     "file_contains",        # {path: [text, ...]}: the project file as the turns left it
+    "files_absent",         # paths that are not in the project once the turns are done
     "prompt_contains",      # each of these is somewhere in the prompt the last reply read
     "prompt_not_contains",
     "corrected",            # whether the answer drew a correction: a figure nothing returned

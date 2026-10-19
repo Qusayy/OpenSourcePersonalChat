@@ -634,10 +634,16 @@ class _Run:
 
     def _files(self, name: str, result: ToolResult, streamed: str | None) -> list[Event]:
         """What the project panel is told of a file a call wrote: the file,
-        where it was not shown as it was written, and how it was kept."""
+        where it was not shown as it was written, and how it was kept; or
+        that files moved, or are gone."""
+        data = result.data or {}
+        if result.ok and data.get("action") == "move":
+            return [("file", {"type": "move", "from": m["from"], "to": m["to"],
+                              "version": m["version"], "lang": m["lang"]}) for m in data["moves"]]
+        if result.ok and data.get("action") == "delete":
+            return [("file", {"type": "remove", "path": path}) for path in data["paths"]]
         if name not in ("write_file", "edit_file"):
             return []
-        data = result.data or {}
         path = data.get("path") or streamed
         if not path:
             return []

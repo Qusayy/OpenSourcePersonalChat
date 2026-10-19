@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS project_files (
     lines            INTEGER NOT NULL,
     run_id           TEXT,
     created_at       REAL NOT NULL,
+    deleted          INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (conversation_id, path, version)
 );
 """
@@ -174,6 +175,9 @@ def init() -> None:
     _conn.executescript(SCHEMA)
     # Columns added after a database was first made.
     _add_column("messages", "correction", "TEXT")
+    # A file the model deleted, or moved away: a version of its own, kept so
+    # that the path's versions go on counting up if it comes back.
+    _add_column("project_files", "deleted", "INTEGER NOT NULL DEFAULT 0")
     # Made apart from the schema: a build of SQLite without the module raises
     # here, and the notes are then searched without it.
     try:

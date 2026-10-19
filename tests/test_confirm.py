@@ -116,6 +116,18 @@ class AskingTests(ConfirmCase):
         self.assertEqual(confirm.waiting(trace.run_id), [])
         self.assertEqual(only(heard, "done")[-1]["cancelled"], False)
 
+    async def test_a_move_or_a_deletion_is_asked_about_too(self) -> None:
+        projects.add("c1", "main.py", "print(1)\n", lang="python")
+        projects.add("c1", "old.py", "x = 1\n", lang="python")
+        engine = self.scripted(render_call("move_file", {"source": "main.py", "destination": "app/"}),
+                               render_call("delete_file", {"path": "old.py"}), "Tidied.")
+        heard, _ = await self.run_answering(engine, ["once", "no"])
+        asked = only(heard, "confirm")
+        self.assertEqual([(a["tool"], a["what"]) for a in asked],
+                         [("move_file", "main.py to app/"), ("delete_file", "old.py")])
+        self.assertIsNotNone(projects.file("c1", "app/main.py"))
+        self.assertIsNotNone(projects.file("c1", "old.py"))
+
     async def test_without_text_from_elsewhere_nothing_is_asked(self) -> None:
         engine = self.scripted(write("main.py", "print(1)\n"), "Done.")
         heard, _ = await self.run_answering(engine, [], context=[])

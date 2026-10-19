@@ -135,6 +135,12 @@ class Tool:
     requires: Callable[[], bool] | None = None
     # Seconds before the call is abandoned, where it is not the setting's.
     timeout: float | None = None
+    # It works on the conversation's project: what it returns is the project's
+    # own text, never a lookup an answer is held to.
+    project: bool = False
+    # It changes the project or runs code. Once the run has read text
+    # somebody other than the user wrote, it is made only if the user says so.
+    changes: bool = False
 
     def required_args(self) -> tuple[Arg, ...]:
         return tuple(a for a in self.args if a.required)
@@ -331,13 +337,39 @@ def was_given(address: str, texts: Iterable[str]) -> bool:
     does not forgive anything added: a longer path or a query string that the
     user did not write is a different address.
     """
-    key = _SCHEME.sub("", (address or "").strip().lower()).removeprefix("www.").rstrip("/")
-    if not key:
+    key = _plain_address(address or "")
+    # An address is one word. Anything with a space in it is not one the user
+    # wrote as an address, whatever words of theirs it is made of.
+    if not key or any(ch.isspace() for ch in key):
         return False
-    # The address has to stand as an address in what they wrote: not inside a
-    # longer name, and not continued by more of a name.
-    found = re.compile(r"(?<![a-z0-9.\-])(?:www\.)?" + re.escape(key) + r"(?![a-z0-9\-])")
-    return any(found.search(text.lower()) for text in texts)
+    for text in texts:
+        for given in _addresses(text):
+            # Theirs exactly, or theirs shortened: cut back at a "/", a "?"
+            # or a "#", never in the middle of a name.
+            if given == key or (given.startswith(key) and given[len(key)] in "/?#"):
+                return True
+    return False
+
+
+# One word of a message that may be an address: what lies between spaces,
+# quotes and brackets.
+_WORD = re.compile(r"[^\s<>\"'()\[\]{}]+")
+
+
+def _plain_address(raw: str) -> str:
+    """An address as two spellings of it are compared: no scheme, no "www.",
+    no capitals, and no slash or full stop at its end."""
+    plain = _SCHEME.sub("", raw.strip().lower()).removeprefix("www.")
+    return plain.rstrip("/").rstrip(".,;:!?").rstrip("/")
+
+
+def _addresses(text: str) -> Iterable[str]:
+    """The addresses written in a text: the words that name a site."""
+    for word in _WORD.findall(text or ""):
+        plain = _plain_address(word)
+        site = plain.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        if "." in site.strip("."):
+            yield plain
 
 
 def check(tool: Tool, args: dict | None) -> tuple[dict, Rejection | None]:

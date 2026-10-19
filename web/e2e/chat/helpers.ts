@@ -219,14 +219,15 @@ export async function called(
 }
 
 /** What an answer is made of, top to bottom: "thought", "text", "cards" (a
- *  run of cards), "file" (a file being written) and "calls" (calls under way). */
+ *  run of cards), "file" (a file being written), "calls" (calls under way)
+ *  and "confirm" (a change put to the user). */
 export function order(page: Page, n = 0): Promise<string[]> {
   return answerOf(page)
     .nth(n)
     .evaluate((el) =>
       [
         ...el.querySelectorAll(
-          ':scope .prose, :scope [data-part="cards"], :scope [data-part="thought"], :scope [data-part="file"], :scope [data-part="calls"]',
+          ':scope .prose, :scope [data-part="cards"], :scope [data-part="thought"], :scope [data-part="file"], :scope [data-part="calls"], :scope [data-part="confirm"]',
         ),
       ].map((node) =>
         node.classList.contains("prose") ? "text" : ((node as HTMLElement).dataset.part ?? ""),

@@ -5,7 +5,7 @@
 
 import { fmt, fmtInt, fmtMs } from "@/lib/format";
 import { hasIcon } from "@/lib/icons";
-import type { EngineInfo, LedgerStep, StepEvent, StoredRun } from "@/lib/types";
+import type { ConfirmEvent, EngineInfo, LedgerStep, StepEvent, StoredRun } from "@/lib/types";
 
 /* ------------------------------------------------------------- composer -- */
 
@@ -101,6 +101,100 @@ export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] 
     : [...rows, row];
 }
 
+/* ------------------------------------------------ a change put to you -- */
+
+// What a change is, as the sentence that asks about it says it: "the agent
+// wants to write app/main.py". A tool not named here is said by its label.
+const CHANGE_VERBS: Record<string, string> = {
+  write_file: "write",
+  edit_file: "edit",
+  run_file: "run",
+  move_file: "move",
+  delete_file: "delete",
+};
+
+// What was read, as the same sentence says it: "It read a web search first".
+const READ_WORDS: Record<string, string> = {
+  "Web search": "a web search",
+  News: "the news",
+  "Read page": "a web page",
+  "Open result": "a page from a search",
+  Wikipedia: "Wikipedia",
+  Recall: "notes kept in other conversations",
+};
+
+/** A list said as a sentence says it: "a, b and c". */
+function spoken(items: readonly string[]): string {
+  if (items.length < 2) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/** What a run read that somebody else wrote, from the tools' names on screen. */
+export function readWords(because: string): string {
+  const labels = because
+    .split(",")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  // The server's own words, where it had no label to give: said as they are.
+  const said = labels.map((l) => READ_WORDS[l] ?? (/^[a-z]/.test(l) ? l : `what ${l} returned`));
+  return spoken([...new Set(said)]) || "a page";
+}
+
+export interface ConfirmWording {
+  /** What it wants to do, set in bold: "write app/main.py", "run this program". */
+  action: string;
+  /** For a program, the start of its code, shown as code; null otherwise. */
+  code: string | null;
+  /** Why it is asking, and what to check. */
+  why: string;
+}
+
+/** The words of a change put to the user, from the event that put it. */
+export function confirmWording(
+  c: Pick<ConfirmEvent, "tool" | "label" | "what" | "because">,
+): ConfirmWording {
+  const what = c.what.trim();
+  const verb = CHANGE_VERBS[c.tool];
+  const program = !verb && c.tool === "python";
+  const action = program
+    ? "run this program"
+    : verb
+      ? `${verb} ${what || "a file"}`
+      : `use ${c.label || c.tool}${what ? ` on ${what}` : ""}`;
+  return {
+    action,
+    code: program && what ? what : null,
+    why: `It read ${readWords(c.because)} first, so check this is what you asked for and not something it read there.`,
+  };
+}
+
+/** How a change put to you ended: what you chose, or why nothing was. */
+export type ConfirmOutcome = "once" | "reply" | "no" | "no answer" | "stopped";
+
+/** The one quiet line a change put to you becomes once it has been answered. */
+export const OUTCOME_WORDS: Record<ConfirmOutcome, string> = {
+  once: "Allowed.",
+  reply: "Allowed for this reply.",
+  no: "Not allowed.",
+  "no answer": "No answer in time, so not allowed.",
+  stopped: "Stopped before you answered.",
+};
+
+// The same, as "How it ran" says it after the tool's name.
+const ANSWERED: Record<string, string> = {
+  no: "not allowed",
+  "no answer": "no answer",
+  stopped: "stopped",
+};
+
+/** The outcome a `confirm` step reports, as one of the five. */
+export function outcomeOf(data: Pick<StepEvent, "status" | "detail">): ConfirmOutcome {
+  const said = data.detail ?? "";
+  if (said === "once" || said === "reply" || said === "no" || said === "no answer") return said;
+  if (data.status === "stopped" || said === "stopped") return "stopped";
+  return data.status === "ok" ? "once" : "no";
+}
+
 /* ------------------------------------------------------- how it ran -- */
 
 /** One row of "How it ran". */
@@ -127,6 +221,7 @@ const CHOSEN_BY: Record<string, string> = {
 };
 const KIND_WORDS: Record<string, string> = {
   call: "chose",
+  confirm: "asked you",
   tool: "tool",
   answer: "answer",
   route: "choice",
@@ -166,6 +261,9 @@ export function ledgerRows(
       else if (step.name) name = label(step.name);
       else name = "none";
     }
+    // A change put to you did not fail when you said no: it says what you said.
+    const asked = step.kind === "confirm";
+    if (asked) name += ` · ${step.ok ? "allowed" : (ANSWERED[step.error ?? ""] ?? "not allowed")}`;
     return {
       kind: free
         ? (CHOSEN_BY[step.via as string] ?? "choice")
@@ -173,7 +271,7 @@ export function ledgerRows(
       name,
       tokens: tokensOf(step),
       ms: fmtMs(step.ms),
-      failed: !step.ok,
+      failed: !asked && !step.ok,
     };
   });
   const split = [

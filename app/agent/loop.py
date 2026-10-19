@@ -42,6 +42,7 @@ from ..tools.base import (
     untrusted,
 )
 from ..tools.results import links_of
+from . import confirm
 from .calls import Call, parse_call, render_call
 from .context import SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history
 from .policy import call_key, refusal, users_words
@@ -67,6 +68,24 @@ LEAST_SHARE = 40
 MIN_REPLY = 384
 # Tokens a reply is given beyond its thinking: what it says, and a call.
 REPLY_ROOM = 1536
+
+
+def _project(name: str) -> bool:
+    """Whether a tool works on the project: what it returns is no lookup."""
+    tool = REGISTRY.get(name)
+    return bool(tool and tool.project)
+
+
+def _what(call: ToolCall) -> str:
+    """A change put to the user, in a line: the files it touches, or the
+    start of the program it runs."""
+    args = call.args or {}
+    files = [str(args[k]) for k in ("path", "source", "destination") if args.get(k)]
+    if files:
+        return " to ".join(files) if "source" in args else ", ".join(files)
+    code = str(args.get("code") or "").strip().splitlines()
+    head = "\n".join(code[:3])
+    return head + ("\n..." if len(code) > 3 else "")
 
 
 def what_happened(result: ToolResult, tool=None) -> str:
@@ -198,6 +217,12 @@ class _Run:
     # page, an article, notes others kept. From then on it writes nothing the
     # model chose to write.
     tainted: bool = False
+    # The tools whose text it has read, by label, for the user to be told.
+    untrusted_reads: list[str] = field(default_factory=list)
+    # Whether the user allowed the change just put to them, and whether they
+    # allowed every such change of this reply.
+    allowed: bool = False
+    approved: bool = False
     # When the message was sent, as the model is told it.
     now: datetime | None = None
     # The conversation's project as it stands: each file's path and size.
@@ -331,12 +356,13 @@ class _Run:
     async def _stages(self) -> AsyncIterator[Event]:
         if self.turns is None:
             self.turns = turns_from_history(self.history)
-        self.tainted = any(
-            untrusted(REGISTRY[tool])
+        self.untrusted_reads = [
+            REGISTRY[tool].label
             for turn in self.turns for part in turn.parts
             if part.kind in ("data", "observation", "response")
-            for tool in part.tools if tool in REGISTRY
-        )
+            for tool in part.tools if tool in REGISTRY and untrusted(REGISTRY[tool])
+        ]
+        self.tainted = bool(self.untrusted_reads)
         tools = available() if self.tools_enabled else []
         transcript = self._transcript(tools)
         if self.trim:
@@ -509,6 +535,18 @@ class _Run:
         made.add(known)
         self.calls.append(made_call)
         rejection = refusal(made_call, theirs=self.addresses, tainted=self.tainted)
+        if rejection is None and tool.changes and self.tainted and not self.approved:
+            # Text somebody else wrote has been read: this change is the
+            # user's to allow, not the page's.
+            async for event in self._ask(index, made_call, tool):
+                yield event
+            if self.stop.is_set():
+                self.last = None
+                return
+            if not self.allowed:
+                rejection = Rejection(
+                    ("the user did not allow it",), "You did not allow this.", "not allowed",
+                )
         if rejection is not None:
             made_call.meta["refusal"] = rejection
         async for event in self._lookup(index, made_call, budget=self._budget(transcript, call.name)):
@@ -518,6 +556,50 @@ class _Run:
         transcript.response(call.name, self._read(made_call), ok=self.last.ok)
         for event in self._files(call.name, self.last, reply.streamed):
             yield event
+
+    async def _ask(self, index: int, call: ToolCall, tool) -> AsyncIterator[Event]:
+        """Put a change to the user and wait for their answer, with the slot
+        given back meanwhile: nobody else should wait on a person deciding.
+        The answer is kept in ``allowed``; "for this reply" in ``approved``."""
+        question = f"confirm-{index}"
+        waiting = confirm.ask(self.request_id, question)
+        what = _what(call)
+        yield "confirm", {
+            "id": question, "tool": call.name, "label": tool.label, "what": what,
+            "because": ", ".join(dict.fromkeys(self.untrusted_reads)) or "a page",
+        }
+        self.engine.give_slot(self.request_id)
+        began = time.perf_counter()
+        stopping = asyncio.ensure_future(self.stop.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {waiting, stopping}, timeout=settings.confirm_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if waiting in done and not waiting.cancelled():
+                choice = waiting.result()
+            else:
+                choice = "stopped" if stopping in done else "no answer"
+        finally:
+            stopping.cancel()
+            confirm.forget(self.request_id, question)
+        ms = (time.perf_counter() - began) * 1000
+        self.allowed = choice in (confirm.ONCE, confirm.REPLY)
+        if choice == confirm.REPLY:
+            self.approved = True
+        self.trace.steps.append(Step(
+            "confirm", name=call.name, via="user", input={"what": what}, output=choice,
+            total_ms=ms, ok=self.allowed, error=None if self.allowed else choice,
+        ))
+        yield "step", {
+            "id": question, "kind": "confirm",
+            "status": "ok" if self.allowed else "stopped" if choice == "stopped" else "failed",
+            "label": "Allowed" if self.allowed else "Not allowed", "glyph": "?",
+            "tool": call.name, "detail": choice, "ms": round(ms, 1),
+        }
+        if choice != "stopped":
+            async for event in self._take():
+                yield event
 
     def _read(self, call: ToolCall) -> str:
         """What the model reads of the call just made."""
@@ -650,6 +732,7 @@ class _Run:
         self.trace.calls.append((call, result))
         if result.ok and tool is not None and untrusted(tool):
             self.tainted = True
+            self.untrusted_reads.append(tool.label)
         if result.ok and tool is not None and tool.links:
             # The newest list is the one its numbers mean.
             self.links = links_of(result.data)
@@ -731,12 +814,12 @@ class _Run:
         """
         made = [
             (call, result) for call, result in self.trace.calls
-            if result.ok and call.name not in ("write_file", "edit_file", "read_file")
+            if result.ok and not _project(call.name)
         ]
         found = [
             p.content for p in parts
             if p.kind in ("data", "observation", "response")
-            and not set(p.tools) & {"write_file", "edit_file", "read_file"}
+            and not any(_project(tool) for tool in p.tools)
         ]
         if not made and not found:
             return

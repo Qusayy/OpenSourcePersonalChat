@@ -227,8 +227,9 @@ export interface StepEvent {
    *  for the calls they made. */
   id: string;
   /** "model": one reply of the model, which ends in an answer or a call.
-   *  "tool": one call being made. */
-  kind: "model" | "tool";
+   *  "tool": one call being made. "confirm": a change put to the user,
+   *  ended by their answer (`detail`: the choice, "no answer" or "stopped"). */
+  kind: "model" | "tool" | "confirm";
   /** "stopped": the run was stopped while this step was under way. */
   status: "running" | "ok" | "failed" | "stopped";
   /** A reply: "Thinking" or "Writing" while it runs, then "Answer" or
@@ -321,6 +322,25 @@ export interface DoneEvent {
   correction?: string | null;
 }
 
+/** How the user answers a change put to them: this call, every such call of
+ *  this reply, or no. */
+export type ConfirmChoice = "once" | "reply" | "no";
+
+/** A change put to the user before it is made. */
+export interface ConfirmEvent {
+  /** The question's name within the run, "confirm-0": what the answer names. */
+  id: string;
+  /** The tool's registry name, and its name on screen ("Write file"). */
+  tool: string;
+  label: string;
+  /** What it would touch: a path, "a to b" for a move, or for a program the
+   *  first lines of its code, which may hold line breaks. */
+  what: string;
+  /** What was read that someone else wrote, as the tools' names on screen,
+   *  joined with ", " ("Web search, Read page"). */
+  because: string;
+}
+
 /** Every event of the chat stream, by name. A type, not an interface, so it
  *  can be the event map `sseFetch` is generic over. */
 export type ChatEvents = {
@@ -357,6 +377,10 @@ export type ChatEvents = {
   /** A piece of what the model is thinking. The first piece of a reply may
    *  carry `ttft_ms`. */
   think: { t: string; ttft_ms?: number };
+  /** The run has read text somebody else wrote, and the call it is about to
+   *  make changes the project or runs code: it waits for the user to say
+   *  whether it may. Answered with `api.confirm`; ended by a `confirm` step. */
+  confirm: ConfirmEvent;
   /** A piece of what the model says. The first piece of a reply may carry
    *  `ttft_ms`, where its thinking did not. */
   token: { t: string; ttft_ms?: number };

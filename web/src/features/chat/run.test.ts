@@ -90,6 +90,37 @@ describe("the thread", () => {
   });
 });
 
+describe("a change put to the user", () => {
+  it("is a part where it was asked, settled in place, and never drawn as a call", () => {
+    const a = addBot({ live: true });
+    const said = { kind: "text", key: newKey(), text: "I'll fix it." } as const;
+    addPart(a.key, said);
+    const ask = {
+      id: "confirm-0",
+      tool: "write_file",
+      label: "Write file",
+      what: "app/main.py",
+      because: "Web search",
+    };
+    const asking = { kind: "confirm", key: newKey(), ask, chosen: null, outcome: null } as const;
+    addPart(a.key, asking);
+    stepBot(a.key, {
+      id: "confirm-0",
+      kind: "confirm",
+      status: "ok",
+      label: "Allowed",
+      detail: "once",
+    });
+    expect(botItem(a.key)?.steps).toEqual([]);
+    patchPart(a.key, asking.key, (p) => (p.kind === "confirm" ? { ...p, chosen: "once" } : p));
+    patchPart(a.key, asking.key, (p) => (p.kind === "confirm" ? { ...p, outcome: "once" } : p));
+    expect(botItem(a.key)?.parts).toEqual([
+      said,
+      { kind: "confirm", key: asking.key, ask, chosen: "once", outcome: "once" },
+    ]);
+  });
+});
+
 describe("storedParts", () => {
   const call = (over: Partial<StoredToolCall>): StoredToolCall => ({
     id: "t",

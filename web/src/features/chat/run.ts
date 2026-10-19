@@ -9,8 +9,16 @@
  */
 
 import { create } from "zustand";
-import type { CardData, CardKind, StepEvent, StoredMessage, StoredRun } from "@/lib/types";
-import { applyStep, type Cost, type StepRow } from "./rules";
+import type {
+  CardData,
+  CardKind,
+  ConfirmChoice,
+  ConfirmEvent,
+  StepEvent,
+  StoredMessage,
+  StoredRun,
+} from "@/lib/types";
+import { applyStep, type ConfirmOutcome, type Cost, type StepRow } from "./rules";
 
 export type View = "empty" | "thread";
 
@@ -60,7 +68,22 @@ export interface FilePart {
   path: string;
 }
 
-export type Part = ThoughtPart | TextPart | CardPart | FilePart;
+/** A change put to the user before it is made, because the run has read text
+ *  somebody else wrote. Asked where it came in the reply, answered there, and
+ *  then one quiet line saying how it ended. Not kept: a stored answer shows
+ *  the call's card, which says what came of it. */
+export interface ConfirmPart {
+  kind: "confirm";
+  key: number;
+  /** The question as the stream put it; its `id` is what the answer names. */
+  ask: ConfirmEvent;
+  /** What was chosen here, while it is on its way; null until a button is pressed. */
+  chosen: ConfirmChoice | null;
+  /** How it ended, once the run said; null while it waits. */
+  outcome: ConfirmOutcome | null;
+}
+
+export type Part = ThoughtPart | TextPart | CardPart | FilePart | ConfirmPart;
 
 export interface UserItem {
   kind: "user";

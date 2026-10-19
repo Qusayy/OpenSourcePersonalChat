@@ -85,6 +85,7 @@ register(Tool(
     example="/python print(sum(range(101)))",
     budget=500,
     observe=_observe,
+    changes=True,
     # Its own clock stops a program first, and says so.
     timeout=sandbox.WALL_SECONDS + 5,
     requires=lambda: settings.sandbox != "off" and sandbox.runner().available(),

@@ -68,6 +68,8 @@ register(Tool(
     example="/runfile app.py",
     budget=500,
     observe=_observe,
+    project=True,
+    changes=True,
     timeout=sandbox.WALL_SECONDS + 5,
     requires=lambda: settings.sandbox != "off" and sandbox.runner().available(),
 ))

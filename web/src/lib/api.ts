@@ -6,6 +6,7 @@ import { relock } from "./gate";
 import type {
   BenchResults,
   Bootstrap,
+  ConfirmChoice,
   Conversation,
   ConversationSummary,
   Health,
@@ -59,6 +60,15 @@ export const api = {
   cancel: (requestId: string) =>
     json<{ cancelled: boolean }>(`/api/cancel/${encodeURIComponent(requestId)}`, {
       method: "POST",
+    }),
+
+  /** Answer a change a run put to the user. `answered` is false when there
+   *  was no such question waiting: answered already, or its time was up. */
+  confirm: (requestId: string, id: string, choice: ConfirmChoice) =>
+    json<{ answered: boolean }>(`/api/confirm/${encodeURIComponent(requestId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, choice }),
     }),
 
   benchResults: () => json<BenchResults>("/api/bench/results"),

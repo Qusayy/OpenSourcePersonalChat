@@ -44,6 +44,9 @@ export const SERVER_ENV = {
   // These specs are about the application, so the gate in front of it is
   // open. The gate has a suite of its own: e2e/gate.
   AURORA_GATE: "off",
+  // The server answers only to its own names and these. The insecure run
+  // opens it as aurora.test, which would otherwise be refused (421).
+  AURORA_ALLOWED_HOSTS: "aurora.test",
 };
 
 export default defineConfig({

@@ -1,17 +1,23 @@
 /* The project of the conversation on the sheet: its files as they stand, the
- * one being shown, and whether the panel is open.
+ * one being shown, which of its folders are closed, and whether the panel is
+ * open.
  *
  * Files arrive two ways. A conversation opened from history brings its
  * project from the server (`loadProject`). An answer being written says each
  * file as it goes (`fileEvent`): it opens, its lines arrive, it closes with
- * the version it was kept as. Lines come many to a second, so they are held
- * here and put in the store on the page's own paint tick (`flushProject`),
- * not one render a line.
+ * the version it was kept as; a call moves one or removes one. Lines come
+ * many to a second, so they are held here and put in the store on the page's
+ * own paint tick (`flushProject`), not one render a line.
+ *
+ * Every folder is open until it is closed. Which are closed is remembered for
+ * each conversation in this browser, where the browser lets it be; without
+ * storage the panel works the same and simply forgets.
  */
 
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import type { FileEventData, ProjectFileRow } from "@/lib/types";
+import { buildTree, byName, folderPaths, foldersAbove, treeOrder } from "./tree";
 
 export interface ProjectFile {
   path: string;
@@ -31,6 +37,8 @@ interface ProjectState {
   /** By path, in path order. */
   files: ProjectFile[];
   selected: string | null;
+  /** The folders that are closed, by path. Every other folder is open. */
+  collapsed: ReadonlySet<string>;
   /** Shown beside the thread on a wide screen, or as a drawer on a narrow one. */
   open: boolean;
 }
@@ -39,6 +47,7 @@ export const useProject = create<ProjectState>(() => ({
   cid: null,
   files: [],
   selected: null,
+  collapsed: new Set(),
   open: false,
 }));
 
@@ -48,7 +57,7 @@ const get = useProject.getState;
 // Lines that have arrived since the last paint, by path.
 const pending = new Map<string, string>();
 
-const byPath = (a: ProjectFile, b: ProjectFile) => a.path.localeCompare(b.path);
+const byPath = (a: ProjectFile, b: ProjectFile) => byName(a.path, b.path);
 const countLines = (text: string) =>
   text ? text.split("\n").length - (text.endsWith("\n") ? 1 : 0) : 0;
 
@@ -57,10 +66,83 @@ function upsert(files: ProjectFile[], file: ProjectFile): ProjectFile[] {
   return [...rest, file].sort(byPath);
 }
 
-/** Start over: a new conversation, or none. */
+/** The first file the tree lists: what is shown when nothing was chosen. */
+export function firstFile(files: readonly ProjectFile[]): string | null {
+  return treeOrder(buildTree(files))[0] ?? null;
+}
+
+/* ------------------------------------------------------ closed folders -- */
+
+/** Where a conversation's closed folders are remembered. */
+export const collapsedKey = (cid: string): string => `aurora.project.closed.${cid}`;
+
+function remembered(cid: string | null): Set<string> {
+  if (!cid) return new Set();
+  try {
+    const kept: unknown = JSON.parse(localStorage.getItem(collapsedKey(cid)) ?? "[]");
+    return new Set(Array.isArray(kept) ? kept.filter((p) => typeof p === "string") : []);
+  } catch {
+    return new Set(); // no storage, or something in it that is not ours
+  }
+}
+
+function remember(cid: string | null, collapsed: ReadonlySet<string>): void {
+  if (!cid) return;
+  try {
+    if (collapsed.size) localStorage.setItem(collapsedKey(cid), JSON.stringify([...collapsed]));
+    else localStorage.removeItem(collapsedKey(cid));
+  } catch {
+    /* storage refused: the panel still works, it just forgets */
+  }
+}
+
+/** Close or open folders, and remember it. */
+function setCollapsed(collapsed: ReadonlySet<string>): void {
+  if (collapsed === get().collapsed) return;
+  set({ collapsed });
+  remember(get().cid, collapsed);
+}
+
+/** The same folders closed, but for every one `path` is in. The same set
+ *  when none of them was closed. */
+function openedAbove(collapsed: ReadonlySet<string>, path: string | null): ReadonlySet<string> {
+  const above = path ? foldersAbove(path).filter((f) => collapsed.has(f)) : [];
+  if (!above.length) return collapsed;
+  const next = new Set(collapsed);
+  for (const folder of above) next.delete(folder);
+  return next;
+}
+
+/** Only the closed folders the files still have. */
+function stillThere(collapsed: ReadonlySet<string>, files: readonly ProjectFile[]) {
+  if (!collapsed.size) return collapsed;
+  const folders = new Set(folderPaths(buildTree(files)));
+  const kept = [...collapsed].filter((f) => folders.has(f));
+  return kept.length === collapsed.size ? collapsed : new Set(kept);
+}
+
+/** Open a folder that is closed, or close one that is open. */
+export function toggleFolder(path: string): void {
+  const next = new Set(get().collapsed);
+  if (!next.delete(path)) next.add(path);
+  setCollapsed(next);
+}
+
+export function expandAll(): void {
+  if (get().collapsed.size) setCollapsed(new Set());
+}
+
+export function collapseAll(): void {
+  setCollapsed(new Set(folderPaths(buildTree(get().files))));
+}
+
+/* --------------------------------------------------------------- files -- */
+
+/** Start over: a new conversation, or none. Its closed folders are the ones
+ *  it was left with. */
 export function resetProject(cid: string | null = null): void {
   pending.clear();
-  set({ cid, files: [], selected: null, open: false });
+  set({ cid, files: [], selected: null, collapsed: remembered(cid), open: false });
 }
 
 /** The project of a conversation, from the server: a stored one being
@@ -76,21 +158,21 @@ export async function loadProject(cid: string): Promise<void> {
     return; // no project to show; the conversation itself still opens
   }
   if (get().cid !== cid) return;
+  const files = rows
+    .map((r) => ({
+      path: r.path,
+      lang: r.lang,
+      content: r.content,
+      lines: r.lines,
+      version: r.version,
+      writing: false,
+      why: null,
+    }))
+    .sort(byPath);
+  const selected = get().selected;
   set({
-    files: rows
-      .map((r) => ({
-        path: r.path,
-        lang: r.lang,
-        content: r.content,
-        lines: r.lines,
-        version: r.version,
-        writing: false,
-        why: null,
-      }))
-      .sort(byPath),
-    selected: rows.some((r) => r.path === get().selected)
-      ? get().selected
-      : (rows[0]?.path ?? null),
+    files,
+    selected: rows.some((r) => r.path === selected) ? selected : firstFile(files),
   });
 }
 
@@ -120,7 +202,45 @@ export function fileEvent(event: FileEventData): boolean {
       }),
       selected: event.path,
     }));
+    // The file being written is shown, and so is where it is.
+    setCollapsed(openedAbove(get().collapsed, event.path));
     return true;
+  }
+  if (event.type === "move") {
+    const s = get();
+    const was = s.files.find((f) => f.path === event.from);
+    if (!was) return false;
+    const moved: ProjectFile = {
+      ...was,
+      path: event.to,
+      version: event.version ?? was.version,
+      lang: event.lang ?? was.lang,
+    };
+    const files = upsert(
+      s.files.filter((f) => f.path !== event.from),
+      moved,
+    );
+    // The file shown goes where it went; with none shown, it is the one.
+    const follows = s.selected === event.from || s.selected === null;
+    set({ files, selected: follows ? event.to : s.selected });
+    setCollapsed(stillThere(openedAbove(s.collapsed, event.to), files));
+    return false;
+  }
+  if (event.type === "remove") {
+    const s = get();
+    if (!s.files.some((f) => f.path === event.path)) return false;
+    pending.delete(event.path);
+    const files = s.files.filter((f) => f.path !== event.path);
+    let selected = s.selected;
+    if (selected === event.path) {
+      // The file shown is gone: the next one in the tree, or the one before.
+      const order = treeOrder(buildTree(s.files));
+      const at = order.indexOf(event.path);
+      selected = order[at + 1] ?? order[at - 1] ?? null;
+    }
+    set({ files, selected });
+    setCollapsed(stillThere(openedAbove(s.collapsed, selected), files));
+    return false;
   }
   set((s) => ({
     files: s.files.map((f) =>
@@ -153,9 +273,10 @@ export function flushProject(): void {
   }));
 }
 
-/** Show one file, and the panel with it. */
+/** Show one file, and the panel with it, with every folder it is in open. */
 export function openFile(path: string): void {
   set({ selected: path, open: true });
+  setCollapsed(openedAbove(get().collapsed, path));
 }
 
 export function setProjectOpen(open: boolean): void {

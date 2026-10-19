@@ -212,7 +212,11 @@ export type FileEventData =
       version?: number;
       kept?: boolean;
       why?: string;
-    };
+    }
+  /** A file kept under a new path, with what it held, as a new version. */
+  | { type: "move"; from: string; to: string; version?: number; lang?: string }
+  /** A file taken out of the project. */
+  | { type: "remove"; path: string };
 
 /* ------------------------------------------------------- the chat stream -- */
 

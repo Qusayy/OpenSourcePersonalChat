@@ -40,6 +40,20 @@
     width: min(94vw, 40rem);
   }
 
+  /* ----------------------------------------------------- the file tree -- */
+
+  /* The hairline down from a folder to its last row, one per level a row is
+     in. The rows touch, so the lines on them join into one. Drawn over the
+     row's fill, so a selected or pointed-at row keeps its line. */
+  .tree-guide {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px solid var(--rule);
+    pointer-events: none;
+  }
+
   /* ---------------------------------------------- a file in an answer -- */
 
   .file-chip {

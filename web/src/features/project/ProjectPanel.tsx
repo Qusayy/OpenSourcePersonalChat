@@ -1,11 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { projectZipUrl } from "@/lib/api";
 import { cx } from "@/lib/cx";
+import { Icon } from "@/lib/icons";
 import { Button, buttonClass } from "@/shell/Button";
-import { openFile, type ProjectFile, setProjectOpen, useProject } from "./store";
+import {
+  collapseAll,
+  expandAll,
+  firstFile,
+  openFile,
+  type ProjectFile,
+  setProjectOpen,
+  toggleFolder,
+  useProject,
+} from "./store";
+import { buildTree, fileCount, folderPaths, type TreeRow, visibleRows } from "./tree";
 
-/* The project of the conversation: its files, the one being shown, and a zip
-   of all of them.
+/* The project of the conversation: its files as a tree of folders, the one
+   being shown, and a zip of all of them.
 
    On a wide screen it stands beside the thread, the conversation moving over
    to make room (see `usePanelBeside`); on a narrow one it is a drawer from
@@ -34,51 +45,179 @@ export function usePanelBeside(): boolean {
   return wide && open && any;
 }
 
-/** A path in two parts: where it is, and its name. */
-function split(path: string): [string, string] {
-  const at = path.lastIndexOf("/");
-  return at < 0 ? ["", path] : [path.slice(0, at + 1), path.slice(at + 1)];
-}
+/* -------------------------------------------------------------- the tree -- */
 
-function FileList({ files, selected }: { files: ProjectFile[]; selected: string | null }) {
+// Where the rows start, and how far each folder down moves them in: the
+// panel's own 20px margin, then 16px a level.
+const INSET = 20;
+const STEP = 16;
+
+const rowId = (row: TreeRow<ProjectFile>) =>
+  `${row.node.kind === "folder" ? "folder" : "file"}:${row.node.path}`;
+
+/**
+ * The project's files as a code editor lists them: folders first, each with
+ * the arrow that says whether it is open, then files, a level in for each
+ * folder, with a hairline down from each open folder to its last row.
+ *
+ * One tree, one stop on Tab: the arrow keys move between rows, Right and
+ * Left open and close folders or step in and out of them, Enter and Space
+ * open a file or a folder, Home and End go to the first and last row.
+ */
+function ProjectTree({ files, shown }: { files: ProjectFile[]; shown: string | null }) {
+  const collapsed = useProject((s) => s.collapsed);
+  const tree = useMemo(() => buildTree(files), [files]);
+  const rows = useMemo(() => visibleRows(tree, collapsed), [tree, collapsed]);
+  const [focused, setFocused] = useState<string | null>(null);
+  const els = useRef(new Map<string, HTMLElement>());
+  // Set when a key moves focus: the row it moved to takes it once drawn.
+  const follow = useRef(false);
+
+  // The row Tab lands on: the one last focused, else the file shown, else the first.
+  const current =
+    rows.find((r) => rowId(r) === focused) ??
+    rows.find((r) => r.node.kind === "file" && r.node.path === shown) ??
+    rows[0];
+  const currentId = current ? rowId(current) : null;
+
+  useEffect(() => {
+    if (!follow.current || !currentId) return;
+    follow.current = false;
+    els.current.get(currentId)?.focus();
+  }, [currentId]);
+
+  const go = (row: TreeRow<ProjectFile> | undefined) => {
+    if (!row) return;
+    follow.current = true;
+    setFocused(rowId(row));
+  };
+
+  const onKey = (event: KeyboardEvent<HTMLElement>, at: number) => {
+    const row = rows[at];
+    if (!row) return;
+    const { node } = row;
+    switch (event.key) {
+      case "ArrowDown":
+        go(rows[at + 1]);
+        break;
+      case "ArrowUp":
+        go(rows[at - 1]);
+        break;
+      case "Home":
+        go(rows[0]);
+        break;
+      case "End":
+        go(rows.at(-1));
+        break;
+      case "ArrowRight":
+        if (node.kind !== "folder") break;
+        if (!row.open) toggleFolder(node.path);
+        else if (rows[at + 1]?.parent === node.path) go(rows[at + 1]);
+        break;
+      case "ArrowLeft":
+        if (node.kind === "folder" && row.open) toggleFolder(node.path);
+        else if (row.parent)
+          go(rows.find((r) => r.node.path === row.parent && r.node.kind === "folder"));
+        break;
+      case "Enter":
+      case " ":
+        if (node.kind === "folder") toggleFolder(node.path);
+        else openFile(node.path);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+  };
+
   return (
-    <ul
+    <div
       id="project-files"
-      aria-label="Files"
-      className="list-none m-0 p-0 max-h-[38%] overflow-y-auto border-b border-rule"
+      role="tree"
+      aria-label="Project files"
+      className="max-h-[38%] overflow-y-auto py-1 border-b border-rule"
     >
-      {files.map((f) => {
-        const [dir, name] = split(f.path);
-        const current = f.path === selected;
+      {rows.map((row, at) => {
+        const { node } = row;
+        const id = rowId(row);
+        const folder = node.kind === "folder";
+        const file = node.kind === "file" ? node.file : null;
+        const selected = !folder && node.path === shown;
         return (
-          <li key={f.path}>
-            <button
-              type="button"
-              data-path={f.path}
-              aria-current={current ? "true" : undefined}
-              onClick={() => openFile(f.path)}
-              className={cx(
-                "flex items-baseline gap-2 w-full min-h-[36px] coarse:min-h-[44px] px-5 py-1",
-                "text-left text-2 hover:bg-sheet-2",
-                current && "bg-sheet-2",
-              )}
+          <div
+            key={id}
+            ref={(el) => {
+              if (el) els.current.set(id, el);
+              else els.current.delete(id);
+            }}
+            role="treeitem"
+            aria-level={node.depth + 1}
+            aria-setsize={row.siblings}
+            aria-posinset={row.position}
+            aria-expanded={folder ? row.open : undefined}
+            aria-selected={folder ? undefined : selected}
+            tabIndex={id === currentId ? 0 : -1}
+            data-folder={folder ? node.path : undefined}
+            data-path={folder ? undefined : node.path}
+            onFocus={() => setFocused(id)}
+            onKeyDown={(event) => onKey(event, at)}
+            onClick={() => {
+              setFocused(id);
+              if (folder) toggleFolder(node.path);
+              else openFile(node.path);
+            }}
+            className={cx(
+              "relative flex items-center gap-2 min-h-[36px] coarse:min-h-[44px] pr-5 py-1",
+              "text-2 cursor-pointer select-none hover:bg-sheet-2 focus-visible:-outline-offset-2",
+              selected && "bg-sheet-2",
+            )}
+            style={{ paddingLeft: INSET + node.depth * STEP }}
+          >
+            {/* A hairline down from each folder this row is in. */}
+            {Array.from({ length: node.depth }, (_, level) => (
+              <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: one line per level, in order
+                key={level}
+                aria-hidden="true"
+                className="tree-guide"
+                style={{ left: INSET + level * STEP + 6 }}
+              />
+            ))}
+            <span
+              className="flex-none inline-flex justify-center w-3 text-ink-2"
+              aria-hidden="true"
             >
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                <span className="text-ink-2">{dir}</span>
-                <span className={current ? "font-semibold" : undefined}>{name}</span>
-              </span>
-              {f.writing ? (
-                <span className="project-live text-1 text-ink-2">writing</span>
-              ) : f.why ? (
-                <span className="text-1 text-fault">not kept</span>
-              ) : (
-                <span className="text-1 text-ink-2 num">{f.lines}</span>
-              )}
-            </button>
-          </li>
+              {folder ? (
+                <span
+                  className={cx(
+                    "inline-flex transition-transform duration-(--dur-1) motion-reduce:transition-none",
+                    row.open && "rotate-90",
+                  )}
+                >
+                  <Icon name="arrow" size={12} />
+                </span>
+              ) : null}
+            </span>
+            <span
+              className={cx("min-w-0 flex-1 [overflow-wrap:anywhere]", selected && "font-semibold")}
+            >
+              {node.name}
+            </span>
+            {folder ? (
+              row.open ? null : (
+                <span className="text-1 text-ink-2 num">{fileCount(node.count)}</span>
+              )
+            ) : file?.writing ? (
+              <span className="project-live text-1">writing</span>
+            ) : file?.why ? (
+              <span className="text-1 text-fault">not kept</span>
+            ) : (
+              <span className="text-1 text-ink-2 num">{file?.lines}</span>
+            )}
+          </div>
         );
       })}
-    </ul>
+    </div>
   );
 }
 
@@ -113,34 +252,60 @@ function Viewer({ file }: { file: ProjectFile | undefined }) {
 export function ProjectView({ onClose }: { onClose: () => void }) {
   const files = useProject((s) => s.files);
   const selected = useProject((s) => s.selected);
+  const collapsed = useProject((s) => s.collapsed);
   const cid = useProject((s) => s.cid);
   const kept = files.some((f) => f.version !== null);
-  const file = files.find((f) => f.path === selected) ?? files[0];
+  const file =
+    files.find((f) => f.path === selected) ?? files.find((f) => f.path === firstFile(files));
+  const folders = useMemo(() => folderPaths(buildTree(files)), [files]);
+  const closedAll = folders.length > 0 && folders.every((f) => collapsed.has(f));
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-3 px-5 pt-4 pb-3 border-b border-rule">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 pt-4 pb-3 border-b border-rule">
         <h2 id="project-label" className="text-4 font-semibold tracking-[-0.01em]">
           Project
         </h2>
-        <span className="text-ink-2 text-1 num">
-          {`${files.length} file${files.length === 1 ? "" : "s"}`}
+        <span className="text-ink-2 text-1 num">{fileCount(files.length)}</span>
+        {/* The words of the last one end on the panel's edge. */}
+        <span className="flex flex-wrap items-center gap-x-1 ml-auto -mr-2">
+          {folders.length ? (
+            <>
+              <Button
+                variant="text"
+                small
+                id="project-expand"
+                disabled={collapsed.size === 0}
+                onClick={expandAll}
+              >
+                Expand all
+              </Button>
+              <Button
+                variant="text"
+                small
+                id="project-collapse"
+                disabled={closedAll}
+                onClick={collapseAll}
+              >
+                Collapse all
+              </Button>
+            </>
+          ) : null}
+          {cid && kept ? (
+            <a
+              id="project-zip"
+              className={buttonClass({ variant: "text" })}
+              href={projectZipUrl(cid)}
+              download
+            >
+              Download zip
+            </a>
+          ) : null}
+          <Button variant="text" quiet id="project-close" onClick={onClose}>
+            Close
+          </Button>
         </span>
-        <span className="flex-1" />
-        {cid && kept ? (
-          <a
-            id="project-zip"
-            className={buttonClass({ variant: "text" })}
-            href={projectZipUrl(cid)}
-            download
-          >
-            Download zip
-          </a>
-        ) : null}
-        <Button variant="text" quiet id="project-close" onClick={onClose}>
-          Close
-        </Button>
       </div>
-      <FileList files={files} selected={file?.path ?? null} />
+      <ProjectTree files={files} shown={file?.path ?? null} />
       <Viewer file={file} />
     </div>
   );
@@ -189,13 +354,15 @@ export function ProjectButton() {
   const any = useProject((s) => s.files.length > 0);
   const open = useProject((s) => s.open);
   const writing = useProject((s) => s.files.some((f) => f.writing));
+  // Beside the thread on a wide screen, the drawer on a narrow one.
+  const wide = useWide();
   if (!any) return null;
   return (
     <Button
       variant="text"
       id="project-btn"
       aria-expanded={open}
-      aria-controls="project"
+      aria-controls={wide ? "project" : "project-drawer"}
       onClick={() => setProjectOpen(!open)}
     >
       Project

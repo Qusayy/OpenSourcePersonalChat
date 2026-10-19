@@ -626,7 +626,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools
 
-Eighteen tools, no API keys anywhere:
+Twenty tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -645,6 +645,8 @@ Eighteen tools, no API keys anywhere:
 | `read_file` | one file of this conversation's project, as it stands, with line numbers | — |
 | `write_file` | create a file of the project, or replace one whole | — |
 | `edit_file` | replace one exact piece of a file with another, and leave the rest | — |
+| `move_file` | move or rename a file, or a whole folder; never onto a file that is there | — |
+| `delete_file` | delete a file, or a whole folder | — |
 | `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
 | `remember` · `recall` | notes kept on the user's word; see *Notes* | — |
 
@@ -691,7 +693,12 @@ the next message means the last list the conversation was shown.
 `edit_file` are kept in the conversation's project (every version, in
 `project_files`), and the page shows them in a panel beside the thread on a
 wide screen, or a drawer on a narrow one, filling in line by line as the
-model writes them. In the chat each change is a card that opens the file;
+model writes them. The panel is a folder tree: folders first, each opening
+and closing, Expand all and Collapse all, and the file you pick below it.
+As a project grows the model reorganises it with `move_file` (a file or a
+whole folder, renamed or moved; never onto a file that is there) and
+`delete_file`; a deleted file keeps its old versions, and a file written at
+its path later goes on from its number. In the chat each change is a card that opens the file;
 an edit shows the lines it took out and put in. **Download zip** gets all of
 them, newest versions, in one folder named for the conversation. Each message
 is told the project's files by name and version. A change asked for is that

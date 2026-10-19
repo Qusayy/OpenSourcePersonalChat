@@ -15,10 +15,10 @@ WorkingDirectory=/srv/aurora
 # the app's, for a .env that leaves a line out; the file overrides them.
 Environment=AURORA_MODEL_PATH=./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf
 Environment=AURORA_N_THREADS=0
-Environment=AURORA_N_CTX=4096
-# What else this model needs, word by word, from the .env. For Qwen3.5:
-#   AURORA_LLM_ARGS=--jinja --chat-template-file deploy/templates/qwen3.5.jinja --reasoning-format none
-# (its thinking off, and every answer written as it was read; see the file).
+Environment=AURORA_N_CTX=16384
+# Anything else this model needs, word by word, from the .env. The app writes
+# every prompt itself and sends it to /completion, so the server's chat
+# template is not used by it.
 Environment=AURORA_LLM_ARGS=
 EnvironmentFile=/srv/aurora/.env
 

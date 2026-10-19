@@ -6,8 +6,11 @@ name: CI
 # Every push to master and every pull request is type-checked, linted, tested
 # and built, and the built interface is driven in a browser against the real
 # server. A push to master that passes all of that is then published: the
-# built files are committed to the `release` branch, which is what a server
-# pulls (scripts/publish_release.sh).
+# files the `web` job built are committed to the `release` branch, which is
+# what a server pulls (scripts/publish_release.sh).
+#
+# Every action is pinned to a commit, with its release beside it; a tag can
+# be moved, a commit cannot.
 
 on:
   push:
@@ -30,8 +33,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: web/.nvmrc
           cache: npm
@@ -41,7 +44,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: web-dist
           path: web/dist
@@ -52,8 +55,8 @@ jobs:
     name: Server (unit tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -70,8 +73,8 @@ jobs:
     name: Sandbox (real programs under bubblewrap)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -79,16 +82,16 @@ jobs:
           grep -v '^llama-cpp-python' requirements.txt > requirements-ci.txt
           pip install -r requirements-ci.txt
       # Ubuntu 24.04 keeps unprivileged user namespaces behind AppArmor; the
-      # server (Debian 12) has them on. bubblewrap needs them.
+      # server (Debian 12) has them on. bubblewrap needs them. The install
+      # script tries the jail as the app's own user, so that user is made.
       - run: |
-          sudo apt-get install -y -q bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # The sandbox's own venv, where the server keeps it, read-only to the
-      # user the tests run as.
-      - run: |
-          sudo python3 -m venv /opt/aurora-sandbox/venv
-          sudo /opt/aurora-sandbox/venv/bin/pip install -q -r deploy/sandbox-requirements.txt
-          sudo chmod -R a+rX,go-w /opt/aurora-sandbox
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin aurora
+          sudo apt-get update -q
+      # The sandbox as the server installs it: bubblewrap, its read-only venv
+      # and the seccomp filter in /opt/aurora-sandbox, and the script's own
+      # checks of the jail.
+      - run: bash deploy/build-sandbox.sh
       - run: python -m unittest tests.test_sandbox -v
         env:
           AURORA_SANDBOX_TESTS: "1"
@@ -101,13 +104,13 @@ jobs:
       # Playwright starts the server itself; this is the interpreter it uses.
       AURORA_PYTHON: python
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
           cache: pip
@@ -133,7 +136,7 @@ jobs:
         working-directory: web
         env:
           AURORA_E2E_INSECURE: "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-report
@@ -148,7 +151,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: [web, server, sandbox, browser]
     runs-on: ubuntu-latest
-    # The one job that may write to the repository.
+    # The one job that may write to the repository, and so the one that runs
+    # nothing from npm: it publishes what the read-only `web` job built.
     permissions:
       contents: write
     # One publish at a time, in order, and never cut off halfway.
@@ -156,7 +160,10 @@ jobs:
       group: release
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      # No token left in the clone's config; the push alone is given one.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # A run can be overtaken: by the time its tests pass, master may have
       # moved, or an older run may be re-run by hand. Publishing it then would
       # put older code on top of newer. Only master's tip is published; the
@@ -171,14 +178,17 @@ jobs:
             echo "current=false" >> "$GITHUB_OUTPUT"
             echo "::notice::master is now $tip; this run is for $GITHUB_SHA and publishes nothing."
           fi
-      - uses: actions/setup-node@v4
+      # The interface the `web` job built and tested, from this same run.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.tip.outputs.current == 'true'
         with:
-          node-version-file: web/.nvmrc
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build and publish
+          name: web-dist
+          path: web/dist
+      - name: Publish
         if: steps.tip.outputs.current == 'true'
+        env:
+          RELEASE_SKIP_BUILD: "1"
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

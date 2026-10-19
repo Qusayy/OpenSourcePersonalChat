@@ -162,7 +162,10 @@ CREATE TABLE IF NOT EXISTS project_files (
 def init() -> None:
     global _conn, _fts
     path = _override or settings.resolved_db_path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.parent.is_dir():
+        # Every conversation is in here: only the app's own user may look in.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
     _conn = sqlite3.connect(str(path), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")

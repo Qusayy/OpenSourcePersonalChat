@@ -43,6 +43,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
+# What the app writes, the database and its journal among it, only aurora
+# can read. Files that are there already keep the modes they have.
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

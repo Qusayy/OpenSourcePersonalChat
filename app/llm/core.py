@@ -230,7 +230,7 @@ class Engine:
             )
 
     def _connect(self, url: str):
-        return LlamaServer(url)
+        return LlamaServer(url, key=getattr(self.cfg, "llm_key", ""))
 
     def _wait_for_server(self, url: str, keep_waiting: bool) -> None:
         """Wait until the model server answers.

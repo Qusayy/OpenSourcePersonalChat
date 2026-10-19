@@ -1,20 +1,23 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CardStack } from "@/features/cards/CardStack";
 import { ToolCard } from "@/features/cards/ToolCard";
+import { useProject } from "@/features/project/store";
 import { copyText } from "@/lib/clipboard";
 import { cx } from "@/lib/cx";
 import { enter } from "@/lib/frame";
 import { Icon } from "@/lib/icons";
 import { renderAnswer } from "@/lib/markdown";
-import { Button } from "@/shell/Button";
+import { Button, buttonClass } from "@/shell/Button";
 import { toast } from "@/state/shell";
 import { dom, send, streamed, toolLabel } from "./controller";
 import { costFigures, isLongMessage, ledgerRows, type StepRow } from "./rules";
 import {
   type BotItem,
+  type CardPart,
   type NoticeItem,
+  type Part,
   questionBefore,
   removeItem,
+  type ThoughtPart,
   type UserItem,
   useChat,
 } from "./run";
@@ -23,9 +26,10 @@ import {
 
    A question heads its exchange and an answer is set as text; neither is a
    bubble. Everything here is drawn from the store except one thing: the text
-   of an answer, which the streaming renderer writes while it arrives and
-   which is otherwise set once from the stored markdown. React is given that
-   element empty and never looks inside it. */
+   of the part of an answer being written, what the model is saying or
+   thinking, which the controller writes while it arrives and which is
+   otherwise set once from the stored text. React is given that element empty
+   and never looks inside it. */
 
 // An arrival: from just below, out of nothing. Under reduced motion it is
 // simply there.
@@ -106,104 +110,216 @@ const Question = memo(function Question({ item }: { item: UserItem }) {
 
 /* -------------------------------------------------------------- answer -- */
 
+/** A run of parts as the answer sets them: cards that came one after another
+ *  stand together between two hairlines; anything else stands alone. */
+type Block = { kind: "cards"; key: number; cards: CardPart[] } | Exclude<Part, CardPart>;
+
+function blocks(parts: readonly Part[]): Block[] {
+  const out: Block[] = [];
+  for (const part of parts) {
+    if (part.kind !== "card") {
+      out.push(part);
+      continue;
+    }
+    const last = out.at(-1);
+    if (last?.kind === "cards") last.cards.push(part);
+    else out.push({ kind: "cards", key: part.key, cards: [part] });
+  }
+  return out;
+}
+
+/**
+ * An answer reads in the order it was written, as the agent wrote it: what
+ * it thought, folded away; what it said; the result of each call it made,
+ * where it made it; what it said after that. A call under way is drawn
+ * after the last of it, where its result will come. Then, once it has
+ * ended, what nothing it looked up returned, and what it cost.
+ */
 const Answer = memo(function Answer({ item }: { item: BotItem }) {
   return (
     <div data-part="answer" className={cx(ARRIVES, "mt-3")}>
-      <div>
-        {item.steps.length > 0 && <RouteLine steps={item.steps} />}
-        {/* A tool result is set as a figure above the answer it informed. */}
-        {item.cards.length > 0 && (
-          <CardStack data-part="cards">
-            {item.cards.map((entry, i) => (
-              <ToolCard
-                key={entry.key}
-                card={entry.card}
-                data={entry.data}
-                index={i}
-                meta={entry.meta}
-              />
-            ))}
-          </CardStack>
+      <div className="flex flex-col gap-4">
+        {blocks(item.parts).map((block) =>
+          block.kind === "cards" ? (
+            <div key={block.key} data-part="cards" className="border-b border-rule">
+              {block.cards.map((card, i) => (
+                <ToolCard
+                  key={card.key}
+                  card={card.card}
+                  data={card.data}
+                  index={i}
+                  meta={card.meta}
+                />
+              ))}
+            </div>
+          ) : block.kind === "text" ? (
+            <Prose
+              key={block.key}
+              partKey={block.key}
+              live={item.live}
+              content={block.text}
+              fold={block.fold === true}
+            />
+          ) : block.kind === "thought" ? (
+            <Thought key={block.key} part={block} live={item.live} />
+          ) : (
+            <WritingFile key={block.key} path={block.path} />
+          ),
         )}
-        <Prose itemKey={item.key} live={item.live} content={item.content} />
-        {item.correction && <Correction text={item.correction} />}
-        {item.cost && <CostLine item={item} />}
+        {item.steps.length > 0 && <Calls steps={item.steps} />}
       </div>
+      {item.correction && <Correction text={item.correction} />}
+      {item.cost && <CostLine item={item} />}
     </div>
   );
 });
 
-/**
- * The answer's text. While it is being written the streaming renderer owns
- * this element: settled blocks are appended once, the block being written is
- * rebuilt every tenth of a second, and what it leaves when the answer ends is
- * what stays. An element the renderer never wrote to (a stored conversation,
- * or the page come back to) is drawn once from the answer's markdown.
- */
-const Prose = memo(function Prose({
-  itemKey,
-  live,
-  content,
-}: {
-  itemKey: number;
-  live: boolean;
-  content: string;
-}) {
+/** Give the controller the element a written part is set in, for as long as
+ *  it is on the page. */
+function usePartHost(partKey: number) {
   const host = useRef<HTMLDivElement>(null);
-
   useLayoutEffect(() => {
     const el = host.current;
     if (!el) return;
-    dom.prose.set(itemKey, el);
+    dom.parts.set(partKey, el);
     return () => {
-      if (dom.prose.get(itemKey) === el) dom.prose.delete(itemKey);
+      if (dom.parts.get(partKey) === el) dom.parts.delete(partKey);
     };
-  }, [itemKey]);
+  }, [partKey]);
+  return host;
+}
+
+/**
+ * Something the answer said. While it is being written the streaming
+ * renderer owns this element: settled blocks are appended once, the block
+ * being written is rebuilt every tenth of a second, and what it leaves when
+ * the part ends is what stays. An element the renderer never wrote to (a
+ * stored conversation, or the page come back to) is drawn once from the
+ * part's markdown; with `fold`, an answer kept from before files were
+ * written with calls, the files it wrote out are drawn as chips.
+ */
+const Prose = memo(function Prose({
+  partKey,
+  live,
+  content,
+  fold,
+}: {
+  partKey: number;
+  live: boolean;
+  content: string;
+  fold: boolean;
+}) {
+  const host = usePartHost(partKey);
 
   useLayoutEffect(() => {
     const el = host.current;
     if (!el || live || streamed.has(el)) return;
     // The renderer escapes everything it is given before it adds markup.
-    el.innerHTML = renderAnswer(content);
-  }, [live, content]);
+    el.innerHTML = renderAnswer(content, { files: fold });
+  }, [host, live, content, fold]);
 
   return <div className="prose" dir="auto" ref={host} />;
 });
 
-/* ----------------------------------------------------------- the route -- */
+/**
+ * What the model thought before it said anything: folded away under one
+ * quiet line, and there to be read when asked for. Plain text, set by the
+ * controller while it is being thought and from the stored text otherwise.
+ */
+const Thought = memo(function Thought({ part, live }: { part: ThoughtPart; live: boolean }) {
+  const body = usePartHost(part.key);
+
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (!el || live || streamed.has(el)) return;
+    el.textContent = part.text.trim();
+  }, [body, live, part.text]);
+
+  const said =
+    part.ms !== null
+      ? `Thought for ${Math.max(1, Math.round(part.ms / 1000))} s`
+      : live
+        ? "Thinking…"
+        : "Thought";
+  return (
+    <details data-part="thought" className="group text-ink-2">
+      <summary
+        className={cx(
+          buttonClass({ variant: "text", quiet: true, small: true }),
+          "-ml-2 w-fit list-none [&::-webkit-details-marker]:hidden",
+        )}
+      >
+        <span className="inline-flex transition-transform duration-(--dur-1) group-open:rotate-90 motion-reduce:transition-none">
+          <Icon name="arrow" size={12} />
+        </span>
+        {said}
+      </summary>
+      <div
+        ref={body}
+        dir="auto"
+        className="mt-2 pl-4 border-l border-rule text-2 whitespace-pre-wrap [overflow-wrap:anywhere]"
+      />
+    </details>
+  );
+});
 
 /**
- * How the answer was reached, as one line of text: each step, and how long it
- * took. Steps are separated by a hairline, not boxed.
+ * A file the model is writing as it replies. It is a file chip, as the
+ * project draws it, and it says how far the writing has got; when the call
+ * that writes it has been made, the call's own card takes its place.
  */
-function RouteLine({ steps }: { steps: StepRow[] }) {
+function WritingFile({ path }: { path: string }) {
+  const file = useProject((s) => s.files.find((f) => f.path === path));
+  const lines = file?.lines ?? 0;
+  const count = `${lines} line${lines === 1 ? "" : "s"}`;
+  const writing = file?.writing ?? true;
   return (
-    <div data-part="route" className="flex flex-wrap gap-y-1 gap-x-4 mb-3 text-ink-2 text-1">
+    <button
+      type="button"
+      className="file-chip my-0"
+      data-part="file"
+      data-file={path}
+      data-state={writing ? "writing" : "done"}
+    >
+      <span className="file-chip-name">{path}</span>
+      <span className="file-chip-meta num">{writing ? `writing · ${count}` : count}</span>
+    </button>
+  );
+}
+
+/* ------------------------------------------------------ calls under way -- */
+
+/**
+ * The calls being made right now, as one line of text: each tool, in the
+ * live colour, with the word "running". A call goes from here as soon as it
+ * has ended; its card says the rest.
+ */
+function Calls({ steps }: { steps: StepRow[] }) {
+  return (
+    <div data-part="calls" className="flex flex-wrap gap-y-1 gap-x-4 text-ink-2 text-1">
       {steps.map((step) => (
-        <Step key={step.id} step={step} />
+        <Call key={step.id} step={step} />
       ))}
     </div>
   );
 }
 
-function Step({ step }: { step: StepRow }) {
+function Call({ step }: { step: StepRow }) {
   const row = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (row.current) enter(row.current, { distance: 6 });
   }, []);
-  // The step that is running is the live thing in this line.
-  const running = step.status === "running";
   return (
     <div
       ref={row}
       data-id={step.id}
-      data-status={step.status}
+      data-status="running"
       className={cx(
         "inline-flex items-center gap-[0.5em] min-w-0",
         "[&+&]:pl-4 [&+&]:border-l [&+&]:border-rule",
       )}
     >
-      <span className={running ? "text-live" : undefined}>
+      <span className="text-live">
         <Icon name={step.icon} size={14} />
       </span>
       {step.label && (
@@ -212,8 +328,7 @@ function Step({ step }: { step: StepRow }) {
         </span>
       )}
       {/* Said in a word as well as a colour. */}
-      {step.state && <span className="text-live">{step.state}</span>}
-      {step.ms && <span className="num">{step.ms}</span>}
+      <span className="text-live">running</span>
     </div>
   );
 }

@@ -226,8 +226,8 @@
   /* While this visitor's own request is running, the load on the cores is that
    request: it takes the live colour. */
   .status[data-phase="working"] .cpu-bars i::after,
-  .status[data-phase="deciding"] .cpu-bars i::after,
   .status[data-phase="reading"] .cpu-bars i::after,
+  .status[data-phase="thinking"] .cpu-bars i::after,
   .status[data-phase="writing"] .cpu-bars i::after {
     background: var(--live);
   }
@@ -302,24 +302,23 @@
     color: var(--fault);
   }
   .status[data-phase="working"] .dot,
-  .status[data-phase="deciding"] .dot,
   .status[data-phase="reading"] .dot,
+  .status[data-phase="thinking"] .dot,
   .status[data-phase="writing"] .dot,
   .status[data-phase="held"] .dot {
     background: var(--live);
   }
   .status[data-phase="working"] .st-state,
-  .status[data-phase="deciding"] .st-state,
   .status[data-phase="reading"] .st-state,
+  .status[data-phase="thinking"] .st-state,
   .status[data-phase="writing"] .st-state,
   .status[data-phase="held"] .st-state {
     color: var(--live);
   }
 
-  /* Waiting on the machine: the dot breathes. Once tokens arrive it holds still
-   and the figures do the moving. */
+  /* Waiting on the machine: the dot breathes. Once tokens arrive, thought or
+   said, it holds still and the figures do the moving. */
   .status[data-phase="working"] .dot,
-  .status[data-phase="deciding"] .dot,
   .status[data-phase="queued"] .dot,
   .status[data-phase="reading"] .dot,
   .status[data-phase="loading"] .dot {

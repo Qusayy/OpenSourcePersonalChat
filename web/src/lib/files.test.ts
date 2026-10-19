@@ -49,7 +49,7 @@ describe("an answer as the chat shows it", () => {
   });
 
   it("draws a folded file as a chip that names it and opens it", () => {
-    const html = renderAnswer(answer);
+    const html = renderAnswer(answer, { files: true });
     expect(html).toContain(
       '<button type="button" class="file-chip" data-file="app.py" data-state="done">',
     );
@@ -59,7 +59,14 @@ describe("an answer as the chat shows it", () => {
   });
 
   it("escapes a path, whatever it is", () => {
-    const html = renderAnswer(`${FILE_MARK}<b>${FILE_MARK}1${FILE_MARK}done`);
+    const html = renderAnswer(`${FILE_MARK}<b>${FILE_MARK}1${FILE_MARK}done`, { files: true });
     expect(html).not.toContain("<b>");
+  });
+
+  it("folds nothing unless asked: a reply written since shows a file in its text as code", () => {
+    const html = renderAnswer(answer);
+    expect(html).not.toContain("file-chip");
+    expect(html).toContain("x = 1");
+    expect(html).toContain("<p>Run it.</p>");
   });
 });

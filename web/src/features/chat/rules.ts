@@ -1,6 +1,6 @@
 /* The chat page's rules that are not about the DOM: what counts as a long
- * message, what a wait is called, which steps of an answer's route are worth
- * a line. Pure, so each can be tested by value.
+ * message, what a wait is called, which steps of a run are worth a line.
+ * Pure, so each can be tested by value.
  */
 
 import { fmt, fmtInt, fmtMs } from "@/lib/format";
@@ -69,64 +69,32 @@ export function trimmedWording(dropped: number, cut = false): string {
   return said.join(" ");
 }
 
-/* ------------------------------------------------------- the route line -- */
+/* ---------------------------------------------------- calls under way -- */
 
-// How a tool came to be chosen, where that says something. A slash command
-// is not listed: the question above the answer already is one. Only "model"
-// costs a pass through the model; a pattern match is decided before the model
-// is touched.
-const ROUTE_WORDS: Record<string, string> = {
-  heuristic: "Pattern match",
-  model: "Model's choice",
-};
-
-/** One step of an answer's route, as the line draws it. */
+/** A call under way, as the line under the reply draws it. */
 export interface StepRow {
   id: string;
-  status: "running" | "ok" | "failed";
   /** An icon name the set is known to have. */
   icon: string;
   label: string;
-  /** Said in a word as well as a colour; empty once the step is over. */
-  state: string;
-  ms: string;
 }
 
 /**
- * Apply one `step` event to the route line.
+ * Apply one `step` event to the calls an answer is making.
  *
- * The line carries only what is said nowhere else. The answer step is the
- * status line's job while it runs and the footer's once it has. A finished
- * tool is named, timed and qualified by its own figure below. So a step is
- * drawn here while it is running, and afterwards only if it was a routing
- * decision worth knowing about.
+ * The line carries only what is said nowhere else. A reply of the model is
+ * the status line's job while it runs and the footer's once it has. A
+ * finished call is named, timed and qualified by its own figure. So a call
+ * is drawn while it runs, and goes as soon as it has ended, however it
+ * ended. Nothing else is drawn: there is no step that decides anything.
  */
 export function applyStep(rows: readonly StepRow[], data: StepEvent): StepRow[] {
-  if (data.kind === "model") return rows as StepRow[];
-  const status = data.status || "running";
-  // A step the run was stopped in the middle of decided nothing and found
-  // nothing: there is nothing about it left to say.
-  if (status === "stopped") return rows.filter((row) => row.id !== data.id);
-  const over = status !== "running";
-  // A command and a greeting decided nothing worth showing: the visitor knows
-  // what they asked for.
-  const said = data.kind === "route" && (data.detail === "slash" || data.detail === "chat");
-  if (over && (data.kind === "tool" || said)) {
-    return rows.filter((row) => row.id !== data.id);
-  }
-  let icon = data.tool && hasIcon(data.tool) ? data.tool : "tool";
-  let label = data.label || "";
-  if (data.kind === "route") {
-    icon = "route";
-    if (data.tool && data.detail && ROUTE_WORDS[data.detail]) label = ROUTE_WORDS[data.detail];
-  }
+  if (data.kind !== "tool") return rows as StepRow[];
+  if ((data.status || "running") !== "running") return rows.filter((row) => row.id !== data.id);
   const row: StepRow = {
     id: data.id,
-    status,
-    icon,
-    label,
-    state: over ? "" : "running",
-    ms: data.ms ? fmtMs(data.ms) : "",
+    icon: data.tool && hasIcon(data.tool) ? data.tool : "tool",
+    label: data.label || "",
   };
   return rows.some((r) => r.id === data.id)
     ? rows.map((r) => (r.id === data.id ? row : r))
@@ -147,23 +115,25 @@ export interface LedgerRow {
   failed: boolean;
 }
 
-// What each kind of step is called. A choice made without the model is
-// named by how it was made.
+// What each kind of step is called. A reply that called a tool "chose" it;
+// the last reply is the answer. The rest are the words of runs kept before
+// the model simply replied, where a choice made without the model is named
+// by how it was made.
 const CHOSEN_BY: Record<string, string> = {
   slash: "command",
   heuristic: "pattern",
   chat: "small talk",
-  // Kept for answers stored while a visitor could arm a skill themselves.
   skill: "skill",
 };
 const KIND_WORDS: Record<string, string> = {
+  call: "chose",
+  tool: "tool",
+  answer: "answer",
   route: "choice",
   decide: "choice again",
   repair: "sent back",
   compose: "wrote code",
   fill: "filled in",
-  tool: "tool",
-  answer: "answer",
 };
 
 function tokensOf(step: LedgerStep): string {
@@ -182,7 +152,7 @@ function tokensOf(step: LedgerStep): string {
 
 /**
  * A run's ledger as the rows "How it ran" lists, in order, and the line that
- * splits its time. `label` names a tool or skill in the page's words.
+ * splits its time. `label` names a tool in the page's words.
  */
 export function ledgerRows(
   run: StoredRun,

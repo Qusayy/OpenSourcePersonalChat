@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 
+from ..chatml import split_thought
 from ..ledger import ledger
 from . import db, notes, projects
 
@@ -77,13 +78,48 @@ def get(cid: str) -> dict | None:
             orphans.append(call)
     for message in convo["messages"]:
         message["tool_calls"] = by_message.get(message["id"], [])
-    # And each answer's run, as it was kept, for as long as its steps are.
+    # And each answer's run, as it was kept, for as long as its steps are,
+    # and the order it was said in: words, cards and thoughts as they came.
     runs = _runs_by_message(cid)
+    _, records = record(cid)
+    sent = {r["answer_id"]: r["parts"] for r in records if r.get("answer_id")}
     for message in convo["messages"]:
         if message["role"] == "assistant":
             message["run"] = runs.get(message["id"])
+            message["segments"] = segments(
+                sent.get(message["id"]), len(message["tool_calls"]), message["content"],
+            )
     convo["orphan_tool_calls"] = orphans
     return convo
+
+
+def segments(parts: list[dict] | None, calls: int, content: str = "") -> list[dict] | None:
+    """An answer as it was said, in order: what the model thought, what it
+    said, and where each of its calls came (by its place among the answer's
+    tool calls). None for an answer kept before replies were kept this way,
+    or one whose calls cannot be matched to what it said: a page then shows
+    it as it always did. Where the model said nothing at all, the answer it
+    was kept as (``content``) is said last, so the page shows it."""
+    if not parts or not any(p.get("kind") in ("call", "answer") for p in parts):
+        return None
+    out: list[dict] = []
+    made = 0
+    for part in parts:
+        if part.get("role") != "assistant" or part.get("kind") not in ("call", "answer"):
+            continue
+        thought, said = split_thought(part.get("content") or "")
+        if part["kind"] == "call":
+            said = said.split("<tool_call>", 1)[0]
+        if thought:
+            out.append({"kind": "thought", "text": thought})
+        if said.strip():
+            out.append({"kind": "text", "text": said.strip()})
+        if part["kind"] == "call":
+            out.append({"kind": "card", "call": made})
+            made += 1
+    if content.strip() and not any(seg["kind"] == "text" for seg in out):
+        out.append({"kind": "text", "text": content.strip()})
+    return out if made == calls else None
 
 
 def head(cid: str) -> dict | None:

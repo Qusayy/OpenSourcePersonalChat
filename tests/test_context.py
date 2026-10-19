@@ -266,8 +266,9 @@ class FitTests(unittest.TestCase):
 
 class RunRoomTests(unittest.TestCase):
     def test_a_larger_window_gives_a_run_more_room_up_to_a_ceiling(self) -> None:
-        self.assertEqual(run_room(4096), RUN_ROOM)
-        self.assertEqual(run_room(8192), 1024)
+        self.assertEqual(run_room(2048), RUN_ROOM)
+        self.assertEqual(run_room(4096), 1024)
+        self.assertEqual(run_room(8192), 2048)
         self.assertEqual(run_room(16384), RUN_ROOM_MOST)
         self.assertEqual(run_room(1024), RUN_ROOM)
 

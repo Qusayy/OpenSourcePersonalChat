@@ -27,12 +27,14 @@ class Step:
     is the tool's own time. A choice made without the model costs nothing.
     """
 
-    kind: str  # route | fill | decide | repair | tool | answer
+    # call (a reply that ended in a call) | answer | tool; route, decide,
+    # repair and fill in runs kept before the model called tools itself.
+    kind: str
     # Whether this step was a pass through the model.
     model: bool = False
-    # The tool or skill, where there is one.
+    # The tool, where there is one.
     name: str | None = None
-    # How it came to be chosen: slash | heuristic | skill | model.
+    # How it came to be made: slash | model.
     via: str | None = None
     input: dict | None = None
     output: str | None = None
@@ -60,24 +62,22 @@ class Trace:
 
     # The run's name: what it is stopped by, and what its steps are filed under.
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    # How the answer was written: "answer", or "files" where the model chose
-    # to write a project.
-    style: str = "answer"
     # Everything the run did, in order.
     steps: list[Step] = field(default_factory=list)
     # Every tool call that finished, in order, with what it returned.
     calls: list[tuple[ToolCall, ToolResult]] = field(default_factory=list)
-    # The answer's text once the writing pass has ended; None until then. An
-    # answer that was stopped before its first word is "", not None.
+    # What the model said to the reader, every reply of it, once the run has
+    # answered; None until then. An answer that was stopped before its first
+    # word is "", not None.
     answer: str | None = None
-    # That pass's own figures: what `done` carries.
+    # The last reply's own figures: what `done` carries.
     usage: dict = field(default_factory=dict)
-    # The prompt that pass was given, as it was sent: after the tool results
-    # were folded in and after any trimming. None if no answer was begun.
+    # The prompt the last reply was given, as it was sent. None if no reply
+    # was begun.
     prompt: list[dict] | None = None
     # What this run sent, from the message to the answer, and the system text
     # it was sent under, by its key: what the next message is read with. Set
-    # once the run has answered, or asked.
+    # once the run has answered.
     sent: list[Part] | None = None
     system_key: str | None = None
     # Whether the answer was checked against what was looked up, and what
@@ -86,21 +86,16 @@ class Trace:
     checked: bool = False
     unsupported: list[str] = field(default_factory=list)
     correction: str | None = None
-    # How it ended: answered | asked | stopped | failed. None while it is
-    # running. "asked" is a question put to the user in place of an answer.
+    # How it ended: answered | stopped | failed. None while it is running.
     outcome: str | None = None
     # The run's own stopwatch, first stage to last. It is a little more than
     # the steps add up to: the difference is the time between them.
     wall_ms: float | None = None
-    # Every file the answer wrote out whole, in order: its path, language and
-    # content, and the ``close`` event the page is told of it, which whoever
-    # keeps the file completes with the version it was kept as.
-    files: list[dict] = field(default_factory=list)
 
     def turn(self, question: str, at: float | None = None) -> Turn:
         """This run as the next message is read with it: what it sent, where
-        it answered or asked, and otherwise only the message and the answer."""
-        kept = self.sent if self.outcome in ("answered", "asked") else None
+        it answered, and otherwise only the message and the answer."""
+        kept = self.sent if self.outcome == "answered" else None
         return Turn(
             question, self.answer or "", parts=tuple(kept or ()), system_key=self.system_key,
             at=time.time() if at is None else at,

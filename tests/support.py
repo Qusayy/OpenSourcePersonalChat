@@ -28,18 +28,15 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from app import main
+from app.agent.calls import render_call
 from app.api import deps
+from app.chatml import THINK_CLOSE
 from app.config import settings
-from app.llm import Completion, Engine
+from app.llm import Engine, Stops
+from app.llm.server import Reading
 from app.store import conversations, db
 from app.tools import base as tool_base
 from app.tools.base import ToolResult
-
-# What a played routing pass reports as its time. Fixed, so a test can tell the
-# figure on the page came from the pass and not from somewhere else.
-ROUTE_MS = 12.5
-# And as the number of tokens it wrote.
-ROUTE_TOKENS = 7
 
 
 # ------------------------------------------------------------- the stream ---
@@ -130,14 +127,20 @@ async def until(done, timeout: float = 5.0) -> None:
 class PlayedEngine(Engine):
     """A real Engine whose model is a script.
 
-    The lock, the queue, the worker thread and the cancel flag are the engine's
-    own for the answer. Choosing a tool is answered directly, with a fixed
-    time, so a test can tell which figure on the page came from that pass. What
-    each was asked is kept, so a test can read the exact prompt a pass was
-    given.
+    The lock, the queue, the worker thread and the cancel flag are the
+    engine's own. Only the text is played: each request is answered from its
+    prompt. The model makes ``decision`` once, as its first reply to a
+    message, and answers with ``answer`` once it has read what came of it, or
+    at once where there is no decision. What each request was given is kept,
+    so a test can read the exact prompt a reply read.
 
-    For a routing pass that really goes through the slot, use
-    ``evals.scripted.ScriptedEngine``.
+    ``decision`` is a call: a dict ``{"tool": name, "args": {...}}`` (written
+    in the model's own format), or the raw text of a reply, for replies that
+    are not a well-formed call. None, or ``{"tool": "none"}``, is no call.
+
+    It stops at the strings a request is given, as a model server does, and
+    where the model thinks it has thought nothing. For a script of several
+    different replies use ``evals.scripted.ScriptedEngine``.
     """
 
     def __init__(
@@ -146,49 +149,66 @@ class PlayedEngine(Engine):
         decision: dict | str | None = None,
         *,
         ready: bool = True,
+        cfg=None,
     ) -> None:
-        super().__init__(settings.model_copy(update={"mock": True, "mock_delay": 0.0}))
+        super().__init__(cfg or settings.model_copy(update={"mock": True, "mock_delay": 0.0}))
         if ready:
             self.state.status = "ready"
         self.answer = answer
-        # A dict is what the model chose. A string is its raw reply, for the
-        # replies that are not JSON at all. None is "no tool". It is what the
-        # model says whenever it is asked to choose, except straight after
-        # reading a result: it looks one thing up, then says "no tool".
         self.decision = decision
-        self.answer_prompts: list[list[dict]] = []
+        # Every request: its messages, the part of the reply it went on from,
+        # its sampling and the strings it stopped at.
+        self.prompts: list[list[dict]] = []
+        self.prefixes: list[str] = []
         self.samplings: list[dict] = []
-        self.route_prompts: list[list[dict]] = []
-        self.grammars: list[str] = []
-        self.route_limits: list[int | None] = []
+        self.stops: list[list[str] | None] = []
 
-    def _iter_chunks(self, messages: list[dict], sampling: dict, *args, **kwargs) -> Iterator[str]:
-        self.answer_prompts.append([dict(m) for m in messages])
+    @property
+    def call(self) -> str | None:
+        """The call the model makes, as it writes it."""
+        decision = self.decision
+        if decision is None or (isinstance(decision, dict) and decision.get("tool") in (None, "none")):
+            return None
+        if isinstance(decision, str):
+            return decision
+        return render_call(decision["tool"], decision.get("args") or {})
+
+    @property
+    def answer_prompts(self) -> list[list[dict]]:
+        """The prompts of the replies that answered: those that began after
+        what came of the call, or with no call to make."""
+        return [m for m, prefix in zip(self.prompts, self.prefixes) if self._answers(m) and not prefix]
+
+    def _answers(self, messages: list[dict]) -> bool:
+        last = messages[-1]["content"] if messages else ""
+        return self.call is None or last.startswith("<tool_response>") or "\n\n<tool_response>" in last
+
+    def _iter_chunks(
+        self, messages: list[dict], sampling: dict, *, prefix: str = "", seed=None,
+        stop: list[str] | None = None, reading: Reading | None = None,
+    ) -> Iterator[str]:
+        reading = reading if reading is not None else Reading()
+        self.prompts.append([dict(m) for m in messages])
+        self.prefixes.append(prefix)
         self.samplings.append(dict(sampling))
-        if not self.answer:
-            return
-        for i, word in enumerate(self.answer.split(" ")):
-            yield ("" if i == 0 else " ") + word
-
-    async def complete_json(self, messages, grammar_text, max_tokens=None, **kwargs) -> Completion:
-        if not self.ready:
-            return Completion(error="The model is still loading.")
-        self.route_prompts.append([dict(m) for m in messages])
-        self.grammars.append(grammar_text)
-        self.route_limits.append(max_tokens)
-        decision = {"tool": "none"} if self.decision is None else self.decision
-        if messages[-1]["content"].startswith("<data"):
-            decision = {"tool": "none"}
-        raw = decision if isinstance(decision, str) else json.dumps(decision)
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = None
-        return Completion(
-            parsed=parsed, raw=raw, ms=ROUTE_MS,
-            prompt_tokens=self.prompt_tokens(messages), completion_tokens=ROUTE_TOKENS,
-            queue_wait_ms=0.0, ttft_ms=ROUTE_MS, total_ms=ROUTE_MS,
-        )
+        self.stops.append(list(stop) if stop else None)
+        said = self.answer if self._answers(messages) else self.call
+        if getattr(self.cfg, "think_mode", "none") == "on":
+            said = THINK_CLOSE + "\n\n" + said
+        rest = said[len(prefix):] if said.startswith(prefix) else said
+        stops = Stops(stop)
+        pieces = [("" if i == 0 else " ") + word for i, word in enumerate(rest.split(" "))] if rest else []
+        for piece in pieces:
+            out = stops.feed(piece)
+            if out:
+                yield out
+            if stops.word is not None:
+                reading.finish, reading.word = "word", stops.word
+                return
+        tail = stops.flush()
+        if tail:
+            yield tail
+        reading.finish = "eos"
 
 
 # ------------------------------------------------------- the surroundings ---

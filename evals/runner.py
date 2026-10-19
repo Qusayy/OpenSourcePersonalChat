@@ -33,10 +33,11 @@ from app import agent
 from app.agent.context import Turn as Sent
 from app.config import settings
 from app.llm import Engine
-from app.store import db
+from app.agent.transcript import NO_MORE_CALLS
+from app.store import db, projects
 
 from . import fixtures
-from .score import route_match, score, skill_match
+from .score import NO_TOOL, route_match, score
 from .scripted import ScriptedEngine
 from .tasks import Task, Turn
 from .wording import Wording, applied
@@ -111,15 +112,19 @@ async def run_task(
 ) -> Outcome:
     """Play one task's messages through a run each, then score the last.
 
-    ``loop`` is whether a tool the model chose earns it another choice, for a
+    ``loop`` is whether the model may call one tool after another, for a
     task that does not ask for the loop itself; left unset, the setting
-    decides, as on the site.
+    decides, as on the site. A task is a conversation of its own, and its
+    project is that conversation's: files a turn writes are there for the
+    next, and the model is told of them as the site tells it.
     """
     began = time.perf_counter()
     history: list[dict] = []
     sent: list[Sent] = []
     turns: list[Turn] = []
     with fixtures.recorded(task.tools):
+        scope = f"task:{task.id}"
+        projects.forget(scope)
         for text in task.turns:
             trace = agent.Trace()
             events = [
@@ -128,7 +133,7 @@ async def run_task(
                     text, history=list(history),
                     trace=trace, engine=engine, tools_enabled=True, seed=seed,
                     loop=True if task.loop else loop, context=list(sent),
-                    scope=f"task:{task.id}",
+                    scope=scope, project=projects.manifest(scope),
                 )
             ]
             turns.append(Turn(user=text, events=events, trace=trace))
@@ -174,8 +179,8 @@ async def run_suite(
         raise ValueError("a real run needs a loaded engine")
     wanted = set(categories) if categories else None
 
-    # What a task keeps (a note) goes to a file that lasts for this run, never
-    # to the site's own database.
+    # What a task keeps (a note, a project file) goes to a file that lasts
+    # for this run, never to the site's own database.
     with applied(wording), tempfile.TemporaryDirectory() as scratch, \
             db.elsewhere(Path(scratch) / "evals.db"):
         outcomes: list[Outcome] = []
@@ -248,15 +253,16 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
     ran = [o for o in outcomes if o.status != SKIPPED]
     counted = [o for o in ran if not o.task.pending]
     routed = [route_match(o.task, o.turns[-1]) for o in ran]
-    skills = [hit for o in ran if (hit := skill_match(o.task, o.turns[-1])) is not None]
     tools_right = [tool for tool, _ in routed if tool is not None]
     args_right = [args for _, args in routed if args is not None]
-    decisions = [s for o in ran for t in o.turns for s in t.trace.steps
-                 if s.kind == "route" and s.model]
-    repairs = [s for o in ran for t in o.turns for s in t.trace.steps if s.kind == "repair"]
-    # How each run's looking-up ended, read off the last line its answer pass
-    # was given.
-    cues = [(o.last.prompt or [{"content": ""}])[-1]["content"] for o in ran]
+    # The calls the model wrote, and those that named no tool there is or
+    # could not be read.
+    written = [s for o in ran for t in o.turns for s in t.trace.steps
+               if s.kind == "tool" and s.via == "model"]
+    unreadable = [s for s in written if s.error in NO_TOOL]
+    repeated = [s for s in written if s.error == "repeated"]
+    # What the last reply of each run read: whether a limit ended its calls.
+    read = ["\n".join(m["content"] for m in (o.last.prompt or [])) for o in ran]
     # The answers that were held against what was looked up for them.
     checked = [o.last for o in ran if o.last is not None and o.last.checked]
     rows = [o.row(timed) for o in ran]
@@ -272,23 +278,15 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         # Over the tasks that are meant to pass.
         "task_success": _share(sum(o.status == PASSED for o in counted), len(counted)),
         "routing_accuracy": _share(sum(tools_right), len(tools_right)),
-        # Over the tasks that say which skill, if any, should have run.
-        "skill_selection": _share(sum(skills), len(skills)),
         "argument_match": _share(sum(args_right), len(args_right)),
-        # Decisions that did not come back as a complete JSON object. Under a
-        # grammar this can only be a reply that ran out of tokens.
-        "invalid_output_rate": _share(
-            sum(s.error == "the reply was not a complete JSON object" for s in decisions),
-            len(decisions),
-        ),
-        # Decisions whose call could not be made and was sent back once.
-        "repair_rate": _share(len(repairs), len(decisions)),
+        # Calls the model wrote that named no tool or could not be read.
+        "invalid_call_rate": _share(len(unreadable), len(written)),
+        # Calls it wrote that it had already made in the same message.
+        "repeat_rate": _share(len(repeated), len(written)),
         # Runs that made a second tool call: what the loop is for.
         "second_step_rate": _share(sum(r["steps"] >= 2 for r in rows), len(rows)),
-        # Runs whose looking-up was ended by a limit, and by the model asking
-        # for a lookup it had already made.
-        "limit_rate": _share(sum(agent.OUT_OF_LOOKUPS in cue for cue in cues), len(cues)),
-        "repeat_rate": _share(sum(agent.ALREADY_LOOKED_UP in cue for cue in cues), len(cues)),
+        # Runs whose calls were ended by a limit.
+        "limit_rate": _share(sum(NO_MORE_CALLS in text for text in read), len(read)),
         # Of the answers checked against their lookups: those with a figure
         # nothing returned, and those that drew any correction at all.
         "unsupported_rate": _share(sum(bool(t.unsupported) for t in checked), len(checked)),

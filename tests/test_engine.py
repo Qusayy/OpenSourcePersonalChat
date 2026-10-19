@@ -7,6 +7,9 @@ flag are the code the server runs.
 
 Nothing here sleeps to let something happen. A test waits for the thing itself:
 a pass reaching the model, a request joining the queue, the engine settling.
+
+Further down: how a pass ends (at a stop string, at its limit, or where the
+model ends it), and what each place the model can live in is asked for.
 """
 
 from __future__ import annotations
@@ -17,7 +20,8 @@ from unittest import mock
 
 try:
     from app.config import settings
-    from app.llm import Engine
+    from app.llm import Engine, Stops
+    from app.llm.mock import MOCK_THOUGHT, MOCK_VOCAB
     from app.llm.server import Reading, ServerError
     from evals.scripted import ScriptedEngine
     from tests.support import collect, until
@@ -30,6 +34,12 @@ MESSAGES = [
 ]
 SAMPLING = {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.05, "max_tokens": 64}
 EIGHT = "one two three four five six seven eight"
+# MESSAGES as the model reads them, up to where the answer begins.
+HEAD = (
+    "<|im_start|>system\nAnswer briefly.<|im_end|>\n"
+    "<|im_start|>user\nCount to eight.<|im_end|>\n"
+    "<|im_start|>assistant\n"
+)
 
 
 def names(stream: list) -> list[str]:
@@ -41,6 +51,20 @@ def names(stream: list) -> list[str]:
             continue
         out.append(name)
     return out
+
+
+async def answer(engine, *args, **options) -> dict:
+    """One pass through ``stream_chat``, read to its end: what ``done`` said."""
+    stream = await collect(engine.stream_chat(*args, **options))
+    name, payload = stream[-1]
+    if name != "done":
+        raise AssertionError(f"the pass ended in {name}: {payload}")
+    return payload
+
+
+def thinking(mode: str, **update):
+    """The settings of a model that thinks the way ``mode`` says, in mock mode."""
+    return settings.model_copy(update={"mock": True, "mock_delay": 0.0, "thinking": mode, **update})
 
 
 class EngineCase(unittest.IsolatedAsyncioTestCase):
@@ -66,12 +90,15 @@ class OnePassTests(EngineCase):
         self.assertEqual(
             set(done),
             {"text", "cancelled", "ttft_ms", "queue_wait_ms", "prompt_tokens", "read_tokens",
-             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb"},
+             "cached_tokens", "completion_tokens", "prefill_tps", "gen_tps", "total_ms", "rss_mb",
+             "finish", "word"},
         )
         self.assertEqual(done["text"], EIGHT)
         self.assertIs(done["cancelled"], False)
         self.assertEqual(done["completion_tokens"], 8)
         self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
+        # The model ended it, at no stop string.
+        self.assertEqual((done["finish"], done["word"]), ("eos", None))
 
     async def test_the_slot_is_free_the_moment_the_stream_ends(self) -> None:
         engine = self.scripted(EIGHT, EIGHT)
@@ -79,18 +106,30 @@ class OnePassTests(EngineCase):
         # Checked without giving the loop another turn: the last event must not
         # arrive before the slot has been handed back.
         self.assertTrue(engine.free)
+        self.assertIs(engine.info()["busy"], False)
         self.assertEqual(engine.info()["completed"], 1)
 
-    async def test_the_pass_is_given_its_grammar_seed_and_stop_words(self) -> None:
-        engine = self.scripted('{"tool": "none"}')
-        await collect(engine.stream_chat(
-            MESSAGES, {"temperature": 0.0, "top_k": 1, "max_tokens": 96},
-            grammar='root ::= "x"', seed=7, stop=["\n"],
-        ))
+    async def test_the_pass_is_given_its_prefix_seed_and_stop_words(self) -> None:
+        engine = self.scripted("three four")
+        done = await answer(
+            engine, MESSAGES, {"temperature": 0.0, "top_k": 1, "max_tokens": 96},
+            prefix="one two ", seed=7, stop=["\n"],
+        )
         said = engine.passes[0]
         self.assertEqual(said.messages, MESSAGES)
         self.assertEqual(said.sampling, {"temperature": 0.0, "top_k": 1, "max_tokens": 96})
-        self.assertEqual((said.grammar, said.seed, said.stop), ('root ::= "x"', 7, ["\n"]))
+        self.assertEqual((said.prefix, said.seed, said.stop), ("one two ", 7, ["\n"]))
+        self.assertIs(said.continued, False)
+        # What is already written is part of the prompt, and is counted as such.
+        self.assertEqual(said.prompt, engine.render(MESSAGES, "one two "))
+        self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES, "one two "))
+        self.assertGreater(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
+
+    async def test_a_pass_given_no_prefix_seed_or_stop_words_asks_for_none(self) -> None:
+        engine = self.scripted(EIGHT)
+        await answer(engine, MESSAGES, SAMPLING)
+        said = engine.passes[0]
+        self.assertEqual((said.prefix, said.seed, said.stop), ("", None, None))
 
     async def test_a_model_that_raises_ends_the_stream_in_an_error_and_frees_the_slot(self) -> None:
         engine = self.scripted(ValueError("boom"))
@@ -275,6 +314,7 @@ class StopTests(EngineCase):
         done = stream[-1]
         self.assertEqual(done[0], "done")
         self.assertIs(done[1]["cancelled"], True)
+        self.assertEqual(done[1]["finish"], "cancelled")
         self.assertLess(done[1]["completion_tokens"], 8)
         self.assertTrue(engine.free)
 
@@ -311,6 +351,102 @@ class StopTests(EngineCase):
         self.assertTrue(engine.free)
 
 
+class EndingTests(EngineCase):
+    """How a pass ends, and how ``done`` says so. A reply can be written in
+    more than one pass: one ends at a stop string, and the next goes on from
+    what was written."""
+
+    async def test_a_pass_ends_at_a_stop_string_and_says_which(self) -> None:
+        engine = self.scripted("one two STOP three four")
+        done = await answer(engine, MESSAGES, SAMPLING, stop=["STOP"])
+        # The string itself is not passed on, nor anything after it.
+        self.assertEqual(done["text"], "one two ")
+        self.assertEqual((done["finish"], done["word"]), ("word", "STOP"))
+        self.assertEqual(done["completion_tokens"], 2)
+        self.assertTrue(engine.free)
+
+    async def test_the_next_pass_goes_on_from_the_stop_with_what_was_written_as_its_prefix(self) -> None:
+        engine = self.scripted("one two STOP three four", EIGHT)
+        first = await answer(engine, MESSAGES, SAMPLING, stop=["STOP"])
+        second = await answer(engine, MESSAGES, SAMPLING, prefix=first["text"] + "STOP")
+        self.assertEqual(second["text"], " three four")
+        self.assertEqual((second["finish"], second["word"]), ("eos", None))
+        went_on = engine.passes[1]
+        self.assertIs(went_on.continued, True)
+        self.assertEqual(went_on.prefix, "one two STOP")
+        self.assertEqual(engine.used, 1, "one message of the model, written in two requests")
+        # And the one after that is the model's next message.
+        self.assertEqual((await answer(engine, MESSAGES, SAMPLING))["text"], EIGHT)
+        self.assertIs(engine.passes[2].continued, False)
+
+    async def test_the_earliest_of_several_stop_strings_is_the_one_that_ends_it(self) -> None:
+        engine = self.scripted("a b <x> c </y> d")
+        done = await answer(engine, MESSAGES, SAMPLING, stop=["</y>", "<x>"])
+        self.assertEqual((done["text"], done["word"]), ("a b ", "<x>"))
+
+    async def test_a_stop_string_at_the_very_end_leaves_nothing_to_go_on_with(self) -> None:
+        engine = self.scripted("Done.</tool_call>", EIGHT)
+        done = await answer(engine, MESSAGES, SAMPLING, stop=["</tool_call>"])
+        self.assertEqual((done["text"], done["finish"], done["word"]), ("Done.", "word", "</tool_call>"))
+        self.assertEqual((await answer(engine, MESSAGES, SAMPLING))["text"], EIGHT)
+        self.assertIs(engine.passes[1].continued, False)
+
+    async def test_a_pass_given_stop_strings_it_never_meets_ends_where_the_model_does(self) -> None:
+        engine = self.scripted(EIGHT)
+        done = await answer(engine, MESSAGES, SAMPLING, stop=["STOP", "</tool_call>"])
+        self.assertEqual((done["text"], done["finish"], done["word"]), (EIGHT, "eos", None))
+
+    async def test_a_pass_cut_off_at_its_token_limit_says_so_and_its_rest_is_gone(self) -> None:
+        engine = self.scripted(EIGHT, "nine ten")
+        done = await answer(engine, MESSAGES, {**SAMPLING, "max_tokens": 3})
+        self.assertEqual(done["text"], "one two three ")
+        self.assertEqual((done["finish"], done["word"]), ("limit", None))
+        self.assertEqual(done["completion_tokens"], 3)
+        # A reply cut off is not picked up again: the next pass is the next message.
+        self.assertEqual((await answer(engine, MESSAGES, SAMPLING))["text"], "nine ten")
+
+    async def test_a_limit_that_falls_before_a_stop_string_wins(self) -> None:
+        engine = self.scripted("one two three STOP four", "nine ten")
+        done = await answer(engine, MESSAGES, {**SAMPLING, "max_tokens": 2}, stop=["STOP"])
+        self.assertEqual((done["text"], done["finish"], done["word"]), ("one two ", "limit", None))
+        self.assertEqual((await answer(engine, MESSAGES, SAMPLING))["text"], "nine ten")
+
+
+class ThinkingScriptTests(EngineCase):
+    """Where the model thinks, its answer begins inside a thinking block. A
+    script entry that has no thinking of its own thought nothing."""
+
+    async def test_an_entry_without_thinking_closes_an_empty_block_first(self) -> None:
+        engine = self.scripted("Hello.", cfg=thinking("on"))
+        done = await answer(engine, MESSAGES, SAMPLING)
+        self.assertEqual(done["text"], "</think>\n\nHello.")
+        self.assertEqual(engine.passes[0].output, "</think>\n\nHello.")
+
+    async def test_an_entry_that_thinks_is_said_as_it_is(self) -> None:
+        engine = self.scripted("Counting.\n</think>\n\nOne.", cfg=thinking("on"))
+        done = await answer(engine, MESSAGES, SAMPLING)
+        self.assertEqual(done["text"], "Counting.\n</think>\n\nOne.")
+
+    async def test_a_reply_that_goes_on_from_a_prefix_is_not_given_a_block(self) -> None:
+        engine = self.scripted("written.", cfg=thinking("on"))
+        done = await answer(engine, MESSAGES, SAMPLING, prefix="Partly ")
+        self.assertEqual(done["text"], "written.")
+
+    async def test_the_thought_ends_at_its_stop_and_the_answer_goes_on_after_it(self) -> None:
+        engine = self.scripted("Counting.\n</think>\n\nOne.", cfg=thinking("on"))
+        thought = await answer(engine, MESSAGES, SAMPLING, stop=["</think>"])
+        self.assertEqual((thought["text"], thought["word"]), ("Counting.\n", "</think>"))
+        said = await answer(engine, MESSAGES, SAMPLING, prefix=thought["text"] + "</think>")
+        self.assertEqual(said["text"], "\n\nOne.")
+        self.assertIs(engine.passes[1].continued, True)
+
+    async def test_where_the_model_does_not_think_an_entry_is_said_as_it_is(self) -> None:
+        for mode in ("off", "none"):
+            with self.subTest(thinking=mode):
+                engine = self.scripted("Hello.", cfg=thinking(mode))
+                self.assertEqual((await answer(engine, MESSAGES, SAMPLING))["text"], "Hello.")
+
+
 class HoldTests(EngineCase):
     """A run is several passes with other work in between. Its id is held open
     around all of it, so Stop finds the run and not just whichever pass is on."""
@@ -326,9 +462,10 @@ class HoldTests(EngineCase):
         self.assertEqual(engine._cancels, {})
 
     async def test_a_pass_that_ends_leaves_the_run_held_and_unstopped(self) -> None:
-        engine = self.scripted(NONE, EIGHT)
+        engine = self.scripted("nine ten", EIGHT)
         with engine.hold("run") as stop:
-            await engine.complete_json(MESSAGES, GRAMMAR, request_id="run")
+            first = await answer(engine, MESSAGES, SAMPLING, request_id="run")
+            self.assertEqual(first["finish"], "eos")
             # One pass ending is not somebody pressing Stop.
             self.assertIs(stop.is_set(), False)
             self.assertIn("run", engine._cancels)
@@ -336,10 +473,20 @@ class HoldTests(EngineCase):
             self.assertIs(stream[-1][1]["cancelled"], False)
             self.assertEqual(stream[-1][1]["text"], EIGHT)
 
+    async def test_a_pass_that_ends_at_a_stop_string_is_not_a_stop_either(self) -> None:
+        engine = self.scripted("one two STOP three four")
+        with engine.hold("run") as stop:
+            first = await answer(engine, MESSAGES, SAMPLING, request_id="run", stop=["STOP"])
+            self.assertEqual(first["finish"], "word")
+            self.assertIs(first["cancelled"], False)
+            self.assertIs(stop.is_set(), False)
+            second = await answer(engine, MESSAGES, SAMPLING, request_id="run", prefix="one two STOP")
+            self.assertEqual(second["text"], " three four")
+
     async def test_a_run_stopped_between_passes_starts_no_other(self) -> None:
-        engine = self.scripted(NONE, EIGHT)
+        engine = self.scripted("nine ten", EIGHT)
         with engine.hold("run"):
-            await engine.complete_json(MESSAGES, GRAMMAR, request_id="run")
+            await answer(engine, MESSAGES, SAMPLING, request_id="run")
             engine.cancel("run")
             stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, request_id="run"))
         self.assertEqual(names(stream), ["done"])
@@ -372,155 +519,140 @@ class HoldTests(EngineCase):
         self.assertEqual(engine._cancels, {})
 
 
-GRAMMAR = 'root ::= "{\\"tool\\": \\"none\\"}"'
-NONE = '{"tool": "none"}'
-WEATHER = '{"tool": "weather", "args": {"location": "Paris"}}'
-
-
-class RoutingPassTests(EngineCase):
-    """The short pass that chooses a tool. It is a pass like any other: it
-    queues, it runs on a worker thread, and the thread hands the slot back."""
-
-    async def test_a_routing_pass_returns_what_was_said_parsed_with_what_it_cost(self) -> None:
-        engine = self.scripted(WEATHER)
-        said = await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertEqual(said.parsed, {"tool": "weather", "args": {"location": "Paris"}})
-        self.assertEqual(said.raw, WEATHER)
-        self.assertIsNone(said.error)
-        self.assertIs(said.cancelled, False)
-        self.assertEqual(said.prompt_tokens, engine.prompt_tokens(MESSAGES))
-        self.assertEqual(said.completion_tokens, len(engine.passes[0].pieces))
-        self.assertIsNotNone(said.ttft_ms)
-        # The whole call is never shorter than the part spent inside the slot.
-        self.assertGreaterEqual(said.ms, said.total_ms)
-
-    async def test_it_is_asked_greedily_under_its_grammar_within_the_routing_limit(self) -> None:
-        engine = self.scripted(NONE, NONE)
-        await engine.complete_json(MESSAGES, GRAMMAR)
-        asked = engine.passes[0]
-        self.assertEqual(asked.grammar, GRAMMAR)
-        self.assertEqual(
-            asked.sampling,
-            {"temperature": 0.0, "top_k": 1, "max_tokens": engine.cfg.route_max_tokens},
-        )
-        await engine.complete_json(MESSAGES, GRAMMAR, 32, seed=3)
-        self.assertEqual(engine.passes[1].sampling["max_tokens"], 32)
-        self.assertEqual(engine.passes[1].seed, 3)
-
-    async def test_a_routing_pass_that_ends_leaves_the_engine_free_and_not_busy(self) -> None:
-        engine = self.scripted(NONE)
-        await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertTrue(engine.free)
-        self.assertIs(engine.info()["busy"], False)
-        self.assertEqual(engine.info()["completed"], 1)
-
-    async def test_a_cancelled_routing_pass_keeps_the_slot_until_its_thread_has_left(self) -> None:
-        engine = self.scripted(WEATHER, EIGHT, gated=True)
-        choosing = asyncio.create_task(engine.complete_json(MESSAGES, GRAMMAR))
-        await engine.entered(1)
-
-        # The visitor closes the page while the model is choosing.
-        choosing.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await choosing
-        self.assertTrue(engine._lock.locked())
-        self.assertIs(engine.info()["busy"], True)
-
-        # The next request arrives. It waits; it does not enter the model
-        # while the first thread is still in there.
-        answer = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
-        await until(lambda: engine.info()["queued"] == 1)
-        self.assertEqual(len(engine.passes), 1)
-
-        engine.release()
-        stream = await answer
-        self.assertEqual(stream[-1][1]["text"], EIGHT)
-        self.assertEqual(engine.most_at_once, 1)
-        self.assertTrue(engine.free)
-        self.assertIs(engine.info()["busy"], False)
-
-    async def test_a_routing_pass_waits_in_the_same_queue_as_an_answer(self) -> None:
-        engine = self.scripted(EIGHT, NONE, gated=True)
-        writing = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
-        await engine.entered(1)
-
-        seen: list = []
-
-        async def choose() -> None:
-            async for item in engine.stream_json(MESSAGES, GRAMMAR):
-                seen.append(item)
-
-        choosing = asyncio.create_task(choose())
-        await until(lambda: any(name == "queue" for name, _ in seen))
-        self.assertEqual(engine.info()["queued"], 1)
-
-        engine.release()
-        await writing
-        await choosing
-        self.assertEqual(names(seen), ["queue", "completion"])
-        said = seen[-1][1]
-        self.assertEqual(said.parsed, {"tool": "none"})
-        self.assertGreater(said.queue_wait_ms, 0)
-        self.assertGreaterEqual(said.ms, said.queue_wait_ms)
-        self.assertEqual(engine.most_at_once, 1)
-
-    async def test_a_reply_that_is_not_json_is_kept_raw_and_parsed_as_nothing(self) -> None:
-        cut = '{"tool": "wikipedia", "args": {"query": "the long'
-        for raw in (cut, '["a", "list"]', "42", ""):
-            with self.subTest(raw=raw):
-                engine = self.scripted(raw)
-                said = await engine.complete_json(MESSAGES, GRAMMAR)
-                self.assertIsNone(said.parsed)
-                self.assertEqual(said.raw, raw)
-                self.assertIsNone(said.error)
-
-    async def test_a_model_that_raises_is_no_decision_and_never_an_exception(self) -> None:
-        engine = self.scripted(ValueError("boom"))
-        said = await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertIsNone(said.parsed)
-        self.assertEqual(said.error, "ValueError: boom")
-        self.assertIsNone(said.prompt_tokens)
-        self.assertTrue(engine.free)
-
-    async def test_a_failure_on_the_way_in_is_no_decision_either(self) -> None:
-        engine = self.scripted(NONE)
-        with mock.patch.object(engine, "prompt_tokens", side_effect=RuntimeError("tokenizer broke")):
-            said = await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertEqual(said.error, "RuntimeError: tokenizer broke")
-        self.assertTrue(engine.free)
-
-    async def test_an_engine_that_is_not_ready_makes_no_decision(self) -> None:
-        engine = self.scripted(NONE)
-        engine.state.status = "loading"
-        said = await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertIsNone(said.parsed)
-        self.assertIn("still loading", said.error)
-        self.assertEqual(engine.passes, [])
-
-    async def test_a_routing_pass_can_be_stopped_by_its_id(self) -> None:
-        engine = self.scripted(WEATHER, gated=True)
-        choosing = asyncio.create_task(engine.complete_json(MESSAGES, GRAMMAR, request_id="abc"))
-        await engine.entered(1)
-        self.assertIs(engine.cancel("abc"), True)
-        engine.release()
-        said = await choosing
-        self.assertIs(said.cancelled, True)
-        self.assertIsNone(said.parsed)
-        self.assertTrue(engine.free)
+THOUGHT = " ".join(MOCK_THOUGHT)
+VOCAB = " ".join(MOCK_VOCAB)
+ROOM = {"max_tokens": 1000}
 
 
 class MockModeTests(unittest.IsolatedAsyncioTestCase):
-    """Without a model, a decision is always "no tool", made through the slot."""
+    """Without a model, a pass writes the same paragraph every time, through
+    the slot like any other, and ends as a model's pass does."""
 
-    async def test_the_mock_decides_none_as_a_real_pass(self) -> None:
-        engine = Engine(settings.model_copy(update={"mock": True, "mock_delay": 0.0}))
-        engine.state.status = "ready"
-        said = await engine.complete_json(MESSAGES, GRAMMAR)
-        self.assertEqual(said.parsed, {"tool": "none"})
-        self.assertEqual(said.completion_tokens, 1)
+    def mocked(self, mode: str = "none") -> Engine:
+        engine = Engine(thinking(mode))
+        engine.load_blocking()
+        return engine
+
+    async def test_the_mock_writes_its_paragraph_as_a_real_pass(self) -> None:
+        engine = self.mocked()
+        self.assertTrue(engine.ready)
+        stream = await collect(engine.stream_chat(MESSAGES, ROOM))
+        self.assertEqual(names(stream), ["start", "token", "done"])
+        done = stream[-1][1]
+        self.assertEqual(done["text"], VOCAB)
+        self.assertEqual((done["finish"], done["word"]), ("eos", None))
+        self.assertEqual(done["completion_tokens"], len(MOCK_VOCAB))
         self.assertEqual(engine.info()["completed"], 1)
         self.assertIs(engine.info()["busy"], False)
         self.assertFalse(engine._lock.locked())
+
+    async def test_where_the_model_thinks_it_thinks_first_and_closes_the_block(self) -> None:
+        done = await answer(self.mocked("on"), MESSAGES, ROOM)
+        self.assertEqual(done["text"], THOUGHT + "\n</think>\n\n" + VOCAB)
+
+    async def test_where_the_model_does_not_think_there_is_no_thought(self) -> None:
+        for mode in ("off", "none"):
+            with self.subTest(thinking=mode):
+                done = await answer(self.mocked(mode), MESSAGES, ROOM)
+                self.assertEqual(done["text"], VOCAB)
+
+    async def test_it_stops_at_a_stop_string_and_goes_on_from_its_prefix(self) -> None:
+        engine = self.mocked("on")
+        thought = await answer(engine, MESSAGES, ROOM, stop=["</think>"])
+        self.assertEqual(thought["text"], THOUGHT + "\n")
+        self.assertEqual((thought["finish"], thought["word"]), ("word", "</think>"))
+        # Picked up after the block is closed, it does not think again.
+        said = await answer(engine, MESSAGES, ROOM, prefix=thought["text"] + "</think>\n\n")
+        self.assertEqual(said["text"], VOCAB)
+        self.assertEqual(said["finish"], "eos")
+
+    async def test_it_ends_at_its_token_limit(self) -> None:
+        done = await answer(self.mocked(), MESSAGES, {"max_tokens": 5})
+        self.assertEqual(done["text"], " ".join(MOCK_VOCAB[:5]))
+        self.assertEqual((done["finish"], done["word"]), ("limit", None))
+        self.assertEqual(done["completion_tokens"], 5)
+
+
+class PromptTests(unittest.TestCase):
+    """The prompt the engine writes: every message as it is, then the answer
+    begun the way the model thinks, then whatever of it is already written."""
+
+    def test_the_answer_begins_with_the_opener_of_how_the_model_thinks(self) -> None:
+        for mode, opener in (("none", ""), ("off", "<think>\n\n</think>\n\n"), ("on", "<think>\n")):
+            with self.subTest(thinking=mode):
+                engine = Engine(thinking(mode))
+                self.assertEqual(engine.render(MESSAGES), HEAD + opener)
+                self.assertEqual(engine.render(MESSAGES, "So far"), HEAD + opener + "So far")
+
+    def test_what_is_counted_is_the_prompt_as_written(self) -> None:
+        engine = Engine(thinking("on"))
+        with mock.patch.object(engine, "count_tokens", return_value=7) as count:
+            self.assertEqual(engine.prompt_tokens(MESSAGES, "So far"), 7)
+        count.assert_called_once_with(HEAD + "<think>\nSo far")
+
+
+class StopsTests(unittest.TestCase):
+    """The app's own reading of stop strings, for the model in this process,
+    the mock and a script: what may be passed on, and when it has to wait."""
+
+    def test_text_with_no_stop_string_in_it_is_passed_on_whole(self) -> None:
+        stops = Stops(["</s>"])
+        self.assertEqual(stops.feed("hello world"), "hello world")
+        self.assertEqual(stops.flush(), "")
+        self.assertIsNone(stops.word)
+
+    def test_the_text_ends_before_the_stop_string_and_nothing_after_it_is_passed_on(self) -> None:
+        stops = Stops(["</s>"])
+        self.assertEqual(stops.feed("done</s> and more"), "done")
+        self.assertEqual(stops.word, "</s>")
+        self.assertEqual(stops.feed("later text"), "")
+        self.assertEqual(stops.flush(), "")
+
+    def test_a_tail_that_could_begin_a_stop_string_is_held_back(self) -> None:
+        stops = Stops(["</think>"])
+        self.assertEqual(stops.feed("so </th"), "so ")
+        self.assertEqual(stops.feed("ink> the answer"), "")
+        self.assertEqual(stops.word, "</think>")
+
+    def test_a_held_tail_that_turns_out_not_to_be_one_is_passed_on(self) -> None:
+        stops = Stops(["</think>"])
+        self.assertEqual(stops.feed("a <"), "a ")
+        self.assertEqual(stops.feed("b>"), "<b>")
+        self.assertIsNone(stops.word)
+
+    def test_a_stop_string_written_one_character_at_a_time_is_still_found(self) -> None:
+        stops = Stops(["</tool_call>"])
+        out = "".join(stops.feed(c) for c in "call it</tool_call>after")
+        self.assertEqual(out, "call it")
+        self.assertEqual(stops.word, "</tool_call>")
+
+    def test_the_earliest_of_several_is_the_one_that_stops_it(self) -> None:
+        for words in (["</tool_call>", "\n"], ["\n", "</tool_call>"]):
+            with self.subTest(words=words):
+                stops = Stops(words)
+                self.assertEqual(stops.feed("x\ny</tool_call>"), "x")
+                self.assertEqual(stops.word, "\n")
+
+    def test_one_stop_string_found_while_the_start_of_another_is_held(self) -> None:
+        stops = Stops(["abc", "x"])
+        self.assertEqual(stops.feed("ab"), "")
+        self.assertEqual(stops.feed("x"), "ab")
+        self.assertEqual(stops.word, "x")
+
+    def test_text_that_ends_without_a_stop_gives_back_what_was_held(self) -> None:
+        stops = Stops(["</s>"])
+        self.assertEqual(stops.feed("ends with </"), "ends with ")
+        self.assertEqual(stops.flush(), "</")
+        self.assertIsNone(stops.word)
+        self.assertEqual(stops.flush(), "", "held text is given back once")
+
+    def test_with_no_stop_strings_nothing_is_held(self) -> None:
+        for words in (None, [], [""]):
+            with self.subTest(words=words):
+                stops = Stops(words)
+                self.assertEqual(stops.feed("abc <"), "abc <")
+                self.assertEqual(stops.flush(), "")
+                self.assertIsNone(stops.word)
 
 
 async def take(engine, request_id: str) -> dict:
@@ -551,15 +683,19 @@ class HeldSlotTests(EngineCase):
         self.assertTrue(engine.free)
 
     async def test_the_passes_of_the_run_do_not_wait_and_do_not_give_it_back(self) -> None:
-        engine = self.scripted(NONE, EIGHT)
+        engine = self.scripted("one two STOP three", EIGHT)
         await take(engine, "run")
-        said = await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
-        self.assertEqual(said.queue_wait_ms, 0.0)
+        said = await answer(engine, MESSAGES, SAMPLING, "run", held=True, stop=["STOP"])
+        self.assertEqual(said["queue_wait_ms"], 0.0)
+        self.assertEqual(said["finish"], "word")
         # Between two passes of the run the slot is still the run's.
         self.assertTrue(engine._lock.locked())
         self.assertIs(engine.info()["busy"], True)
-        stream = await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
+        stream = await collect(engine.stream_chat(
+            MESSAGES, SAMPLING, "run", held=True, prefix="one two STOP",
+        ))
         self.assertEqual(names(stream), ["start", "token", "done"])
+        self.assertEqual(stream[-1][1]["text"], " three")
         self.assertEqual(stream[-1][1]["queue_wait_ms"], 0.0)
         self.assertTrue(engine._lock.locked())
         self.assertEqual(engine.info()["completed"], 2)
@@ -567,12 +703,12 @@ class HeldSlotTests(EngineCase):
         self.assertTrue(engine.free)
 
     async def test_another_request_waits_for_the_whole_run_not_for_one_pass(self) -> None:
-        engine = self.scripted(NONE, EIGHT, "nine ten")
+        engine = self.scripted("seven", EIGHT, "nine ten")
         await take(engine, "run")
         other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
         await until(lambda: engine.info()["queued"] == 1)
 
-        await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
+        await answer(engine, MESSAGES, SAMPLING, "run", held=True)
         await collect(engine.stream_chat(MESSAGES, SAMPLING, "run", held=True))
         # Two passes of the run have come and gone, and the other is still waiting.
         self.assertFalse(other.done())
@@ -734,9 +870,9 @@ class HeldSlotTests(EngineCase):
         self.assertIs(engine.others_waiting(), False)
 
     async def test_giving_the_slot_up_between_passes_lets_one_request_in_and_then_waits_its_turn(self) -> None:
-        engine = self.scripted(NONE, "nine ten", EIGHT)
+        engine = self.scripted("seven", "nine ten", EIGHT)
         await take(engine, "run")
-        await engine.complete_json(MESSAGES, GRAMMAR, request_id="run", held=True)
+        await answer(engine, MESSAGES, SAMPLING, "run", held=True)
         other = asyncio.create_task(collect(engine.stream_chat(MESSAGES, SAMPLING)))
         await until(engine.others_waiting)
 
@@ -770,30 +906,51 @@ class ScriptTests(EngineCase):
         self.assertTrue(engine.free)
 
     async def test_the_prompt_of_a_pass_is_kept_as_the_engine_counts_it(self) -> None:
-        engine = self.scripted(EIGHT)
+        engine = self.scripted(EIGHT, EIGHT, cfg=thinking("none"))
         await collect(engine.stream_chat(MESSAGES, SAMPLING))
-        self.assertEqual(
-            engine.passes[0].prompt,
-            "<|im_start|>system\nAnswer briefly.<|im_end|>\n"
-            "<|im_start|>user\nCount to eight.<|im_end|>\n"
-            "<|im_start|>assistant\n",
-        )
+        self.assertEqual(engine.passes[0].prompt, HEAD)
+        self.assertEqual(engine.passes[0].prompt, engine.render(MESSAGES))
+        await collect(engine.stream_chat(MESSAGES, SAMPLING, prefix="one "))
+        self.assertEqual(engine.passes[1].prompt, HEAD + "one ")
+
+    async def test_what_a_pass_was_given_to_say_and_how_it_ended_are_kept(self) -> None:
+        engine = self.scripted("one two STOP three", EIGHT)
+        await collect(engine.stream_chat(MESSAGES, SAMPLING, stop=["STOP"]))
+        await collect(engine.stream_chat(MESSAGES, {**SAMPLING, "max_tokens": 2}, prefix="one two STOP"))
+        await collect(engine.stream_chat(MESSAGES, {**SAMPLING, "max_tokens": 2}))
+        kept = [(p.output, p.yielded, p.finish, p.word) for p in engine.passes]
+        self.assertEqual(kept, [
+            ("one two ", 2, "word", "STOP"),
+            (" three", 2, "eos", None),
+            ("one two ", 2, "limit", None),
+        ])
 
 
 class FakeLlama:
-    """Stands where llama.cpp would, and keeps what it was asked for."""
+    """Stands where llama.cpp would: writes ``texts`` as llama-cpp-python
+    streams a completion, ends with ``finish`` ("stop" where the model ended
+    it, "length" where it ran out of tokens), and keeps what it was asked for,
+    how many pieces were read from it and whether its stream was closed."""
 
-    def __init__(self) -> None:
+    def __init__(self, *texts: str, finish: str = "stop") -> None:
+        self.texts = texts or ("Hi", " there")
+        self.finish = finish
         self.asked: list[dict] = []
+        self.sent = 0
+        self.closed = 0
 
-    def create_chat_completion(self, **kwargs):
+    def create_completion(self, **kwargs):
         self.asked.append(kwargs)
-        return iter([
-            {"choices": [{"delta": {"role": "assistant"}}]},
-            {"choices": [{"delta": {"content": "Hi"}}]},
-            {"choices": [{"delta": {"content": " there"}}]},
-            {"choices": [{"delta": {}}]},
-        ])
+        return self._stream()
+
+    def _stream(self):
+        try:
+            for text in self.texts:
+                self.sent += 1
+                yield {"choices": [{"text": text, "index": 0, "finish_reason": None}]}
+            yield {"choices": [{"text": "", "index": 0, "finish_reason": self.finish}]}
+        finally:
+            self.closed += 1
 
 
 class ModelCallTests(unittest.TestCase):
@@ -801,36 +958,85 @@ class ModelCallTests(unittest.TestCase):
     function that makes the call, called directly."""
 
     def setUp(self) -> None:
-        self.engine = Engine(settings.model_copy(update={"mock": False}))
+        self.engine = Engine(settings.model_copy(update={"mock": False, "thinking": "none"}))
         self.llama = FakeLlama()
         self.engine._llm = self.llama
 
-    def test_an_answer_is_asked_for_with_its_five_sampling_settings_and_nothing_else(self) -> None:
+    def given(self, *texts: str, finish: str = "stop") -> FakeLlama:
+        self.llama = FakeLlama(*texts, finish=finish)
+        self.engine._llm = self.llama
+        return self.llama
+
+    def test_an_answer_is_asked_for_as_the_prompt_written_out_with_its_settings(self) -> None:
         said = list(self.engine._iter_chunks(MESSAGES, SAMPLING))
         self.assertEqual(said, ["Hi", " there"])
-        self.assertEqual(self.llama.asked, [{"messages": MESSAGES, "stream": True, **SAMPLING}])
+        self.assertEqual(self.llama.asked, [{"prompt": HEAD, "stream": True, **SAMPLING}])
+
+    def test_the_prompt_goes_on_from_the_part_already_written(self) -> None:
+        self.engine.cfg = settings.model_copy(update={"mock": False, "thinking": "on"})
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, prefix="Let me count"))
+        self.assertEqual(self.llama.asked[0]["prompt"], HEAD + "<think>\nLet me count")
+        self.assertEqual(self.llama.asked[0]["prompt"], self.engine.render(MESSAGES, "Let me count"))
 
     def test_only_the_settings_a_pass_names_are_passed_on(self) -> None:
-        list(self.engine._iter_chunks(MESSAGES, {"temperature": 0.0, "top_k": 1, "max_tokens": 96}))
+        list(self.engine._iter_chunks(
+            MESSAGES, {"temperature": 0.0, "top_k": 1, "max_tokens": 96, "grammar": 'root ::= "x"'},
+        ))
         self.assertEqual(
             self.llama.asked,
-            [{"messages": MESSAGES, "stream": True, "temperature": 0.0, "top_k": 1, "max_tokens": 96}],
+            [{"prompt": HEAD, "stream": True, "temperature": 0.0, "top_k": 1, "max_tokens": 96}],
         )
 
-    def test_a_seed_and_stop_words_are_passed_only_when_given(self) -> None:
-        list(self.engine._iter_chunks(MESSAGES, SAMPLING, seed=0, stop=["</s>"]))
+    def test_a_seed_is_passed_only_when_given(self) -> None:
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, seed=0))
         self.assertEqual(self.llama.asked[0]["seed"], 0)
-        self.assertEqual(self.llama.asked[0]["stop"], ["</s>"])
-        list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=[]))
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING))
         self.assertNotIn("seed", self.llama.asked[1])
-        self.assertNotIn("stop", self.llama.asked[1])
 
-    def test_a_grammar_is_compiled_once_and_passed_compiled(self) -> None:
-        compiled = object()
-        with mock.patch.object(self.engine, "_grammar", return_value=compiled) as compile_:
-            list(self.engine._iter_chunks(MESSAGES, SAMPLING, grammar='root ::= "x"'))
-        compile_.assert_called_once_with('root ::= "x"')
-        self.assertIs(self.llama.asked[0]["grammar"], compiled)
+    def test_stop_strings_are_read_here_and_not_passed_to_llama_cpp(self) -> None:
+        llama = self.given("Hi", " the", "re</s> more", " and more")
+        reading = Reading()
+        said = list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</s>"], reading=reading))
+        self.assertEqual(said, ["Hi", " the", "re"])
+        self.assertEqual((reading.finish, reading.word), ("word", "</s>"))
+        self.assertNotIn("stop", llama.asked[0])
+        # Nothing more is read from the model once it has said the string, and
+        # its stream is closed: llama.cpp stops writing.
+        self.assertEqual((llama.sent, llama.closed), (3, 1))
+
+    def test_a_stop_string_split_across_pieces_is_still_caught(self) -> None:
+        self.given("Hi </", "s> more")
+        reading = Reading()
+        said = list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</s>"], reading=reading))
+        self.assertEqual("".join(said), "Hi ")
+        self.assertEqual((reading.finish, reading.word), ("word", "</s>"))
+
+    def test_a_tail_that_was_not_a_stop_string_after_all_is_not_lost(self) -> None:
+        self.given("Hi </", "b>")
+        reading = Reading()
+        said = list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</s>"], reading=reading))
+        self.assertEqual("".join(said), "Hi </b>")
+        self.assertEqual((reading.finish, reading.word), ("eos", None))
+
+    def test_a_reply_the_model_ends_ends_in_eos(self) -> None:
+        reading = Reading()
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, reading=reading))
+        self.assertEqual((reading.finish, reading.word), ("eos", None))
+        self.assertEqual(self.llama.closed, 1)
+
+    def test_a_reply_that_runs_out_of_tokens_ends_at_its_limit(self) -> None:
+        self.given("Hi", " there", finish="length")
+        reading = Reading()
+        said = list(self.engine._iter_chunks(MESSAGES, SAMPLING, reading=reading))
+        self.assertEqual(said, ["Hi", " there"])
+        self.assertEqual((reading.finish, reading.word), ("limit", None))
+
+    def test_a_reader_that_stops_early_closes_the_stream(self) -> None:
+        llama = self.given("one", " two", " three")
+        chunks = self.engine._iter_chunks(MESSAGES, SAMPLING)
+        self.assertEqual(next(chunks), "one")
+        chunks.close()
+        self.assertEqual((llama.sent, llama.closed), (1, 1))
 
 
 class ThreadTests(unittest.TestCase):
@@ -859,17 +1065,22 @@ SERVER_URL = "http://127.0.0.1:8081"
 
 class FakeServer:
     """Stands where a llama-server would: answers when asked whether it is up,
-    counts a word as a token, and writes ``texts``. It keeps every request."""
+    counts a word as a token, and writes ``texts``. It keeps every request.
+
+    ``finish`` and ``word`` are how it says the reply ended, on its last
+    piece; left out, it does not say."""
 
     def __init__(
         self, *texts: str, fail: Exception | None = None, up_after: int = 0,
-        read: Reading | None = None,
+        read: Reading | None = None, finish: str | None = None, word: str | None = None,
     ) -> None:
         self.texts = texts or ("Hi", " there")
         self.fail = fail
         self.up_after = up_after
         # What it says it read of each prompt, once it has written the answer.
         self.read = read
+        self.finish = finish
+        self.word = word
         # Every text it was asked to count.
         self.counted: list[str] = []
         self.asked: list[dict] = []
@@ -895,6 +1106,8 @@ class FakeServer:
             reading.prompt, reading.read, reading.cached = (
                 self.read.prompt, self.read.read, self.read.cached
             )
+        if reading is not None:
+            reading.finish, reading.word = self.finish, self.word
 
 
 def served(server: FakeServer, **update) -> Engine:
@@ -978,11 +1191,12 @@ class ServerLoadTests(unittest.TestCase):
 
 class ServerCallTests(unittest.TestCase):
     """What the server is asked for. The same calls as ModelCallTests, made
-    to a server instead of llama.cpp."""
+    to a server instead of llama.cpp: the prompt written out whole, and the
+    sampling settings by the names llama-server knows them by."""
 
     def setUp(self) -> None:
         self.server = FakeServer()
-        self.engine = served(self.server)
+        self.engine = served(self.server, thinking="none")
         self.engine.load_blocking()
 
     def test_settings_a_pass_does_not_name_are_the_ones_llama_cpp_python_would_use(self) -> None:
@@ -991,40 +1205,93 @@ class ServerCallTests(unittest.TestCase):
         self.assertEqual(
             self.server.asked,
             [{
-                "messages": MESSAGES,
+                "prompt": HEAD,
                 "temperature": 0.0, "top_p": 0.95, "top_k": 1, "min_p": 0.05,
-                "repeat_penalty": 1.0, "max_tokens": 96,
+                "repeat_penalty": 1.0, "n_predict": 96,
             }],
         )
 
-    def test_an_answer_keeps_all_five_of_its_settings(self) -> None:
+    def test_an_answer_keeps_all_five_of_its_settings_with_its_limit_as_n_predict(self) -> None:
         list(self.engine._iter_chunks(MESSAGES, SAMPLING))
-        self.assertEqual(self.server.asked[0], {"messages": MESSAGES, "min_p": 0.05, **SAMPLING})
+        named = {k: v for k, v in SAMPLING.items() if k != "max_tokens"}
+        self.assertEqual(
+            self.server.asked[0], {"prompt": HEAD, "min_p": 0.05, **named, "n_predict": 64},
+        )
 
-    def test_the_grammar_goes_as_text_and_seed_and_stop_only_when_given(self) -> None:
-        with mock.patch.object(self.engine, "_grammar") as compile_:
-            list(self.engine._iter_chunks(MESSAGES, SAMPLING, grammar='root ::= "x"', seed=0, stop=["</s>"]))
-        compile_.assert_not_called()
-        self.assertEqual(self.server.asked[0]["grammar"], 'root ::= "x"')
+    def test_a_pass_with_no_limit_sends_none(self) -> None:
+        list(self.engine._iter_chunks(MESSAGES, {"temperature": 0.0}))
+        self.assertNotIn("n_predict", self.server.asked[0])
+        self.assertNotIn("max_tokens", self.server.asked[0])
+
+    def test_only_the_settings_a_pass_names_are_sent_and_never_its_messages(self) -> None:
+        list(self.engine._iter_chunks(MESSAGES, {"temperature": 0.0, "grammar": 'root ::= "x"'}))
+        self.assertEqual(
+            set(self.server.asked[0]),
+            {"prompt", "temperature", "top_p", "top_k", "min_p", "repeat_penalty"},
+        )
+
+    def test_the_prompt_goes_on_from_the_part_already_written(self) -> None:
+        server = FakeServer()
+        engine = served(server, thinking="on")
+        engine.load_blocking()
+        list(engine._iter_chunks(MESSAGES, SAMPLING, prefix="Let me count"))
+        self.assertEqual(server.asked[0]["prompt"], HEAD + "<think>\nLet me count")
+
+    def test_seed_and_stop_strings_go_only_when_given(self) -> None:
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, seed=0, stop=["</s>"]))
         self.assertEqual(self.server.asked[0]["seed"], 0)
         self.assertEqual(self.server.asked[0]["stop"], ["</s>"])
         list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=[]))
-        for key in ("grammar", "seed", "stop"):
+        for key in ("seed", "stop", "grammar"):
             self.assertNotIn(key, self.server.asked[1])
+
+    def test_how_the_server_says_the_reply_ended_is_kept(self) -> None:
+        self.server.finish, self.server.word = "word", "</tool_call>"
+        reading = Reading()
+        list(self.engine._iter_chunks(
+            MESSAGES, SAMPLING, stop=["</tool_call>", "<tool_call>"], reading=reading,
+        ))
+        self.assertEqual((reading.finish, reading.word), ("word", "</tool_call>"))
+
+    def test_a_stop_the_server_does_not_name_is_the_one_it_was_given_if_there_was_one(self) -> None:
+        self.server.finish = "word"
+        reading = Reading()
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</think>"], reading=reading))
+        self.assertEqual((reading.finish, reading.word), ("word", "</think>"))
+        # Of two, which one it was is not guessed.
+        reading = Reading()
+        list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</think>", "\n"], reading=reading))
+        self.assertEqual((reading.finish, reading.word), ("word", None))
+
+    def test_the_server_reads_the_stop_strings_itself(self) -> None:
+        # What the server writes is passed on as it is: it stops where it was
+        # told to, and what it wrote is what is in its cache.
+        self.server.texts = ("Hi", " </s> there")
+        said = list(self.engine._iter_chunks(MESSAGES, SAMPLING, stop=["</s>"]))
+        self.assertEqual(said, ["Hi", " </s> there"])
 
 
 class ServerPassTests(unittest.IsolatedAsyncioTestCase):
     """A whole pass through the slot, with the model in a server."""
 
     async def test_a_pass_streams_and_ends_like_any_other_and_frees_the_slot(self) -> None:
-        engine = served(FakeServer("one", " two"))
+        engine = served(FakeServer("one", " two", finish="eos"))
         engine.load_blocking()
         stream = await collect(engine.stream_chat(MESSAGES, SAMPLING))
         self.assertEqual(names(stream), ["start", "token", "done"])
         done = stream[-1][1]
         self.assertEqual(done["text"], "one two")
         self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
+        self.assertEqual((done["finish"], done["word"]), ("eos", None))
         self.assertFalse(engine._lock.locked())
+
+    async def test_the_prompt_counted_is_the_prompt_sent(self) -> None:
+        server = FakeServer("two")
+        engine = served(server)
+        engine.load_blocking()
+        await collect(engine.stream_chat(MESSAGES, SAMPLING, prefix="one "))
+        self.assertEqual(server.counted, [server.asked[0]["prompt"]])
+        self.assertEqual(server.asked[0]["prompt"], engine.render(MESSAGES, "one "))
 
     async def test_what_the_server_read_of_the_prompt_is_in_done(self) -> None:
         engine = served(FakeServer("one", " two", read=Reading(prompt=108, read=8, cached=100)))
@@ -1034,17 +1301,21 @@ class ServerPassTests(unittest.IsolatedAsyncioTestCase):
         # Our own count stays ours: the server's is the other two together.
         self.assertEqual(done["prompt_tokens"], engine.prompt_tokens(MESSAGES))
 
-    async def test_a_choice_keeps_what_the_server_read_for_it(self) -> None:
-        engine = served(FakeServer('{"tool": "none"}', read=Reading(prompt=60, read=20, cached=40)))
+    async def test_where_the_server_stopped_is_in_done(self) -> None:
+        engine = served(FakeServer("Calling.", finish="word", word="</tool_call>"))
         engine.load_blocking()
-        said = await engine.complete_json(MESSAGES, 'root ::= "x"')
-        self.assertEqual((said.read_tokens, said.cached_tokens), (20, 40))
+        done = await answer(engine, MESSAGES, SAMPLING, stop=["</tool_call>"])
+        self.assertEqual(
+            (done["text"], done["finish"], done["word"]), ("Calling.", "word", "</tool_call>"),
+        )
 
     async def test_a_server_that_does_not_say_leaves_the_figures_empty(self) -> None:
         engine = served(FakeServer("one"))
         engine.load_blocking()
         done = (await collect(engine.stream_chat(MESSAGES, SAMPLING)))[-1][1]
         self.assertEqual((done["read_tokens"], done["cached_tokens"]), (None, None))
+        # Nor is how it ended guessed.
+        self.assertEqual((done["finish"], done["word"]), (None, None))
 
     async def test_a_server_that_fails_is_an_error_event_and_frees_the_slot(self) -> None:
         engine = served(FakeServer(fail=ServerError("the model server is not answering")))

@@ -1,4 +1,5 @@
-"""How an answer is written: shaped by the model, sampled and held here.
+"""How the model's text is sampled, and what it is told about the shape of
+an answer.
 
 Needs the app's own requirements; without them the whole module is skipped.
 """
@@ -10,41 +11,41 @@ from datetime import datetime, timedelta, timezone
 
 try:
     from app.agent.context import Part
-    from app.agent.style import LOOKED_UP_TEMPERATURE, STYLES
-    from app.agent.transcript import SHAPE, Transcript, sent_at, system_for
+    from app.agent.style import CODE, PROSE, PROSE_THINKING, sampling
+    from app.agent.transcript import SHAPE, Transcript, project_line, sent_at, system_for
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
 
-class StyleTests(unittest.TestCase):
+class SamplingTests(unittest.TestCase):
     def test_nothing_here_reads_the_message(self) -> None:
-        # The model shapes its own answer from the system text; the one
-        # choice of style it makes is to write files.
+        # The model shapes its own answer from the system text. What is
+        # chosen here follows only what it is writing: prose or code.
         import app.agent.style as style
 
         self.assertFalse(hasattr(style, "style_for"))
-        self.assertEqual(set(STYLES), {"answer", "files"})
-        self.assertEqual(STYLES["answer"].cue, "")
+        self.assertFalse(hasattr(style, "STYLES"))
         self.assertIn(SHAPE, system_for([]))
 
-    def test_files_are_held_to_their_grammar_and_nothing_else_is(self) -> None:
-        from app.projects.parse import GRAMMAR
+    def test_prose_is_sampled_as_qwen_samples_it_thinking_and_not(self) -> None:
+        self.assertEqual(sampling("prose", "on"), PROSE_THINKING)
+        self.assertEqual(sampling("prose", "off"), PROSE)
+        self.assertEqual(sampling("prose", "none"), PROSE)
+        self.assertEqual(PROSE_THINKING["temperature"], 1.0)
+        self.assertEqual(PROSE["temperature"], 0.7)
+        self.assertEqual(PROSE["presence_penalty"], 1.5)
 
-        self.assertEqual(STYLES["files"].grammar, GRAMMAR)
-        self.assertIsNone(STYLES["answer"].grammar)
+    def test_code_has_no_presence_penalty_so_an_edit_can_copy_exactly(self) -> None:
+        for thinking in ("on", "off", "none"):
+            with self.subTest(thinking=thinking):
+                self.assertEqual(sampling("code", thinking), CODE)
+        self.assertEqual(CODE["presence_penalty"], 0.0)
+        self.assertEqual(CODE["temperature"], 0.6)
 
-    def test_an_answer_from_a_lookup_is_held_cooler_whatever_its_style(self) -> None:
-        for style in STYLES.values():
-            with self.subTest(style.id):
-                self.assertLessEqual(style.sampling(looked_up=True)["temperature"], LOOKED_UP_TEMPERATURE)
-                self.assertEqual(style.sampling()["temperature"], style.temperature)
-                self.assertEqual(style.sampling()["max_tokens"], style.max_tokens)
-
-    def test_the_style_never_reaches_the_system_text(self) -> None:
-        for style in STYLES.values():
-            with self.subTest(style.id):
-                if style.cue:
-                    self.assertNotIn(style.cue, system_for([]))
+    def test_what_is_handed_out_is_a_copy(self) -> None:
+        settings = sampling("prose")
+        settings["temperature"] = 9
+        self.assertNotEqual(sampling("prose")["temperature"], 9)
 
 
 class SentTests(unittest.TestCase):
@@ -57,8 +58,23 @@ class SentTests(unittest.TestCase):
     def test_a_run_keeps_the_message_and_when_it_was_sent_as_its_own(self) -> None:
         parts = [Part("system", "instruction", "S"), Part("user", "question", "Hi"),
                  sent_at(datetime(2026, 1, 1, tzinfo=timezone.utc))]
-        transcript = Transcript.fitted(parts, own=2)
+        transcript = Transcript(parts, own=2)
         self.assertEqual([p.kind for p in transcript.run_parts()], ["question", "now"])
+
+
+class ProjectLineTests(unittest.TestCase):
+    def test_the_project_is_named_file_by_file_with_its_version(self) -> None:
+        line = project_line([
+            {"path": "app/main.py", "lines": 8, "version": 2},
+            {"path": "requirements.txt", "lines": 1, "version": 1},
+        ])
+        self.assertEqual(
+            line.content, "Project files: app/main.py (8 lines, v2), requirements.txt (1 line, v1).",
+        )
+        self.assertNotIn("whole file", line.content)
+
+    def test_no_project_no_line(self) -> None:
+        self.assertIsNone(project_line([]))
 
 
 if __name__ == "__main__":

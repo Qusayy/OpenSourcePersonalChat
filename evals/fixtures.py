@@ -89,7 +89,11 @@ def recorded(tools: dict[str, str | list[str]] | None = None) -> Iterator[dict[s
                 await asyncio.sleep(fixture["delay_ms"] / 1000)
             return _result(fixture)
 
-        replaced[name] = dataclasses.replace(tool, run=run)
+        # A tool with a recording stands in for what it needs (the sandbox,
+        # say), so it is on offer wherever the suite runs.
+        replaced[name] = dataclasses.replace(
+            tool, run=run, requires=None if files is not None else tool.requires,
+        )
 
     # The recordings stand in for the network, so the tools that use it must
     # be on offer whatever this machine's settings say.

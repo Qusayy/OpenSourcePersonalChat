@@ -5,6 +5,6 @@ a llama-server sidecar (``server``).
 """
 
 from ..chatml import render_chatml
-from .core import Completion, Engine, Stop, engine
+from .core import Engine, Stop, Stops, engine
 
-__all__ = ["Completion", "Engine", "Stop", "engine", "render_chatml"]
+__all__ = ["Engine", "Stop", "Stops", "engine", "render_chatml"]

@@ -6,9 +6,10 @@ it is watching and about one it is reading back.
 
 What a step cost is split four ways, and the four add up to the total:
 waiting for the one inference slot, the model reading its prompt, the model
-writing, and tools. A pass through the model is a choice (route, decide,
-repair, fill) or the answer; anything else, a tool call or a choice made by a
-command, a pattern or a skill, costs no model time.
+writing, and tools. A pass through the model is a reply: one that ended in a
+call, or the answer. In runs kept before the model called tools itself, a
+choice (route, decide, repair, fill) the model made was one too. Anything
+else, a tool call or a choice made by a command, costs no model time.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from typing import Any, Iterable
 
 # The kinds of step that are a choice made by the model, when it made them.
 CHOICES = frozenset({"route", "decide", "repair", "fill"})
+# The kinds of step that are a reply of the model.
+REPLIES = frozenset({"call", "answer"})
 
 
 def _get(step: Any, name: str) -> Any:
@@ -27,7 +30,7 @@ def is_pass(step: Any) -> bool:
     """Whether a step was a pass through the model. Read from what a stored
     row keeps (its kind and how it was chosen), so it is the same for both."""
     kind = _get(step, "kind")
-    return kind == "answer" or (kind in CHOICES and _get(step, "via") == "model")
+    return kind in REPLIES or (kind in CHOICES and _get(step, "via") == "model")
 
 
 def _ms(value: Any) -> float:

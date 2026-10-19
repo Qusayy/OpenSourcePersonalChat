@@ -1,4 +1,4 @@
-"""The tasks: what to send, and what must be true afterwards.
+r"""The tasks: what to send, and what must be true afterwards.
 
 One JSON object per line in ``tasks.jsonl``, so a task can be added by hand and
 a change to one shows up as one line in a diff::
@@ -6,14 +6,15 @@ a change to one shows up as one line in a diff::
     {"id": "weather-is-looked-up", "category": "single-tool",
      "turns": ["weather in Lisbon?"],
      "tools": {"weather": "weather_lisbon.json"},
-     "script": ["{\"tool\": \"weather\", \"args\": {\"location\": \"Lisbon\"}}",
-                "{\"tool\": \"none\"}", "Light rain, 18 degrees."],
+     "script": ["<tool_call>\n<function=weather>\n<parameter=location>\nLisbon\n"
+                "</parameter>\n</function>\n</tool_call>", "Light rain, 18 degrees."],
      "expect": {"route": {"tool": "weather", "via": "model",
                           "args": {"location": "Lisbon"}},
-                "max_model_passes": 3}}
+                "max_model_passes": 2}}
 
-``script`` is what the model says, pass by pass, when the task is run without
-one. A task with no script can only be run against the real model. ``expect``
+``script`` is what the model says, message by message, when the task is run
+without one: what it says and the call it may end in, in its own format. A
+task with no script can only be run against the real model. ``expect``
 holds properties of what happened, never a whole expected answer: with a model
 that samples, two correct answers are rarely the same text.
 
@@ -35,13 +36,12 @@ TASKS = Path(__file__).resolve().parent / "tasks.jsonl"
 # expectation is an expectation that silently never fails.
 EXPECTATIONS = {
     "route",                # {"tool": name or null, "via": tier, "args": {...}}; any part may be left out
-    "skill",                # the skill the model chose and the run ran; null for none
     "calls",                # the tools called, in order
     "max_steps",            # at most this many tool calls
-    "max_model_passes",     # at most this many passes through the model
-    "outcome",              # answered | asked | stopped | failed; "answered" if left out
-    "style",                # how the answer was written: "answer", or "files" where the model chose to
-    "prompt_contains",      # each of these is somewhere in the prompt the answer pass read
+    "max_model_passes",     # at most this many replies of the model
+    "outcome",              # answered | stopped | failed; "answered" if left out
+    "file_contains",        # {path: [text, ...]}: the project file as the turns left it
+    "prompt_contains",      # each of these is somewhere in the prompt the last reply read
     "prompt_not_contains",
     "corrected",            # whether the answer drew a correction: a figure nothing returned
     "answer_contains",      # each of these is in the answer, whatever its case

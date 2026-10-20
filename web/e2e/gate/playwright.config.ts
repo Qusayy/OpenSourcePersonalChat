@@ -33,6 +33,8 @@ export const SERVER_ENV = {
   AURORA_ALLOW_OUTBOUND: "false",
   AURORA_GATE: "on",
   AURORA_GATE_VERIFIER: `gate1.${ITERATIONS}.${SALT.toString("hex")}.${digest.toString("hex")}`,
+  // The insecure run opens the server as aurora.test: one of its names.
+  AURORA_ALLOWED_HOSTS: "aurora.test",
 };
 export { PYTHON, REPO };
 

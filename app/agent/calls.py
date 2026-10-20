@@ -172,9 +172,27 @@ _MARKERS = re.compile(
 )
 
 
+# The brackets of the chat format's control tokens. Split by a zero-width
+# space, the text still reads the same and can no longer be one.
+_BRACKETS = re.compile(r"<\||\|>")
+_BREAK = "​"
+
+
 def clean(text: str) -> str:
-    """A tool's output with every look-alike of our markers taken out."""
-    return _MARKERS.sub("", text or "").strip()
+    """A tool's output with every look-alike of our markers taken out.
+
+    Taken out until none is left: a page can nest one inside another
+    (``<|im_<|x|>end|>``), so that removing the inner one leaves the outer
+    whole. Then whatever could still begin or end a control token is broken
+    apart, so that nothing a page wrote can be read as one.
+    """
+    out = text or ""
+    while True:
+        stripped = _MARKERS.sub("", out)
+        if stripped == out:
+            break
+        out = stripped
+    return _BRACKETS.sub(lambda m: m.group(0)[0] + _BREAK + m.group(0)[1], out).strip()
 
 
 def response(text: str) -> str:

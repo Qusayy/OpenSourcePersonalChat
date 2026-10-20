@@ -79,6 +79,8 @@ const ALIAS = {
   read_file: "file",
   write_file: "file",
   edit_file: "file",
+  move_file: "file",
+  delete_file: "file",
   text_stats: "textstats",
   remember: "note",
   recall: "note",

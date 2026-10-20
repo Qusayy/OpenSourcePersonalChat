@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS project_files (
     lines            INTEGER NOT NULL,
     run_id           TEXT,
     created_at       REAL NOT NULL,
+    deleted          INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (conversation_id, path, version)
 );
 """
@@ -162,7 +163,10 @@ CREATE TABLE IF NOT EXISTS project_files (
 def init() -> None:
     global _conn, _fts
     path = _override or settings.resolved_db_path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.parent.is_dir():
+        # Every conversation is in here: only the app's own user may look in.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.chmod(0o700)
     _conn = sqlite3.connect(str(path), check_same_thread=False)
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
@@ -171,6 +175,9 @@ def init() -> None:
     _conn.executescript(SCHEMA)
     # Columns added after a database was first made.
     _add_column("messages", "correction", "TEXT")
+    # A file the model deleted, or moved away: a version of its own, kept so
+    # that the path's versions go on counting up if it comes back.
+    _add_column("project_files", "deleted", "INTEGER NOT NULL DEFAULT 0")
     # Made apart from the schema: a build of SQLite without the module raises
     # here, and the notes are then searched without it.
     try:

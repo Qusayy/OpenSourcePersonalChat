@@ -23,11 +23,11 @@ try:
 except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
-SYSTEM_SHA = "b692ef8ce23443c7"
+SYSTEM_SHA = "5ae2f34067a2764c"
 MENU = [
     "calculator", "clock", "convert_units", "text_stats", "wikipedia", "weather",
     "currency", "web_search", "news", "read_url", "open_result", "read_file", "write_file",
-    "edit_file", "remember", "recall",
+    "edit_file", "move_file", "delete_file", "remember", "recall",
 ]
 
 

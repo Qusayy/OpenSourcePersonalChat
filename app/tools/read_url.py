@@ -18,11 +18,11 @@ Layers, in order:
 4. Body is streamed with a hard byte cap so a multi-gigabyte file cannot
    exhaust a 4 GB box, and only text/html or text/plain is read at all.
 
-Residual risk, stated honestly: between our DNS check and httpx's own
-resolution there is a small window for a DNS-rebinding attack. Closing it
-completely means pinning the connection to the validated IP, which breaks TLS
-certificate validation for the hostname. The cap on redirects, the byte limit
-and the text-only rule keep the blast radius small.
+5. The connection goes to the address that was checked, not to a second
+   lookup of the name, so a name that answers with a public address for the
+   check and a private one a moment later (DNS rebinding) gets nowhere. The
+   site is still asked for by its name, and its certificate checked against
+   it.
 """
 
 from __future__ import annotations
@@ -68,7 +68,9 @@ def _check_ip(raw: str) -> None:
         raise BlockedURL(f"address {ip} is not a public address")
 
 
-async def _validate(url: str) -> None:
+async def _validate(url: str) -> str | None:
+    """Check where ``url`` goes. Returns the address to connect to, checked,
+    or None where the host is an address already."""
     parts = urlparse(url)
     if parts.scheme not in ("http", "https"):
         raise BlockedURL(f"scheme {parts.scheme or '(none)'} is not allowed")
@@ -82,7 +84,7 @@ async def _validate(url: str) -> None:
     try:
         ipaddress.ip_address(host)
         _check_ip(host)
-        return
+        return None
     except BlockedURL:
         raise
     except ValueError:
@@ -95,11 +97,31 @@ async def _validate(url: str) -> None:
     except socket.gaierror as exc:
         raise BlockedURL(f"cannot resolve {host}") from exc
 
-    addresses = {info[4][0] for info in infos}
+    addresses = sorted({info[4][0] for info in infos})
     if not addresses:
         raise BlockedURL(f"cannot resolve {host}")
     for addr in addresses:
         _check_ip(addr)
+    # IPv4 first, where there is one: the server may have no route for v6.
+    return next((a for a in addresses if ":" not in a), addresses[0])
+
+
+def _pinned(url: str, address: str | None) -> tuple[str, dict, dict]:
+    """The request for ``url`` made to ``address``, the one that was checked,
+    and not to whatever the name resolves to a moment later: a name that
+    answered with a public address for the check cannot then send the
+    connection somewhere private. The site is still asked for by its name
+    (the Host header) and its certificate still checked against it (SNI)."""
+    if address is None:
+        return url, {}, {}
+    parts = urlparse(url)
+    host = parts.hostname or ""
+    literal = f"[{address}]" if ":" in address else address
+    netloc = literal + (f":{parts.port}" if parts.port else "")
+    pinned = parts._replace(netloc=netloc).geturl()
+    named = host + (f":{parts.port}" if parts.port else "")
+    extensions = {"sni_hostname": host} if parts.scheme == "https" else {}
+    return pinned, {"Host": named}, extensions
 
 
 # ---------------------------------------------------------------- extract ---
@@ -185,8 +207,10 @@ async def _read_url(url: str) -> ToolResult:
             final = target
 
             for _ in range(MAX_REDIRECTS + 1):
-                await _validate(final)
-                async with client.stream("GET", final) as response:
+                pinned, named, extensions = _pinned(final, await _validate(final))
+                async with client.stream(
+                    "GET", pinned, headers=named, extensions=extensions,
+                ) as response:
                     if response.is_redirect:
                         location = response.headers.get("location")
                         if not location:

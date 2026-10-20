@@ -3,13 +3,17 @@ import type { LedgerStep, StepEvent, StoredRun } from "@/lib/types";
 import {
   applyStep,
   charCount,
+  confirmWording,
   costFigures,
   isLongMessage,
   LONG_CHARS,
   ledgerRows,
   MAX_CHARS,
+  OUTCOME_WORDS,
+  outcomeOf,
   placeholderFor,
   queueWording,
+  readWords,
   type StepRow,
   trimmedWording,
 } from "./rules";
@@ -189,6 +193,108 @@ describe("ledgerRows", () => {
       ["choice", "asked you", false],
       ["sent back", "Weather", true],
     ]);
+  });
+
+  it("says what you answered when a change was put to you, and never that it failed", () => {
+    const { rows } = ledgerRows(
+      run([
+        step({ kind: "confirm", name: "write_file", via: "user", ms: 4200 }),
+        step({ kind: "confirm", name: "write_file", via: "user", ok: false, error: "no" }),
+        step({ kind: "confirm", name: "python", via: "user", ok: false, error: "no answer" }),
+        step({ kind: "confirm", name: "run_file", via: "user", ok: false, error: "stopped" }),
+      ]),
+      (name) =>
+        ({ write_file: "Write file", python: "Python", run_file: "Run file" })[name] ?? name,
+    );
+    expect(rows.map((r) => [r.kind, r.name, r.failed])).toEqual([
+      ["asked you", "Write file · allowed", false],
+      ["asked you", "Write file · not allowed", false],
+      ["asked you", "Python · no answer", false],
+      ["asked you", "Run file · stopped", false],
+    ]);
+    expect(rows[0]?.ms).toBe("4.20s");
+  });
+});
+
+describe("a change put to you", () => {
+  const ask = (over: { tool: string; label: string; what: string; because?: string }) =>
+    confirmWording({ because: "Web search", ...over });
+
+  it("says what it wants to do, in a verb and what it touches", () => {
+    expect(ask({ tool: "write_file", label: "Write file", what: "app/main.py" })).toEqual({
+      action: "write app/main.py",
+      code: null,
+      why: "It read a web search first, so check this is what you asked for and not something it read there.",
+    });
+    expect(ask({ tool: "edit_file", label: "Edit file", what: "app/main.py" }).action).toBe(
+      "edit app/main.py",
+    );
+    expect(ask({ tool: "run_file", label: "Run file", what: "app/main.py" }).action).toBe(
+      "run app/main.py",
+    );
+    expect(ask({ tool: "move_file", label: "Move file", what: "a.py to b.py" }).action).toBe(
+      "move a.py to b.py",
+    );
+    expect(ask({ tool: "delete_file", label: "Delete file", what: "old.py" }).action).toBe(
+      "delete old.py",
+    );
+  });
+
+  it("shows a program as code, and a tool it has no verb for by its name", () => {
+    const program = ask({
+      tool: "python",
+      label: "Python",
+      what: "import os\nos.remove('x')\n...",
+    });
+    expect(program.action).toBe("run this program");
+    expect(program.code).toBe("import os\nos.remove('x')\n...");
+    expect(ask({ tool: "deploy", label: "Deploy", what: "site" }).action).toBe(
+      "use Deploy on site",
+    );
+    expect(ask({ tool: "deploy", label: "", what: "" }).action).toBe("use deploy");
+    expect(ask({ tool: "write_file", label: "Write file", what: " " }).action).toBe("write a file");
+  });
+
+  it("names what was read as a sentence would, each thing once", () => {
+    expect(readWords("Web search")).toBe("a web search");
+    expect(readWords("Web search, Read page")).toBe("a web search and a web page");
+    expect(readWords("News, Wikipedia, Open result")).toBe(
+      "the news, Wikipedia and a page from a search",
+    );
+    expect(readWords("Read page, Read page")).toBe("a web page");
+    expect(readWords("Archive")).toBe("what Archive returned");
+    // The server's own words, where it had no label to give.
+    expect(readWords("a page")).toBe("a page");
+    expect(readWords("")).toBe("a page");
+  });
+
+  it("ends as one line: what you chose, or why nothing was", () => {
+    expect(outcomeOf({ status: "ok", detail: "once" })).toBe("once");
+    expect(outcomeOf({ status: "ok", detail: "reply" })).toBe("reply");
+    expect(outcomeOf({ status: "failed", detail: "no" })).toBe("no");
+    expect(outcomeOf({ status: "failed", detail: "no answer" })).toBe("no answer");
+    expect(outcomeOf({ status: "stopped", detail: "stopped" })).toBe("stopped");
+    // Said some other way: by its status.
+    expect(outcomeOf({ status: "ok", detail: null })).toBe("once");
+    expect(outcomeOf({ status: "failed", detail: "?" })).toBe("no");
+    expect(OUTCOME_WORDS).toEqual({
+      once: "Allowed.",
+      reply: "Allowed for this reply.",
+      no: "Not allowed.",
+      "no answer": "No answer in time, so not allowed.",
+      stopped: "Stopped before you answered.",
+    });
+  });
+
+  it("is not drawn as a call under way", () => {
+    const row = applyStep([], {
+      id: "confirm-0",
+      kind: "confirm",
+      status: "ok",
+      label: "Allowed",
+      detail: "once",
+    });
+    expect(row).toEqual([]);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   DONE,
   end,
   fakeChat,
+  openStored,
   order,
   push,
   reply,
@@ -171,6 +172,8 @@ test.describe("on a wide screen", () => {
   test("Close takes the panel away and the top bar brings it back", async ({ page }) => {
     await page.goto("/");
     await writeProject(page);
+    // Beside the thread, the button controls the panel there.
+    await expect(page.locator("#project-btn")).toHaveAttribute("aria-controls", "project");
     await page.locator("#project-close").click();
     await expect(page.locator("#project")).toHaveCount(0);
     await expect(page.locator("#main")).not.toHaveClass(/project-split/);
@@ -184,7 +187,7 @@ test.describe("on a wide screen", () => {
     await page.locator("#project-close").click();
     await answerOf(page).locator(".file-chip").click();
     await expect(page.locator("#project")).toBeVisible();
-    await expect(page.locator('#project-files [aria-current="true"]')).toContainText("app.py");
+    await expect(page.locator('#project-files [aria-selected="true"]')).toContainText("app.py");
   });
 
   test("a file whose call was never made leaves the answer when it is stopped", async ({
@@ -202,6 +205,188 @@ test.describe("on a wide screen", () => {
   });
 });
 
+test.describe("the tree of a project's files", () => {
+  test.use({ viewport: { width: 1280, height: 900 } });
+
+  /** The rows on screen as "  name" by level, a folder with "/", or "/+" closed. */
+  const rows = (page: Page) =>
+    page.locator('#project-files [role="treeitem"]').evaluateAll((items) =>
+      items.map((el) => {
+        const level = Number(el.getAttribute("aria-level")) - 1;
+        const name = el.querySelector("span.flex-1")?.textContent ?? "";
+        const folder = el.hasAttribute("data-folder");
+        const closed = el.getAttribute("aria-expanded") === "false";
+        return `${"  ".repeat(level)}${name}${folder ? (closed ? "/+" : "/") : ""}`;
+      }),
+    );
+  const folder = (page: Page, path: string) =>
+    page.locator(`#project-files [data-folder="${path}"]`);
+  const file = (page: Page, path: string) => page.locator(`#project-files [data-path="${path}"]`);
+
+  /** The seeded project, in its panel beside the thread. */
+  async function openSeeded(page: Page) {
+    await page.goto("/");
+    await openStored(page, 3);
+    await page.locator("#project-btn").click();
+    await expect(page.locator("#project")).toBeVisible();
+  }
+
+  test("lists folders first, a level in for each, with the file shown filled", async ({ page }) => {
+    await openSeeded(page);
+    await expect(page.locator("#project")).toContainText("6 files");
+    const tree = page.locator("#project-files");
+    await expect(tree).toHaveAttribute("role", "tree");
+    await expect(tree).toHaveAccessibleName("Project files");
+    expect(await rows(page)).toEqual([
+      "app/",
+      "  routes/",
+      "    health.py",
+      "    users.py",
+      "  main.py",
+      "tests/",
+      "  test_main.py",
+      "README.md",
+      "requirements.txt",
+    ]);
+    // Nothing chosen yet: the first file in the tree is the one shown.
+    await expect(file(page, "app/routes/health.py")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#project-viewer")).toContainText("app/routes/health.py · version 1");
+    await expect(file(page, "app/main.py")).toHaveAttribute("aria-selected", "false");
+    // Each line count, fixed-width; a hairline down from each folder a row is in.
+    await expect(file(page, "app/routes/users.py")).toContainText("9");
+    await expect(file(page, "app/routes/users.py").locator(".tree-guide")).toHaveCount(2);
+    await expect(folder(page, "app")).toHaveAttribute("aria-expanded", "true");
+    await expect(folder(page, "app")).not.toContainText("files");
+    await file(page, "app/main.py").click();
+    await expect(file(page, "app/main.py")).toHaveAttribute("aria-selected", "true");
+    const name = file(page, "app/main.py").locator("span.flex-1");
+    expect(await name.evaluate((el) => getComputedStyle(el).fontWeight)).toBe("600");
+    await expect(page.locator("#project-viewer code")).toContainText("app = FastAPI()");
+    await page.locator("#project").screenshot({ path: "test-results/project-tree.png" });
+  });
+
+  test("folders open and close one at a time and all at once, and stay as left", async ({
+    page,
+  }) => {
+    await openSeeded(page);
+    await folder(page, "tests").click();
+    await expect(folder(page, "tests")).toHaveAttribute("aria-expanded", "false");
+    await expect(folder(page, "tests")).toContainText("1 file");
+    await expect(file(page, "tests/test_main.py")).toHaveCount(0);
+    await folder(page, "tests").click();
+    await expect(file(page, "tests/test_main.py")).toBeVisible();
+
+    const expand = page.getByRole("button", { name: "Expand all" });
+    const collapse = page.getByRole("button", { name: "Collapse all" });
+    await expect(expand).toBeDisabled();
+    await collapse.click();
+    expect(await rows(page)).toEqual(["app/+", "tests/+", "README.md", "requirements.txt"]);
+    await expect(folder(page, "app")).toContainText("3 files");
+    await expect(collapse).toBeDisabled();
+    await expand.click();
+    expect(await rows(page)).toHaveLength(9);
+
+    // Left with routes closed, it is closed when the conversation is opened again.
+    await folder(page, "app/routes").click();
+    await page.reload();
+    await openStored(page, 3);
+    await page.locator("#project-btn").click();
+    await expect(folder(page, "app/routes")).toHaveAttribute("aria-expanded", "false");
+    await expect(folder(page, "app")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("is one stop on Tab, walked with the arrow keys", async ({ page }) => {
+    await openSeeded(page);
+    const focused = () =>
+      page.evaluate(() => {
+        const el = document.activeElement;
+        return el?.getAttribute("data-path") ?? `${el?.getAttribute("data-folder")}/`;
+      });
+    // One row takes Tab: the file shown.
+    await expect(page.locator('#project-files [tabindex="0"]')).toHaveCount(1);
+    await file(page, "app/routes/health.py").focus();
+    await page.keyboard.press("ArrowUp");
+    expect(await focused()).toBe("app/routes/");
+    await page.keyboard.press("ArrowLeft"); // closes routes
+    await expect(folder(page, "app/routes")).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("ArrowLeft"); // up to app
+    expect(await focused()).toBe("app/");
+    await page.keyboard.press("ArrowRight"); // app is open: into it
+    expect(await focused()).toBe("app/routes/");
+    await page.keyboard.press("ArrowRight"); // opens routes
+    await expect(folder(page, "app/routes")).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("ArrowRight"); // into routes
+    expect(await focused()).toBe("app/routes/health.py");
+    await page.keyboard.press("ArrowDown");
+    expect(await focused()).toBe("app/routes/users.py");
+    await page.keyboard.press("Enter");
+    await expect(file(page, "app/routes/users.py")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#project-viewer")).toContainText("app/routes/users.py");
+    await page.keyboard.press("End");
+    expect(await focused()).toBe("requirements.txt");
+    await page.keyboard.press("Space");
+    await expect(file(page, "requirements.txt")).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Home");
+    expect(await focused()).toBe("app/");
+    await page.keyboard.press("Space");
+    await expect(folder(page, "app")).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator('#project-files [tabindex="0"]')).toHaveCount(1);
+  });
+
+  test("a chip for a file in a closed folder opens its folders and shows it", async ({ page }) => {
+    await openSeeded(page);
+    await page.getByRole("button", { name: "Collapse all" }).click();
+    await page.locator("#project-close").click();
+    await answerOf(page).locator('figure[data-card="file"] .file-chip').click();
+    await expect(page.locator("#project")).toBeVisible();
+    await expect(folder(page, "app")).toHaveAttribute("aria-expanded", "true");
+    await expect(folder(page, "tests")).toHaveAttribute("aria-expanded", "false");
+    await expect(file(page, "app/main.py")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#project-viewer")).toContainText("app/main.py · version 2");
+  });
+
+  test("a file moved or removed down the stream is moved or removed in the tree", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await ask(page, "tidy the project");
+    await push(page, "conversation", { ...CONVERSATION, id: "c0ffee" });
+    const kept = async (path: string, text: string) => {
+      await push(page, "file", { type: "open", path, lang: "python" });
+      await push(page, "file", { type: "line", path, text });
+      await push(page, "file", {
+        type: "close",
+        path,
+        lang: "python",
+        lines: 1,
+        version: 1,
+        kept: true,
+      });
+    };
+    await kept("lib/util.py", "def util(): ...\n");
+    await kept("z.txt", "z\n");
+    await kept("app.py", "print('app')\n");
+    await expect(file(page, "app.py")).toHaveAttribute("aria-selected", "true");
+    expect(await rows(page)).toEqual(["lib/", "  util.py", "app.py", "z.txt"]);
+
+    // The file shown goes where it was moved, and shows what it held there.
+    await push(page, "file", { type: "move", from: "app.py", to: "src/app.py", version: 2 });
+    expect(await rows(page)).toEqual(["lib/", "  util.py", "src/", "  app.py", "z.txt"]);
+    await expect(file(page, "src/app.py")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#project-viewer")).toContainText("src/app.py · version 2");
+    await expect(page.locator("#project-viewer code")).toHaveText("print('app')\n");
+
+    // Removed, the next file in the tree is shown in its place.
+    await push(page, "file", { type: "remove", path: "src/app.py" });
+    await expect(file(page, "src/app.py")).toHaveCount(0);
+    expect(await rows(page)).toEqual(["lib/", "  util.py", "z.txt"]);
+    await expect(file(page, "z.txt")).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#project")).toContainText("2 files");
+    await push(page, "done", DONE);
+    await end(page);
+  });
+});
+
 test.describe("on a narrow screen", () => {
   test.use({ viewport: { width: 900, height: 800 } });
 
@@ -211,10 +396,16 @@ test.describe("on a narrow screen", () => {
     await expect(page.locator("#project")).toHaveCount(0);
     const button = page.locator("#project-btn");
     await expect(button).toBeVisible();
+    // On a narrow screen it controls the drawer.
+    await expect(button).toHaveAttribute("aria-controls", "project-drawer");
     await button.click();
     const drawer = page.locator("#project-drawer");
     await expect(drawer).toBeVisible();
     await expect(drawer.locator("#project-viewer code")).toContainText("print('hi')");
+    await expect(drawer.locator('#project-files [data-path="app.py"]')).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await page.screenshot({ path: "test-results/project-narrow.png" });
     await page.keyboard.press("Escape");
     await expect(drawer).toBeHidden();

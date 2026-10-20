@@ -37,6 +37,24 @@ _BINOPS = {
 }
 
 
+# The most bits an exact value may take at any step: about 3,900 digits,
+# under the 4,300 Python will write out, and small enough that working one
+# out never holds the server up.
+MAX_BITS = 13_000
+
+
+def _bits(value: Fraction) -> int:
+    """The size of an exact value: its numerator's bits and its denominator's."""
+    return value.numerator.bit_length() + value.denominator.bit_length()
+
+
+def _sized(value):
+    """A value, once it is known to be within ``MAX_BITS``."""
+    if isinstance(value, Fraction) and _bits(value) > MAX_BITS:
+        raise CalcError("the result would be too large")
+    return value
+
+
 class CalcError(ValueError):
     pass
 
@@ -74,18 +92,24 @@ def _eval(node):
         op = type(node.op)
         left, right = _eval(node.left), _eval(node.right)
         if op is ast.Pow:
-            # Guard against 9**9**9 turning into a denial of service.
+            # Guard against 9**9**9 turning into a denial of service: an
+            # exact power is worked out only where its size is known to fit.
             if right.denominator != 1 or abs(right) > 512:
-                return _num(float(left) ** float(right))
-            if abs(left) > 10**9 and abs(right) > 8:
-                raise CalcError("exponent too large")
-            return left ** int(right)
+                try:
+                    return _num(float(left) ** float(right))
+                except OverflowError:
+                    raise CalcError("the result would be too large") from None
+            if _bits(left) * abs(int(right)) > MAX_BITS:
+                raise CalcError("the result would be too large")
+            return _sized(left ** int(right))
         fn = _BINOPS.get(op)
         if fn is None:
             raise CalcError("unsupported operator")
         if op in (ast.Div, ast.FloorDiv, ast.Mod) and right == 0:
             raise CalcError("division by zero")
-        return _num(fn(left, right))
+        if op is ast.Mult and _bits(left) + _bits(right) > MAX_BITS:
+            raise CalcError("the result would be too large")
+        return _sized(_num(fn(left, right)))
 
     if isinstance(node, ast.Name):
         if node.id in CONSTS:
@@ -146,6 +170,14 @@ def _format(frac: Fraction) -> tuple[str, bool]:
         return out, True
     value = float(frac)
     return f"{value:,.10g}", False
+
+
+def _float(value: Fraction) -> float | None:
+    """A value as a float, or None for one too large to be one."""
+    try:
+        return float(value)
+    except OverflowError:
+        return None
 
 
 # The most intermediate values kept with a result.
@@ -218,7 +250,7 @@ async def _calculator(expression: str) -> ToolResult:
             "result": text,
             "working": _working(tree),
             "exact": exact,
-            "float": float(value),
+            "float": _float(value),
             "fraction": f"{value.numerator}/{value.denominator}"
             if value.denominator != 1
             else None,

@@ -283,15 +283,19 @@
   }
 
   /* What the state is, said in colour as well as in the word beside it. */
+  /* Caution, too, while the run waits for this visitor's answer: it is
+   their turn, and nothing runs meanwhile. */
   .status[data-phase="cold"] .dot,
   .status[data-phase="loading"] .dot,
   .status[data-phase="queued"] .dot,
+  .status[data-phase="asking"] .dot,
   .status[data-phase="busy"] .dot {
     background: var(--caution);
   }
   .status[data-phase="cold"] .st-state,
   .status[data-phase="loading"] .st-state,
   .status[data-phase="queued"] .st-state,
+  .status[data-phase="asking"] .st-state,
   .status[data-phase="busy"] .st-state {
     color: var(--caution);
   }
@@ -320,6 +324,7 @@
    said, it holds still and the figures do the moving. */
   .status[data-phase="working"] .dot,
   .status[data-phase="queued"] .dot,
+  .status[data-phase="asking"] .dot,
   .status[data-phase="reading"] .dot,
   .status[data-phase="loading"] .dot {
     animation: wait 1.4s var(--ease) infinite alternate;

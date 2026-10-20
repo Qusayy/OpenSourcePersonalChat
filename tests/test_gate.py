@@ -8,9 +8,15 @@ few hundred times, and no wait before a refusal.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
+import io
+import json
 import os
+import secrets
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -18,6 +24,7 @@ from unittest import mock
 try:
     from dotenv import dotenv_values
     from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
 
     from app import gate, main
     from app.api import frontend, pages
@@ -96,6 +103,29 @@ class GateCase(unittest.TestCase):
 
     def draw(self, chain: list[int], client: TestClient | None = None):
         return (client or self.client).post("/api/unlock", json={"chain": chain})
+
+    def enrol(self, code: str, client: TestClient | None = None):
+        return (client or self.client).get(f"/api/enroll/{code}")
+
+    def assert_locked(self, res) -> None:
+        """The answer is the one any /api/ path gives a visitor without a
+        session, to the byte, and it makes nothing."""
+        expected = TestClient(main.app).get("/api/nothing/here")
+        self.assertEqual(expected.status_code, 401)
+        self.assertEqual(res.status_code, expected.status_code)
+        self.assertEqual(res.content, expected.content)
+        for name in ("content-type", "content-length", "cache-control", "vary"):
+            self.assertEqual(res.headers[name], expected.headers[name])
+        self.assertNotIn("set-cookie", res.headers)
+
+
+def cookie_parts(cookie: str) -> set[str]:
+    """A Set-Cookie line's attributes, in lower case, without the value."""
+    return {part.strip().lower() for part in cookie.split(";")[1:]}
+
+
+def device_cookie(res, name: str = "aurora_d") -> str:
+    return next(c for c in res.headers.get_list("set-cookie") if c.startswith(f"{name}="))
 
 
 # ------------------------------------------------------------- the pattern ---
@@ -206,7 +236,10 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(fresh.gate_verifier, "")
 
     def test_the_gate_stands_in_front_of_everything_else(self) -> None:
-        self.assertIs(main.app.user_middleware[0].cls, gate.GateMiddleware)
+        # Only the headers every answer carries are put on outside it, so
+        # that the cover and the gate's refusals carry them as well.
+        order = [entry.cls for entry in main.app.user_middleware]
+        self.assertEqual(order[:2], [main.SecurityHeaders, gate.GateMiddleware])
 
 
 # -------------------------------------------------------------- shut out ---
@@ -379,6 +412,22 @@ class UnlockTests(GateCase):
                 self.assertNotIn("set-cookie", res.headers)
         self.assertEqual(self.client.get("/").text, COVER)
 
+    def test_a_body_nested_deeper_than_the_parser_goes_is_refused_the_same_way(self) -> None:
+        deep = "[" * 2000 + "]" * 2000
+        for name, body in (("arrays", deep), ("in the chain", '{"chain":' + deep + "}")):
+            with self.subTest(name):
+                # Under the cap, so it is the parser that meets it, and the
+                # parser gives up on it with something other than ValueError.
+                self.assertLessEqual(len(body), gate.MAX_BODY)
+                with self.assertRaises(RecursionError):
+                    json.loads(body)
+                res = self.client.post(
+                    "/api/unlock", content=body, headers={"content-type": "application/json"}
+                )
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.content, b'{"ok":false}')
+                self.assertNotIn("set-cookie", res.headers)
+
     def test_a_sealed_gate_refuses_the_right_pattern_the_same_way(self) -> None:
         with_settings(self, gate_verifier="")
         with mock.patch.object(gate, "matches") as matches:
@@ -417,7 +466,7 @@ class UnlockTests(GateCase):
         self.assertEqual(self.client.get("/api/conversations").status_code, 401)
 
     def test_turning_the_gate_off_serves_everyone(self) -> None:
-        with_settings(self, gate="off")
+        with_settings(self, gate="off", allowed_hosts="testserver")
         page = self.client.get("/")
         self.assertIn(TITLE, page.text)
         self.assertEqual(page.headers["cache-control"], "no-cache")
@@ -613,12 +662,482 @@ class WaitTests(GateCase):
             self.draw(CHAIN)
             self.assertEqual(len(slept), 2)
 
+    def test_a_refused_enrol_link_is_held_back_and_one_that_works_is_not(self) -> None:
+        slept: list[float] = []
+
+        async def note(seconds: float) -> None:
+            slept.append(seconds)
+
+        with mock.patch.object(gate, "FLOOR", 1.25), mock.patch.object(gate.asyncio, "sleep", note):
+            self.enrol(secrets.token_urlsafe(24))
+            self.enrol("not-a-code")
+            self.assertEqual(len(slept), 2)
+            for seconds in slept:
+                self.assertGreater(seconds, 0.5)
+            self.assertEqual(self.enrol(gate.new_enrolment(time.time())).status_code, 200)
+            self.assertEqual(len(slept), 2)
+
+
+# ---------------------------------------------------------- known browsers ---
+
+
+class DeviceTests(GateCase):
+    """A browser that keeps opening the site stays known to it."""
+
+    def test_a_new_browser_is_made_known_when_it_opens_the_site(self) -> None:
+        cookie = device_cookie(self.draw(CHAIN))
+        self.assertEqual(
+            cookie_parts(cookie),
+            {"path=/api/unlock", "httponly", "samesite=strict", f"max-age={gate.DEVICE_DAYS * 86400}"},
+        )
+        self.assertIsNotNone(gate.known_device(self.client.cookies["aurora_d"]))
+
+    def test_a_known_browser_is_known_for_longer_each_time_it_opens_the_site(self) -> None:
+        self.draw(CHAIN)
+        token = self.client.cookies["aurora_d"]
+        # Nearly half a year on, and the session long over.
+        nearly = time.time() - (gate.DEVICE_DAYS - 1) * 86400
+        db.write("UPDATE gate_devices SET since = ?", (nearly,))
+        gate.revoke_all()
+
+        again = self.draw(CHAIN)
+        self.assertEqual(again.content, b'{"ok":true}')
+        # The same cookie, sent again to last as long again.
+        cookie = device_cookie(again)
+        self.assertEqual(cookie.split(";")[0], f"aurora_d={token}")
+        self.assertEqual(
+            cookie_parts(cookie),
+            {"path=/api/unlock", "httponly", "samesite=strict", f"max-age={gate.DEVICE_DAYS * 86400}"},
+        )
+        stored = db.rows("SELECT since FROM gate_devices")
+        self.assertEqual(len(stored), 1)
+        self.assertGreater(stored[0]["since"], time.time() - 60)
+        # So the clearing-out of old browsers, a few days later, keeps it.
+        gate.new_device(time.time() + 5 * 86400)
+        self.assertIsNotNone(gate.known_device(token))
+
+    def test_over_https_the_renewed_cookie_is_bound_to_it(self) -> None:
+        client = TestClient(main.app, base_url="https://testserver")
+        self.draw(CHAIN, client)
+        token = client.cookies["__Secure-aurora_d"]
+        gate.revoke_all()
+        cookie = device_cookie(self.draw(CHAIN, client), "__Secure-aurora_d")
+        self.assertEqual(cookie.split(";")[0], f"__Secure-aurora_d={token}")
+        self.assertIn("secure", cookie_parts(cookie))
+
+    def test_a_wrong_pattern_renews_nothing(self) -> None:
+        self.draw(CHAIN)
+        gate.revoke_all()
+        db.write("UPDATE gate_devices SET since = ?", (1_000.0,))
+        res = self.draw(WRONG)
+        self.assertNotIn("set-cookie", res.headers)
+        self.assertEqual(db.rows("SELECT since FROM gate_devices")[0]["since"], 1_000.0)
+
+
+class EnrolTests(GateCase):
+    """A link the server's shell prints, that makes one browser known."""
+
+    def test_a_code_makes_the_browser_that_opens_it_known_once(self) -> None:
+        code = gate.new_enrolment(time.time())
+        res = self.enrol(code)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("This browser is now known to the site.", res.text)
+        self.assertIn("draw the pattern", res.text)
+        self.assertEqual(res.headers["content-type"], "text/html; charset=utf-8")
+        self.assertEqual(res.headers["cache-control"], "no-store")
+        self.assertEqual(
+            cookie_parts(device_cookie(res)),
+            {"path=/api/unlock", "httponly", "samesite=strict", f"max-age={gate.DEVICE_DAYS * 86400}"},
+        )
+        self.assertIsNotNone(gate.known_device(self.client.cookies["aurora_d"]))
+        # It opens nothing by itself.
+        self.assertNotIn("aurora_s", self.client.cookies)
+        self.assertEqual(self.client.get("/").text, COVER)
+        self.assertEqual(self.client.get("/api/conversations").status_code, 401)
+        # A second time, from anywhere, it is any other refusal.
+        other = TestClient(main.app)
+        self.assert_locked(self.enrol(code, other))
+        self.assertNotIn("aurora_d", other.cookies)
+        self.assertEqual(int(db.rows("SELECT COUNT(*) AS n FROM gate_devices")[0]["n"]), 1)
+
+    def test_the_browser_it_makes_known_gets_in_past_strangers(self) -> None:
+        now = time.time()
+        for i in range(gate.STRANGER_ALL[0]):
+            self.assertIsNotNone(gate.admit(f"198.51.100.{i}", None, now))
+        # A new browser, then, is shut out with them, the owner's included.
+        self.assertEqual(self.draw(CHAIN).content, b'{"ok":false}')
+        # The link is not held to that count, and the browser it makes known
+        # is counted on its own.
+        self.assertEqual(self.enrol(gate.new_enrolment(now)).status_code, 200)
+        self.assertEqual(self.draw(CHAIN).content, b'{"ok":true}')
+        self.assertIn(TITLE, self.client.get("/").text)
+
+    def test_a_code_that_has_expired_is_refused(self) -> None:
+        code = gate.new_enrolment(time.time() - gate.ENROL_MINUTES * 60 - 1)
+        self.assert_locked(self.enrol(code))
+        self.assertNotIn("aurora_d", self.client.cookies)
+        # A minute inside its time, it works.
+        fresh = gate.new_enrolment(time.time() - (gate.ENROL_MINUTES - 1) * 60)
+        self.assertEqual(self.enrol(fresh).status_code, 200)
+
+    def test_only_the_hash_of_a_code_is_kept(self) -> None:
+        code = gate.new_enrolment(time.time())
+        # At least 128 bits, in the characters a path carries as they are.
+        self.assertGreaterEqual(len(code), 22)
+        self.assertIsNotNone(gate.ENROL_CODE.fullmatch(code))
+        stored = db.rows("SELECT * FROM gate_enrolments")
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["code"], hashlib.sha256(code.encode("ascii")).hexdigest())
+        for value in stored[0].values():
+            self.assertNotIn(code, str(value))
+        path = db.settings.resolved_db_path
+        for file in (path, path.with_name(path.name + "-wal")):
+            if file.exists():
+                self.assertNotIn(code.encode("ascii"), file.read_bytes())
+
+    def test_every_refused_link_is_the_same_answer(self) -> None:
+        used = gate.new_enrolment(time.time())
+        self.assertEqual(self.enrol(used, TestClient(main.app)).status_code, 200)
+        expired = gate.new_enrolment(time.time() - 3600)
+        for name, code in (
+            ("never made", secrets.token_urlsafe(24)),
+            ("used", used),
+            ("expired", expired),
+            ("too short", "abc"),
+            ("not a code", "a" * 20 + "!"),
+            ("more path after it", f"{secrets.token_urlsafe(24)}/more"),
+            ("nothing", ""),
+        ):
+            with self.subTest(name):
+                client = TestClient(main.app)
+                self.assert_locked(self.enrol(code, client))
+                self.assertNotIn("aurora_d", client.cookies)
+
+    def test_only_a_get_uses_a_code(self) -> None:
+        code = gate.new_enrolment(time.time())
+        self.assertEqual(self.client.head(f"/api/enroll/{code}").status_code, 401)
+        self.assertEqual(self.client.post(f"/api/enroll/{code}").status_code, 401)
+        self.assertEqual(self.enrol(code).status_code, 200)
+
+    def test_codes_are_counted_like_guesses(self) -> None:
+        for _ in range(gate.STRANGER_EACH[0][0]):
+            self.assert_locked(self.enrol(secrets.token_urlsafe(24)))
+        good = gate.new_enrolment(time.time())
+        # That address is out of tries: even a good code is not looked at.
+        with mock.patch.object(gate, "redeem") as redeem:
+            self.assert_locked(self.enrol(good))
+        redeem.assert_not_called()
+        # Its guesses at the pattern are spent with them.
+        self.assertEqual(self.draw(CHAIN).content, b'{"ok":false}')
+        # Another address is not held to it.
+        other = TestClient(main.app, client=("203.0.113.7", 50000))
+        self.assertEqual(self.enrol(good, other).status_code, 200)
+
+    def test_what_is_logged_names_the_visitor_and_never_the_code(self) -> None:
+        code = gate.new_enrolment(time.time())
+        with mock.patch.object(gate.log, "disabled", False):
+            with self.assertLogs("aurora.gate", level="WARNING") as logged:
+                self.enrol(code)
+                self.enrol(code)
+        text = "\n".join(logged.output)
+        self.assertIn("a browser was enrolled from", text)
+        self.assertIn("an enrol link that did not work, from", text)
+        self.assertNotIn(code, text)
+
+    def test_a_link_that_works_is_not_counted_against_its_maker(self) -> None:
+        self.enrol(gate.new_enrolment(time.time()))
+        self.assertEqual(int(db.rows("SELECT COUNT(*) AS n FROM gate_attempts")[0]["n"]), 0)
+
+    def test_the_link_comes_before_the_session(self) -> None:
+        self.draw(CHAIN)
+        res = self.enrol(gate.new_enrolment(time.time()))
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("now known", res.text)
+
+    def test_over_https_the_cookie_is_bound_to_it(self) -> None:
+        client = TestClient(main.app, base_url="https://testserver")
+        res = self.enrol(gate.new_enrolment(time.time()), client)
+        cookie = device_cookie(res, "__Secure-aurora_d")
+        self.assertIn("secure", cookie_parts(cookie))
+        self.assertEqual(self.draw(CHAIN, client).content, b'{"ok":true}')
+
+    def test_the_command_prints_a_link_that_works(self) -> None:
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(gate.main(["app.gate", "enroll"]), 0)
+        path, explanation = printed.getvalue().strip().split("\n")
+        self.assertTrue(path.startswith("/api/enroll/"))
+        self.assertIn(f"{gate.ENROL_MINUTES} minutes", explanation)
+        self.assertIn("once", explanation)
+        self.assertIn("enrol links not yet used: 1", gate.status())
+        self.assertEqual(self.client.get(path).status_code, 200)
+        self.assertIn("enrol links not yet used: 0", gate.status())
+        self.assertIn("browsers it knows: 1", gate.status())
+
+    def test_the_command_is_in_the_help(self) -> None:
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(gate.main(["app.gate", "nonsense"]), 2)
+        self.assertIn("python -m app.gate enroll", printed.getvalue())
+
+
+# --------------------------------------------------------------- over https ---
+
+
+class HttpsOnlyTests(GateCase):
+    """With AURORA_GATE_HTTPS_ONLY on, nothing is taken in the clear but from here."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        with_settings(self, gate_https_only=True)
+
+    def test_the_pattern_in_the_clear_from_elsewhere_is_refused_unread(self) -> None:
+        for name, client in (
+            ("the test client", self.client),
+            ("an address", TestClient(main.app, client=("203.0.113.9", 50000))),
+        ):
+            with self.subTest(name):
+                with mock.patch.object(gate, "matches") as matches:
+                    res = self.draw(CHAIN, client)
+                matches.assert_not_called()
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.content, b'{"ok":false}')
+                self.assertNotIn("set-cookie", res.headers)
+                self.assertEqual(client.get("/").text, COVER)
+
+    def test_over_https_it_opens(self) -> None:
+        client = TestClient(main.app, base_url="https://testserver", client=("203.0.113.9", 50000))
+        self.assertEqual(self.draw(CHAIN, client).content, b'{"ok":true}')
+
+    def test_from_this_machine_it_opens_in_the_clear(self) -> None:
+        for address in ("127.0.0.1", "::1"):
+            with self.subTest(address=address):
+                client = TestClient(main.app, client=(address, 50000))
+                self.assertEqual(self.draw(CHAIN, client).content, b'{"ok":true}')
+
+    def test_a_proxy_here_passing_on_someone_elsewhere_is_not_this_machine(self) -> None:
+        client = TestClient(main.app, client=("127.0.0.1", 50000))
+        for name, value in (
+            ("x-forwarded-for", "203.0.113.9"),
+            ("x-forwarded-for", "127.0.0.1, 203.0.113.9"),
+            ("x-real-ip", "203.0.113.9"),
+            ("forwarded", "for=203.0.113.9;proto=http"),
+            ("forwarded", 'for="[2001:db8::1]:4711"'),
+            ("forwarded", "for=unknown"),
+            ("forwarded", "proto=http"),
+        ):
+            with self.subTest(name=name, value=value):
+                res = client.post("/api/unlock", json={"chain": CHAIN}, headers={name: value})
+                self.assertEqual(res.content, b'{"ok":false}')
+        # A proxy here passing on a request made here is still here.
+        res = client.post("/api/unlock", json={"chain": CHAIN}, headers={"x-forwarded-for": "127.0.0.1"})
+        self.assertEqual(res.content, b'{"ok":true}')
+
+    def test_an_enrol_link_in_the_clear_from_elsewhere_is_refused_and_kept(self) -> None:
+        code = gate.new_enrolment(time.time())
+        self.assert_locked(self.enrol(code))
+        client = TestClient(main.app, base_url="https://testserver")
+        self.assertEqual(self.enrol(code, client).status_code, 200)
+
+    def test_off_the_clear_is_taken_as_before(self) -> None:
+        with_settings(self, gate_https_only=False)
+        self.assertEqual(self.draw(CHAIN).content, b'{"ok":true}')
+
+
+class ThisMachineTests(unittest.TestCase):
+    def scope(self, address: str | None, *headers: tuple[bytes, bytes]) -> dict:
+        return {"client": (address, 1) if address else None, "headers": list(headers)}
+
+    def test_loopback_with_nothing_forwarded_is_this_machine(self) -> None:
+        for address in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            with self.subTest(address=address):
+                self.assertTrue(gate.from_this_machine(self.scope(address)))
+
+    def test_anywhere_else_is_not(self) -> None:
+        for address in ("203.0.113.9", "10.0.0.1", "2001:db8::1", "testclient", "localhost", None):
+            with self.subTest(address=address):
+                self.assertFalse(gate.from_this_machine(self.scope(address)))
+
+    def test_every_forwarded_line_is_read(self) -> None:
+        scope = self.scope(
+            "127.0.0.1",
+            (b"x-forwarded-for", b"127.0.0.1"),
+            (b"X-Forwarded-For", b"203.0.113.9"),
+        )
+        self.assertFalse(gate.from_this_machine(scope))
+        scope = self.scope("127.0.0.1", (b"forwarded", b'for="[::1]:4711", for=127.0.0.1'))
+        self.assertTrue(gate.from_this_machine(scope))
+
+
+# ------------------------------------------------------------ off, by name ---
+
+
+class HostTests(GateCase):
+    """With the gate off, only names this machine has, or that are listed."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        with_settings(self, gate="off", allowed_hosts="")
+
+    def at(self, host: str, path: str = "/api/conversations", method: str = "GET"):
+        # The Host header itself: the test client cannot read an IPv6 address
+        # out of a base URL.
+        return TestClient(main.app).request(method, path, headers={"host": host})
+
+    def test_this_machine_s_own_names_are_answered(self) -> None:
+        for host in ("localhost:8000", "LocalHost", "127.0.0.1:8000", "127.0.0.1", "[::1]:8000", "[::1]"):
+            with self.subTest(host=host):
+                res = self.at(host)
+                self.assertEqual(res.status_code, 200)
+                self.assertIn(TITLE, res.text)
+
+    def test_another_name_is_refused(self) -> None:
+        for host in (
+            "testserver",
+            "rebound.example:8000",
+            "localhost.rebound.example",
+            "127.0.0.1.nip.io",
+            "[::2]:8000",
+        ):
+            for path in ("/api/conversations", "/"):
+                with self.subTest(host=host, path=path):
+                    res = self.at(host, path)
+                    self.assertEqual(res.status_code, 421)
+                    self.assertEqual(res.headers["content-type"], "text/plain; charset=utf-8")
+                    self.assertEqual(res.content, gate.MISDIRECTED)
+                    self.assertNotIn(TITLE, res.text)
+        res = self.at("rebound.example", "/", "HEAD")
+        self.assertEqual((res.status_code, res.content), (421, b""))
+
+    def test_names_in_the_setting_are_answered_whatever_their_case(self) -> None:
+        with_settings(self, allowed_hosts=" Aurora.Example , testserver,[2001:db8::5]:8000")
+        for host in ("aurora.example:8000", "AURORA.example", "testserver", "[2001:DB8::5]", "localhost"):
+            with self.subTest(host=host):
+                self.assertEqual(self.at(host).status_code, 200)
+        self.assertEqual(self.at("elsewhere.example").status_code, 421)
+
+    def test_a_request_without_a_name_is_not_answered(self) -> None:
+        for host in (None, "", " ", "[::1", ":8000"):
+            with self.subTest(host=host):
+                self.assertFalse(gate.answers_to(host))
+
+    def test_a_socket_to_another_name_is_closed(self) -> None:
+        client = TestClient(main.app, base_url="http://rebound.example")
+        with self.assertRaises(WebSocketDisconnect) as closed:
+            with client.websocket_connect("/ws"):
+                pass
+        self.assertEqual(closed.exception.code, 1008)
+
+    def test_with_the_gate_on_the_name_is_not_asked(self) -> None:
+        with_settings(self, gate="on")
+        self.assertEqual(self.at("rebound.example", "/").text, COVER)
+
+
+# ----------------------------------------------------------------- headers ---
+
+
+HEADERS = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "frame-ancestors 'none'",
+}
+
+
+class HeaderTests(GateCase):
+    def assert_headers(self, res) -> None:
+        for name, value in HEADERS.items():
+            self.assertEqual(res.headers.get_list(name), [value], name)
+
+    def test_what_a_visitor_is_given_carries_them(self) -> None:
+        for name, res in (
+            ("the cover", self.client.get("/")),
+            ("a locked /api/ path", self.client.get("/api/conversations")),
+            ("a refused pattern", self.draw(WRONG)),
+            ("a refused enrol link", self.enrol(secrets.token_urlsafe(24))),
+            ("nothing there", self.client.get("/favicon.ico")),
+            ("a built file", self.client.get("/assets/index-abc123.js")),
+            ("the cover, by HEAD", self.client.head("/")),
+        ):
+            with self.subTest(name):
+                self.assert_headers(res)
+
+    def test_what_a_session_is_given_carries_them(self) -> None:
+        opened = self.draw(CHAIN)
+        for name, res in (
+            ("the opening", opened),
+            ("a page", self.client.get("/")),
+            ("the api", self.client.get("/api/conversations")),
+            ("the application's 404", self.client.get("/api/no/such/thing")),
+        ):
+            with self.subTest(name):
+                self.assert_headers(res)
+
+    def test_the_gate_off_carries_them_too(self) -> None:
+        with_settings(self, gate="off", allowed_hosts="testserver")
+        self.assert_headers(self.client.get("/"))
+        self.assert_headers(TestClient(main.app, base_url="http://rebound.example").get("/"))
+
+    def test_a_header_the_response_sets_is_kept_and_a_stream_goes_through(self) -> None:
+        start = {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"X-Frame-Options", b"SAMEORIGIN"), (b"content-security-policy", b"default-src 'self'")],
+        }
+        pieces = [
+            {"type": "http.response.body", "body": b"one", "more_body": True},
+            {"type": "http.response.body", "body": b"two", "more_body": False},
+        ]
+
+        async def inner(scope, receive, send) -> None:
+            await send(start)
+            for piece in pieces:
+                await send(piece)
+
+        sent: list[dict] = []
+
+        async def send(message) -> None:
+            sent.append(message)
+
+        async def receive() -> dict:
+            return {"type": "http.request"}
+
+        asyncio.run(main.SecurityHeaders(inner)({"type": "http"}, receive, send))
+        headers = [(bytes(k).lower(), v) for k, v in sent[0]["headers"]]
+        self.assertEqual([v for k, v in headers if k == b"x-frame-options"], [b"SAMEORIGIN"])
+        self.assertEqual([v for k, v in headers if k == b"content-security-policy"], [b"default-src 'self'"])
+        self.assertIn((b"x-content-type-options", b"nosniff"), headers)
+        self.assertIn((b"referrer-policy", b"no-referrer"), headers)
+        # The body is handed on as it was sent, piece by piece.
+        self.assertEqual(len(sent), 3)
+        for given, passed in zip(pieces, sent[1:]):
+            self.assertIs(passed, given)
+        # The original start message is not changed in place.
+        self.assertEqual(len(start["headers"]), 2)
+
+    def test_anything_but_http_goes_through_untouched(self) -> None:
+        seen = []
+
+        async def inner(scope, receive, send) -> None:
+            seen.append(send)
+
+        async def send(message) -> None:
+            pass
+
+        asyncio.run(main.SecurityHeaders(inner)({"type": "lifespan"}, None, send))
+        self.assertIs(seen[0], send)
+
 
 # ----------------------------------------------------------------- through ---
 
 
 class GatedChatTests(ChatCase):
     """A request that is let through reaches the application as it came."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The test client's name, which the gate, off, does not otherwise know.
+        with_settings(self, allowed_hosts="testserver")
 
     def test_a_stream_through_the_gate_is_the_stream_without_it(self) -> None:
         open_stream = self.chat("What is a curtain made of?")
@@ -641,7 +1160,7 @@ class CommandTests(GateCase):
         self.assertIn("gate: armed", text)
         self.assertIn("sessions open: 1", text)
         self.assertIn("strangers: 1 of 100", text)
-        self.assertIn("browsers that have opened it: 1", text)
+        self.assertIn("browsers it knows: 1", text)
         self.assertNotIn(self.client.cookies["aurora_s"], text)
 
     def test_what_is_logged_names_the_visitor_and_never_the_pattern(self) -> None:

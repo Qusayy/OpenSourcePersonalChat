@@ -119,12 +119,15 @@ def _count(value: Any, current: int | None) -> int | None:
 
 
 class LlamaServer:
-    def __init__(self, url: str, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, url: str, transport: httpx.BaseTransport | None = None, key: str = "") -> None:
+        """``key`` is the one the server was started with (--api-key-file),
+        sent with every request; empty, none is sent."""
         self.url = url.rstrip("/")
         self._client = httpx.Client(
             base_url=self.url,
             timeout=httpx.Timeout(READ_TIMEOUT, connect=CONNECT_TIMEOUT),
             transport=transport,
+            headers={"Authorization": f"Bearer {key}"} if key else None,
         )
 
     @property

@@ -72,8 +72,8 @@ class Server:
             raise answer
         return answer
 
-    def client(self) -> LlamaServer:
-        return LlamaServer(URL, transport=httpx.MockTransport(self))
+    def client(self, key: str = "") -> LlamaServer:
+        return LlamaServer(URL, transport=httpx.MockTransport(self), key=key)
 
     def body(self, index: int = 0) -> dict:
         return json.loads(self.asked[index].content)
@@ -237,6 +237,42 @@ class ReadyTests(unittest.TestCase):
     def test_the_port_is_read_from_the_address(self) -> None:
         self.assertEqual(LlamaServer(URL).port, 8081)
         self.assertEqual(LlamaServer("http://localhost").port, 80)
+
+
+class KeyTests(unittest.TestCase):
+    """A server started with a key is asked with it, every time."""
+
+    def ask_everything(self, key: str) -> list[httpx.Request]:
+        server = Server(
+            httpx.Response(200, json={"status": "ok"}),
+            httpx.Response(200, json={"tokens": [1, 2]}),
+            httpx.Response(200, stream=Body(sse(piece("Hi"), last()))),
+        )
+        client = server.client(key=key)
+        self.assertTrue(client.ready())
+        self.assertEqual(client.tokenize("Hi"), 2)
+        self.assertEqual(list(client.stream({"prompt": "x"})), ["Hi"])
+        return server.asked
+
+    def test_with_a_key_every_request_carries_it(self) -> None:
+        asked = self.ask_everything("s3cret")
+        self.assertEqual([r.url.path for r in asked], ["/health", "/tokenize", "/completion"])
+        self.assertEqual([r.headers.get("authorization") for r in asked], ["Bearer s3cret"] * 3)
+
+    def test_without_one_no_request_says_anything_about_a_key(self) -> None:
+        for request in self.ask_everything(""):
+            self.assertNotIn("authorization", request.headers)
+
+    def test_the_engine_hands_the_server_the_key_it_is_configured_with(self) -> None:
+        from unittest import mock
+
+        from app.config import settings
+        from app.llm.core import Engine
+
+        for key in ("s3cret", ""):
+            with self.subTest(key=key), mock.patch("app.llm.core.LlamaServer") as made:
+                Engine(settings.model_copy(update={"llm_url": URL, "llm_key": key}))._connect(URL)
+                made.assert_called_once_with(URL, key=key)
 
 
 if __name__ == "__main__":

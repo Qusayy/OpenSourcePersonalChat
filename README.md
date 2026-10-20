@@ -50,7 +50,10 @@ deploy/                       systemd units (the app, the model server), the mod
 Two branches matter. **`master`** is the source. **`release`** is the same
 source with the interface already built in `web/dist`; CI makes it from every
 commit on `master` that passes its tests. A server runs `release` and never
-needs Node.
+needs Node. The job that pushes `release` builds nothing and installs nothing:
+it publishes what the read-only build job made, and holds the push token only
+for the push, so no package's install script ever runs where it could write to
+the repository. Every action the workflow uses is pinned by commit.
 
 ---
 
@@ -122,9 +125,11 @@ one: the slot and the queue live in the app, and a second worker would send the
 server work the first one does not know about.
 
 **If all you see is a night sky,** the gate is closed: the site is served only
-to a browser that has drawn the pattern, and with no `.env` there is no
-pattern to draw. `cp .env.example .env` (step 2) sets `AURORA_GATE=off`, which
-serves it to everyone. See [The gate](#the-gate).
+to a browser that has drawn the pattern, and with no verifier there is no
+pattern to draw. On a development machine, uncomment `AURORA_GATE=off` in the
+`.env` you copied in step 2; it serves the site to this machine, and to no
+other name unless `AURORA_ALLOWED_HOSTS` lists it. Never on a server. See
+[The gate](#the-gate).
 
 ### Preview the UI without the model
 
@@ -287,6 +292,18 @@ answer it says the server is not answering, and comes back by itself when it
 does. The About page then says the model is held by `llama-server`, and every
 memory figure counts both processes.
 
+The server listens on loopback only, but any process on the machine can use
+it. To have it answer only the app, give both the same key, the server's in a
+file (on its command line it would show in `ps`):
+
+```bash
+cd /srv/aurora
+openssl rand -hex 32 | sudo -u aurora tee llm.key >/dev/null && sudo chmod 600 llm.key
+echo "AURORA_LLM_KEY=$(sudo cat llm.key)" | sudo tee -a .env >/dev/null
+# and add  --api-key-file /srv/aurora/llm.key  to AURORA_LLM_ARGS in .env
+sudo systemctl restart aurora-llm aurora
+```
+
 Back to the model in the app:
 
 ```bash
@@ -370,20 +387,28 @@ runs under [bubblewrap](https://github.com/containers/bubblewrap), as the
 app's own user: no network, nothing of the server's files but `/usr` and the
 sandbox's own read-only venv, an empty `/work` and `/tmp` that go when it
 ends, and kernel limits on memory (1 GiB), CPU time (10 s), file size and open
-files, with a wall clock that kills the whole process group. What it prints is
-cut off at 64 KB. Where bubblewrap cannot run a program, the tool is not
-offered at all; nothing ever runs outside it.
+files, with a wall clock that kills the whole process group. It cannot make a
+user namespace of its own (`--disable-userns`), a seccomp filter refuses the
+kernel calls a program has no use for and an escape would need (`unshare`,
+`mount`, `bpf`, `io_uring`, `ptrace`, `keyctl` and the like), it may start at
+most 64 processes, and the kernel's out-of-memory killer takes it before the
+app. What it prints is cut off at 64 KB. Where bubblewrap cannot run a
+program, the tool is not offered at all; nothing ever runs outside it.
 
 ```bash
 cd /srv/aurora
-bash deploy/build-sandbox.sh   # bubblewrap, and numpy, pandas and sympy in /opt/aurora-sandbox/venv
+bash deploy/build-sandbox.sh   # bubblewrap, the seccomp filter, and numpy, pandas and sympy in /opt/aurora-sandbox/venv
 sudo cp deploy/aurora.service /etc/systemd/system/ && sudo systemctl daemon-reload
 sudo systemctl restart aurora
 ```
 
 The script checks that bubblewrap is not setuid and that unprivileged user
-namespaces are on, builds the venv owned by root, and runs one program in the
-same jail as the app's user. The unit's `TasksMax` bounds a fork bomb.
+namespaces are on, builds the venv owned by root, writes the filter to
+`/opt/aurora-sandbox/seccomp.bpf`, and runs one program in the same jail as
+the app's user, checking that it cannot make a namespace. Run it again after
+a pull that changes it. Until the filter exists the app runs programs without
+it and says so in the journal. It needs bubblewrap 0.8 or later; Debian 12
+has 0.8.0. The unit's `TasksMax` bounds a fork bomb as well.
 
 The model writes the program as its call's `code`, raw text in its call
 format, so nothing has to be escaped, and the program is sampled as code. A
@@ -459,14 +484,14 @@ AURORA_GATE_VERIFIER=gate1.300000.<salt>.<hash>
 Put it in `/srv/aurora/.env`, remove any `AURORA_GATE=off`, and restart:
 
 ```bash
-sudo chown aurora:aurora /srv/aurora/.env     # the service reads it as aurora
-sudo chmod 600 /srv/aurora/.env
+sudo chown root:aurora /srv/aurora/.env      # the service reads it as aurora, and cannot change it
+sudo chmod 640 /srv/aurora/.env
 sudo systemctl restart aurora
 sudo -u aurora .venv/bin/python -m app.gate status
 ```
 
 `chmod 600` alone on a file root owns leaves the service unable to read its
-own settings, and it does not start.
+own settings, and it does not start; the group read is what lets it.
 
 The pattern never leaves the browser it was drawn in, and the setup page is
 not part of any build. **The line is as good as the pattern**: there are few
@@ -477,22 +502,33 @@ file. To change the pattern, replace the line and restart; every session ends.
 python -m app.gate status     # which way the gate is set, open sessions, guesses counted
 python -m app.gate revoke     # end every session now
 python -m app.gate reset      # forget the guesses counted so far
+python -m app.gate enroll     # a one-time link that makes a new browser known
 ```
+
+On the server these run as `sudo -u aurora .venv/bin/python -m app.gate …`.
+`enroll` prints `/api/enroll/<code>`: open it once, within fifteen minutes, in
+the browser the site should know. That browser then has guesses of its own,
+apart from strangers', and still has to draw the pattern. It is the way in
+from a new phone or a cleared browser on a day strangers have used up their
+guesses.
 
 ### What it does and does not keep out
 
 A session lasts until the browser closes, twelve hours at most, and an hour
 if nothing is asked of the server. A browser that has opened the site before
 is counted apart from strangers, so people playing with the sky cannot use up
-its owner's tries. A wrong pattern, a throttled one and a malformed request
-get the same answer after the same wait.
+its owner's tries; it stays known for 180 days from the last time it opened
+the site. A wrong pattern, a throttled one and a malformed request get the
+same answer after the same wait.
 
 What this does not do:
 
 * **Over plain HTTP it keeps out strangers, not eavesdroppers.** The pattern
   and the session cookie cross the network as they are. Anyone on the path
   can read either. Put TLS in front before trusting it with anything that
-  matters; see below.
+  matters; see below. Once the site is served over https,
+  `AURORA_GATE_HTTPS_ONLY=true` refuses the pattern (and enrol links) over
+  plain http unless they come from the server itself.
 * **A drawn pattern can be watched.** The lines are on the screen while it is
   drawn, and a finger leaves a trail on glass.
 * **It hides nothing that was public before it.** Anything fetched or
@@ -550,6 +586,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 |---|---|---|
 | `AURORA_MODEL_PATH` | `./models/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` | |
 | `AURORA_LLM_URL` | *(unset)* | unset, the model is loaded into the app. An address (`http://127.0.0.1:8081`) sends every pass to the llama-server there; see [The model server](#the-model-server) |
+| `AURORA_LLM_KEY` | *(unset)* | the key the model server asks every request for, when it is started with `--api-key-file`; see [The model server](#the-model-server) |
 | `AURORA_N_CTX` | `16384` | the window: the tools' menu alone is about 2,000 tokens of it. ~0.5 GB of KV cache for Qwen3.5-4B, ~450 MB for Qwen2.5-1.5B |
 | `AURORA_N_THREADS` | `0` | `0` is every CPU the service may use (affinity and cgroup quota, measured at startup). A number pins it. Measured on a 4-vCPU server: 8.9 tok/s at 2 threads, 17.1 at 4 |
 | `AURORA_N_BATCH` | `256` | prompt-eval batch; 512 raises peak RAM for little gain here |
@@ -581,12 +618,15 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 | `AURORA_GATE_VERIFIER` | *(unset)* | the line the setup page prints for the pattern. Server's own `.env` only. Unset or malformed, nothing opens the site |
 | `AURORA_GATE_SESSION_HOURS` | `12` | the longest a session lasts, however much it is used |
 | `AURORA_GATE_IDLE_MINUTES` | `60` | how long a session lasts with nothing asked of the server |
+| `AURORA_GATE_HTTPS_ONLY` | `false` | `true` refuses the pattern and enrol links over plain http unless they come from the server itself. Turn it on once the site has TLS |
+| `AURORA_ALLOWED_HOSTS` | *(unset)* | with `AURORA_GATE=off`, the names the site answers to besides `localhost`, `127.0.0.1` and `::1`, comma-separated. Any other name gets `421`, so a page elsewhere cannot point its own name at a development server |
+| `AURORA_CONFIRM_SECONDS` | `600` | how long the agent waits for you to allow a change it wants to make after reading the web, before it counts as no |
 
 ---
 
 ## Tools
 
-Eighteen tools, no API keys anywhere:
+Twenty tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -605,6 +645,8 @@ Eighteen tools, no API keys anywhere:
 | `read_file` | one file of this conversation's project, as it stands, with line numbers | — |
 | `write_file` | create a file of the project, or replace one whole | — |
 | `edit_file` | replace one exact piece of a file with another, and leave the rest | — |
+| `move_file` | move or rename a file, or a whole folder; never onto a file that is there | — |
+| `delete_file` | delete a file, or a whole folder | — |
 | `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
 | `remember` · `recall` | notes kept on the user's word; see *Notes* | — |
 
@@ -651,7 +693,12 @@ the next message means the last list the conversation was shown.
 `edit_file` are kept in the conversation's project (every version, in
 `project_files`), and the page shows them in a panel beside the thread on a
 wide screen, or a drawer on a narrow one, filling in line by line as the
-model writes them. In the chat each change is a card that opens the file;
+model writes them. The panel is a folder tree: folders first, each opening
+and closing, Expand all and Collapse all, and the file you pick below it.
+As a project grows the model reorganises it with `move_file` (a file or a
+whole folder, renamed or moved; never onto a file that is there) and
+`delete_file`; a deleted file keeps its old versions, and a file written at
+its path later goes on from its number. In the chat each change is a card that opens the file;
 an edit shows the lines it took out and put in. **Download zip** gets all of
 them, newest versions, in one folder named for the conversation. Each message
 is told the project's files by name and version. A change asked for is that
@@ -787,14 +834,26 @@ else wrote (a page, an article, notes shared across the site), the model may
 not keep one: a page that says "remember that…" is refused like an address the
 user never gave. A `/remember` typed by the user is always kept.
 
+The same goes, one step softer, for anything that changes the project or runs
+code. Once a message has read text somebody else wrote, a file the agent
+wants to write, edit, move or delete, or a program it wants to run, is put to
+you first, in the reply: **Allow**, **Allow for this reply**, or **Don't
+allow**. Nothing happens until you answer, and no answer in ten minutes
+(`AURORA_CONFIRM_SECONDS`) is a no. A page that says "now fix main.py like
+this" or "run this" then gets no further than a question you can turn down.
+A command you type yourself, `/python …`, is your own word and is not asked.
+
 ### Safety
 
 `read_url` is the only tool that makes the server fetch a user-supplied
 address, so it resolves the hostname first and refuses any private, loopback,
 link-local, CGNAT, reserved or multicast address — including
-`169.254.169.254`, the cloud metadata endpoint. Redirects are followed by hand,
-maximum three hops, re-validating at each one. Bodies are capped at 2 MB and
-only `text/html` / `text/plain` is read.
+`169.254.169.254`, the cloud metadata endpoint. The connection then goes to
+the address that was checked, with the site's name sent as `Host` and its
+certificate checked against it, so a name that answers with a public address
+for the check and a private one a moment later gets nowhere. Redirects are
+followed by hand, maximum three hops, re-validating and pinning at each one.
+Bodies are capped at 2 MB and only `text/html` / `text/plain` is read.
 
 That guard is about where an address points. It says nothing about an address
 that points somewhere public and was put there by a page the model read: "now
@@ -809,11 +868,15 @@ What a tool returns is given to the model as reading matter: wrapped in a
 `<tool_response>` tag, with the model told once that what is inside one is
 material and never an instruction, and with anything in it that looks like
 that tag, like a call of its own, or like a control token of the chat format
-taken out first. That is a convention and not a wall, which is why the rule
-above is enforced in code.
+taken out first, until none is left (one hidden inside another does not
+survive its removal), and the brackets of any control token left half-written
+broken apart. That is a convention and not a wall, which is why the rules
+above are enforced in code.
 
 The calculator parses with `ast` and a node whitelist. It never calls `eval`,
-and rejects attribute access, comprehensions, lambdas and `__import__`.
+and rejects attribute access, comprehensions, lambdas and `__import__`. No
+exact value it works out may pass about 3,900 digits, checked before each
+power is taken, so no expression can hold the server up.
 
 Set `AURORA_ALLOW_OUTBOUND=false` to drop every network tool from the registry,
 the menu and the UI in one move.

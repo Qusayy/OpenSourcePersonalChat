@@ -261,8 +261,9 @@ export const aurora = {
    * "thinking" and "writing" are the model producing tokens: those light it.
    * "working" is the moment between sending and the server saying which it
    * will be, or a tool at work, and the answer may be "queued", which is
-   * someone else's work and not this visitor's. Nothing is lit until the
-   * server has said the model is on it.
+   * someone else's work and not this visitor's, or "asking", which is the
+   * visitor's own turn. Nothing is lit until the server has said the model
+   * is on it.
    */
   phase(key: string | null | undefined): void {
     if (!host) return;

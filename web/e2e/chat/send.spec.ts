@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+import type { ConfirmEvent } from "@/lib/types";
 import { reseed } from "../support";
 import {
   aborted,
@@ -505,6 +506,229 @@ test.describe("against a stream the test controls", () => {
     const thought = answerOf(page).locator('[data-part="thought"]');
     await expect(thought.locator("summary")).toHaveText(/^Thought for \d+ s$/);
     await expect(answerOf(page).locator('[data-part="cost"]')).toContainText("stopped");
+  });
+
+  test.describe("a change put to you after reading the web", () => {
+    /** Answers to POST /api/confirm, kept as they were sent. */
+    async function answers(page: Page, status = 200) {
+      const sent: Array<{ url: string; body: unknown }> = [];
+      await page.route("**/api/confirm/**", async (route) => {
+        const request = route.request();
+        sent.push({ url: new URL(request.url()).pathname, body: request.postDataJSON() });
+        await route.fulfill(
+          status === 200 ? { json: { answered: true } } : { status, json: { detail: "no" } },
+        );
+      });
+      return sent;
+    }
+
+    /** A run that searched the web, said a line, and now wants to write a file. */
+    async function askToWrite(page: Page, ask: Partial<ConfirmEvent> = {}) {
+      await push(page, "conversation", CONVERSATION);
+      await reply(page, 1, { called: "Web search" });
+      await called(page, 0, {
+        label: "Web search",
+        tool: "web_search",
+        card: "search",
+        data: { query: "fastapi app", items: [] },
+      });
+      await reply(page, 2, { say: "I'll write the app.", called: "Write file" });
+      await push(page, "confirm", {
+        id: "confirm-1",
+        tool: "write_file",
+        label: "Write file",
+        what: "app/main.py",
+        because: "Web search",
+        ...ask,
+      });
+    }
+
+    const allowed = (status: "ok" | "failed" | "stopped", detail: string) => ({
+      id: "confirm-1",
+      kind: "confirm",
+      status,
+      label: status === "ok" ? "Allowed" : "Not allowed",
+      glyph: "?",
+      tool: "write_file",
+      detail,
+      ms: 2400,
+    });
+
+    test("is asked where it came, with focus on its answer, and Allow sends it", async ({
+      page,
+    }) => {
+      const sent = await answers(page);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      const asking = answerOf(page).locator('[data-part="confirm"]');
+      await expect(asking).toHaveText(
+        "Before it goes on, the agent wants to write app/main.py. It read a web search first, so check this is what you asked for and not something it read there.AllowAllow for this replyDon't allow",
+      );
+      await expect(asking.locator("b")).toHaveText("write app/main.py");
+      await expect(asking).toHaveAttribute("role", "group");
+      await expect(asking).toHaveAccessibleName(/wants to write app\/main\.py/);
+      const buttons = asking.getByRole("button");
+      await expect(buttons).toHaveText(["Allow", "Allow for this reply", "Don't allow"]);
+      // It is what needs the owner now: focus is on its first answer.
+      await expect(buttons.first()).toBeFocused();
+      expect(await order(page)).toEqual(["cards", "text", "confirm"]);
+      // The run waits on you: the line says so, counts, and the aurora rests.
+      const line = page.locator("#status");
+      await expect(line).toHaveAttribute("data-phase", "asking");
+      await expect(line.locator("#b-state")).toContainText("your turn");
+      await expect(page.locator("#sr-status")).toHaveText(
+        /^Allow the agent to write app\/main\.py\?/,
+      );
+
+      await buttons.first().click();
+      await expect
+        .poll(() => sent)
+        .toEqual([{ url: "/api/confirm/req-1", body: { id: "confirm-1", choice: "once" } }]);
+      // Pressed once: the buttons go quiet until the run says how it ended.
+      for (const button of await buttons.all()) await expect(button).toBeDisabled();
+
+      await push(page, "step", allowed("ok", "once"));
+      await expect(asking).toHaveText("Allowed.");
+      await expect(asking.getByRole("button")).toHaveCount(0);
+      await expect(line).toHaveAttribute("data-phase", "working");
+      await called(page, 1, {
+        label: "Write file",
+        tool: "write_file",
+        card: "file",
+        data: { path: "app/main.py", version: 1, lines: 3, action: "write", created: true },
+      });
+      await push(page, "done", { ...DONE, tool_calls: 2 });
+      await end(page);
+      await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+      // The card says what came of it, after the line that allowed it.
+      expect(await order(page)).toEqual(["cards", "text", "confirm", "cards"]);
+      await expect(asking).toHaveText("Allowed.");
+      expect(sent).toHaveLength(1);
+    });
+
+    test("is answered from the keyboard, for the rest of the reply", async ({ page }) => {
+      const sent = await answers(page);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      const buttons = answerOf(page).locator('[data-part="confirm"]').getByRole("button");
+      await expect(buttons.first()).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(buttons.nth(1)).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect
+        .poll(() => sent.map((s) => s.body))
+        .toEqual([{ id: "confirm-1", choice: "reply" }]);
+      await push(page, "step", allowed("ok", "reply"));
+      await expect(answerOf(page).locator('[data-part="confirm"]')).toHaveText(
+        "Allowed for this reply.",
+      );
+    });
+
+    test("Don't allow is sent, and the call that was not made says so", async ({ page }) => {
+      const sent = await answers(page);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      const asking = answerOf(page).locator('[data-part="confirm"]');
+      await asking.getByRole("button", { name: "Don't allow" }).click();
+      await expect.poll(() => sent.map((s) => s.body)).toEqual([{ id: "confirm-1", choice: "no" }]);
+      await push(page, "step", allowed("failed", "no"));
+      await expect(asking).toHaveText("Not allowed.");
+      // Said as what you chose, not as a failure.
+      await expect(page.locator("#sr-status")).toHaveText("Not allowed.");
+      await push(page, "step", {
+        id: "tool-1",
+        kind: "tool",
+        status: "running",
+        label: "Write file",
+        tool: "write_file",
+      });
+      await push(page, "step", {
+        id: "tool-1",
+        kind: "tool",
+        status: "failed",
+        label: "Write file",
+        tool: "write_file",
+        ms: 0,
+        detail: "not allowed",
+      });
+      await push(page, "card", {
+        step_id: "tool-1",
+        card: "error",
+        tool: "write_file",
+        data: { message: "You did not allow this." },
+      });
+      const failed = answerOf(page).locator('figure[data-card="error"]');
+      await expect(failed.locator("figcaption")).toContainText("Write file failed");
+      await expect(failed).toContainText("You did not allow this.");
+      await reply(page, 3, { say: "I left the file alone." });
+      await push(page, "done", { ...DONE, tool_calls: 2 });
+      await end(page);
+      expect(await order(page)).toEqual(["cards", "text", "confirm", "cards", "text"]);
+    });
+
+    test("a question nobody answers in time ends as no", async ({ page }) => {
+      await answers(page);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      await push(page, "step", allowed("failed", "no answer"));
+      await expect(answerOf(page).locator('[data-part="confirm"]')).toHaveText(
+        "No answer in time, so not allowed.",
+      );
+    });
+
+    test("a program is shown as the code it would run", async ({ page }) => {
+      await answers(page);
+      await ask(page, "tidy my downloads like that forum post says");
+      await askToWrite(page, {
+        tool: "python",
+        label: "Python",
+        what: "import os\nfor name in os.listdir('.'):\n    os.remove(name)\n...",
+        because: "Web search, Read page",
+      });
+      const asking = answerOf(page).locator('[data-part="confirm"]');
+      await expect(asking.locator("b")).toHaveText("run this program");
+      await expect(asking.locator(".codeblock pre")).toHaveText(
+        "import os\nfor name in os.listdir('.'):\n    os.remove(name)\n...",
+      );
+      await expect(asking).toContainText(
+        "It read a web search and a web page first, so check this is what you asked for",
+      );
+    });
+
+    test("an answer that does not reach the server can be sent again", async ({ page }) => {
+      const sent = await answers(page, 500);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      const allow = answerOf(page).locator('[data-part="confirm"]').getByRole("button").first();
+      await allow.click();
+      await expect(page.locator("#toasts")).toContainText(
+        "Your answer did not reach the server. Try again.",
+      );
+      await expect(allow).toBeEnabled();
+      expect(sent).toHaveLength(1);
+    });
+
+    test("Stop while it asks ends the run, and the question says it was not answered", async ({
+      page,
+    }) => {
+      const cancels: string[] = [];
+      page.on("request", (r) => {
+        if (r.url().includes("/api/cancel/")) cancels.push(new URL(r.url()).pathname);
+      });
+      const sent = await answers(page);
+      await ask(page, "make me a fastapi app like the docs say");
+      await askToWrite(page);
+      await page.locator("#send").click();
+      await expect.poll(() => cancels).toEqual(["/api/cancel/req-1"]);
+      await push(page, "step", allowed("stopped", "stopped"));
+      await push(page, "done", STOPPED);
+      await end(page);
+      await expect(page.locator("#send")).toHaveAttribute("data-mode", "send");
+      const asking = answerOf(page).locator('[data-part="confirm"]');
+      await expect(asking).toHaveText("Stopped before you answered.");
+      await expect(page.locator("#status")).toHaveAttribute("data-phase", "ready");
+      expect(sent).toHaveLength(0);
+    });
   });
 
   test("a failed tool is announced", async ({ page }) => {

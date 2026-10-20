@@ -17,11 +17,21 @@ added later is closed without anyone remembering to close it.
 
 The site is open to everyone only when ``AURORA_GATE`` is exactly ``off``. A
 missing ``.env``, a typing mistake or a verifier that does not parse leaves it
-sealed: the sky is shown and nothing opens it.
+sealed: the sky is shown and nothing opens it. Off, it still answers only to
+this machine's own names and to those in ``AURORA_ALLOWED_HOSTS``, so that a
+page elsewhere cannot point a name of its own at a server left open on a
+developer's machine.
+
+A browser the site knows, one that has opened it before or was enrolled, has
+guesses of its own, apart from strangers'. Every time it opens the site it is
+known for another DEVICE_DAYS days. A new browser is made known without the
+pattern by a link the server's own shell prints, good once and for fifteen
+minutes; it still has to draw the pattern.
 
     python -m app.gate status     what the gate is doing, and for whom
     python -m app.gate revoke     end every open session
     python -m app.gate reset      forget the guesses counted so far
+    python -m app.gate enroll     a one-time link that makes a browser known
 """
 
 from __future__ import annotations
@@ -56,6 +66,12 @@ Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 
 UNLOCK = "/api/unlock"
+# GET /api/enroll/<code>: makes the browser that asks known. See new_enrolment.
+ENROL = "/api/enroll/"
+ENROL_MINUTES = 15
+# What a code may look like: what secrets.token_urlsafe writes, and no longer
+# than a cookie the gate would look up. Anything else is refused unlooked-at.
+ENROL_CODE = re.compile(r"[A-Za-z0-9_-]{16,128}")
 
 # What a pattern may be. The cover sends nothing shorter than MIN_STARS; the
 # rest is so that a request made by hand is refused before it costs anything.
@@ -175,7 +191,7 @@ CREATE TABLE IF NOT EXISTS gate_sessions (
 );
 CREATE TABLE IF NOT EXISTS gate_devices (
     token TEXT PRIMARY KEY,      -- hashed the same way
-    since REAL NOT NULL
+    since REAL NOT NULL          -- when it last opened the site, or was enrolled
 );
 CREATE TABLE IF NOT EXISTS gate_attempts (
     id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,6 +200,11 @@ CREATE TABLE IF NOT EXISTS gate_attempts (
     who  TEXT NOT NULL           -- an address, or a device's hashed token
 );
 CREATE INDEX IF NOT EXISTS gate_attempts_at ON gate_attempts(at);
+CREATE TABLE IF NOT EXISTS gate_enrolments (
+    code    TEXT PRIMARY KEY,    -- SHA-256 of the code, never the code
+    expires REAL NOT NULL,
+    used    REAL                 -- when it made a browser known; NULL until then
+);
 """
 
 _made_on: sqlite3.Connection | None = None
@@ -215,11 +236,16 @@ def _count(lane: str, who: str | None, since: float) -> int:
     return int(rows[0]["n"])
 
 
-def admit(address: str, device: str | None, now: float) -> int | None:
+def admit(address: str, device: str | None, now: float, *, together: bool = True) -> int | None:
     """Count a guess against whoever is making it, or refuse it.
 
     Returns the number of the guess, or None when it is over a limit. A refusal
     writes nothing, so the table cannot be grown by being refused.
+
+    ``together=False`` holds a guess to the limits of the one making it and
+    not to the count of everyone in its lane: an enrol code, which nobody can
+    guess, and which is how the owner gets in when strangers have used that
+    count up.
     """
     _tables()
     db.write("DELETE FROM gate_attempts WHERE at < ?", (now - DAY,))
@@ -230,7 +256,7 @@ def admit(address: str, device: str | None, now: float) -> int | None:
     for limit, window in each:
         if _count(lane, who, now - window) >= limit:
             return None
-    if _count(lane, None, now - everyone[1]) >= everyone[0]:
+    if together and _count(lane, None, now - everyone[1]) >= everyone[0]:
         return None
     with db.transaction() as conn:
         cursor = conn.execute(
@@ -295,6 +321,56 @@ def new_device(now: float) -> str:
     return token
 
 
+def renew_device(device: str, now: float) -> None:
+    """A known browser that opens the site is known for DEVICE_DAYS from now.
+
+    Its cookie is sent again with a fresh Max-Age at the same time, so the
+    owner's browser is never quietly turned back into a stranger, to be
+    counted with everyone else, half a year after it was first let in.
+    """
+    db.write("UPDATE gate_devices SET since = ? WHERE token = ?", (now, device))
+
+
+def device_cookie(name: str, token: str, secure: bool) -> str:
+    """The Set-Cookie line that makes a browser known: sent back only to the
+    unlock address, never to a script, and never from another site's page."""
+    tail = "; Secure" if secure else ""
+    return (
+        f"{name}={token}; Path={UNLOCK}; HttpOnly; SameSite=Strict; "
+        f"Max-Age={DEVICE_DAYS * DAY}{tail}"
+    )
+
+
+def new_enrolment(now: float) -> str:
+    """A one-time code that makes the browser it is opened in known.
+
+    For a browser the site has never seen while strangers have used up every
+    guess they are allowed: it is then counted on its own, and gets in with
+    the pattern. Only its hash is kept. It works once, for ENROL_MINUTES, and
+    it opens nothing by itself.
+    """
+    _tables()
+    db.write("DELETE FROM gate_enrolments WHERE expires < ?", (now,))
+    code = secrets.token_urlsafe(24)  # 192 bits
+    db.write(
+        "INSERT INTO gate_enrolments (code, expires) VALUES (?, ?)",
+        (_hashed(code), now + ENROL_MINUTES * 60),
+    )
+    return code
+
+
+def redeem(code: str, now: float) -> bool:
+    """Use an enrol code up. True once, for a code that was made and has not
+    expired; a code used, expired or never made is the same False."""
+    _tables()
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            "UPDATE gate_enrolments SET used = ? WHERE code = ? AND used IS NULL AND expires > ?",
+            (now, _hashed(code), now),
+        )
+    return cursor.rowcount == 1
+
+
 def revoke_all() -> int:
     _tables()
     count = int(db.rows("SELECT COUNT(*) AS n FROM gate_sessions")[0]["n"])
@@ -323,6 +399,25 @@ BLANK = b"""<!doctype html>
 <style>html, body { height: 100%; margin: 0; background: #03060c; }</style>
 </head>
 <body></body>
+</html>
+"""
+
+# What an enrol link answers once it has worked. It says no more than that.
+ENROLLED = b"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Aurora</title>
+<style>
+html, body { height: 100%; margin: 0; background: #03060c; color: #c9d3e0; }
+body { display: grid; place-items: center; font: 1rem/1.5 system-ui, sans-serif; }
+p { max-width: 30rem; margin: 0 1rem; text-align: center; }
+a { color: inherit; }
+</style>
+</head>
+<body><p>This browser is now known to the site. <a href="/">Open the site</a> and draw the pattern.</p></body>
 </html>
 """
 
@@ -374,6 +469,100 @@ def client_key(scope: Scope) -> str:
             return str(address.ipv4_mapped)
         return str(ipaddress.ip_network(f"{address}/64", strict=False).network_address)
     return str(address)
+
+
+def bare_host(value: str) -> str:
+    """A host as a Host header or a forwarded address gives it, without the
+    port or the brackets round an IPv6 address, in lower case."""
+    value = value.strip().lower()
+    if value.startswith("["):
+        end = value.find("]")
+        # No closing bracket: kept as it is, which matches nothing.
+        return value[1:end] if end != -1 else value
+    if value.count(":") == 1:
+        value = value.partition(":")[0]
+    return value.rstrip(".")
+
+
+# This machine's own names. ``AURORA_ALLOWED_HOSTS`` adds to them.
+LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def answers_to(host: str | None) -> bool:
+    """Whether the gate, when off, serves a request made to this host name.
+
+    A page on someone else's site can have its own name looked up as this
+    machine's address, and then ask a server left open on loopback for
+    anything it holds, as if it were the site's own page. The browser still
+    says the name it used, in Host, and a page cannot change that.
+    """
+    name = bare_host(host or "")
+    if not name:
+        return False
+    if name in LOOPBACK_NAMES:
+        return True
+    allowed = {bare_host(item) for item in settings.allowed_hosts.split(",")}
+    allowed.discard("")
+    return name in allowed
+
+
+def _loopback(text: str) -> bool:
+    try:
+        address = ipaddress.ip_address(bare_host(text))
+    except ValueError:
+        return False
+    if address.version == 6 and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback
+
+
+def _forwarded_for(name: bytes, value: str) -> list[str]:
+    """The addresses a proxy header names. ``Forwarded`` puts them after
+    ``for=``; the others are lists of addresses."""
+    if name != b"forwarded":
+        return [part for part in (p.strip() for p in value.split(",")) if part]
+    found = []
+    for element in value.split(","):
+        for pair in element.split(";"):
+            key, _, said = pair.partition("=")
+            if key.strip().lower() == "for":
+                found.append(said.strip().strip('"'))
+    return found
+
+
+PROXY_HEADERS = (b"forwarded", b"x-forwarded-for", b"x-real-ip")
+
+
+def from_this_machine(scope: Scope) -> bool:
+    """Whether a request was made on this machine, and not passed on by a
+    proxy here for someone elsewhere.
+
+    The address is loopback, and so is every address a proxy header names. A
+    proxy on this host is itself on loopback; uvicorn trusts it and puts the
+    visitor's address in its place, but should that ever not happen, the
+    header it added still says where the visitor is. A header that names no
+    address, or something that is not one, is not believed to be this machine.
+    """
+    client = scope.get("client")
+    if not client or not _loopback(str(client[0])):
+        return False
+    for raw_name, raw_value in scope.get("headers") or ():
+        name = raw_name.lower()
+        if name in PROXY_HEADERS:
+            named = _forwarded_for(name, raw_value.decode("latin-1"))
+            if not named or not all(_loopback(address) for address in named):
+                return False
+    return True
+
+
+def carried_safely(scope: Scope, secure: bool) -> bool:
+    """Whether the pattern, or an enrol code, may be taken from this request.
+
+    Always, unless ``AURORA_GATE_HTTPS_ONLY`` is on: then over HTTPS, or in
+    the clear only from this machine itself (a tunnel, or curl on the box),
+    where nobody on the way can read it.
+    """
+    return secure or not settings.gate_https_only or from_this_machine(scope)
 
 
 def read_headers(scope: Scope) -> dict[str, str]:
@@ -464,6 +653,10 @@ async def read_body(receive: Receive) -> bytes | None:
 JSON = "application/json"
 REFUSED = b'{"ok":false}'
 OPENED = b'{"ok":true}'
+LOCKED = b'{"error":"locked"}'
+HTML = "text/html; charset=utf-8"
+TEXT = "text/plain; charset=utf-8"
+MISDIRECTED = b"This server does not answer to that name.\n"
 
 
 class GateMiddleware:
@@ -486,6 +679,16 @@ class GateMiddleware:
             return
         state = mode()
         if state == "off":
+            if scope["type"] in ("http", "websocket") and not answers_to(
+                read_headers(scope).get("host")
+            ):
+                if scope["type"] == "websocket":
+                    await receive()
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    head = scope.get("method") == "HEAD"
+                    await respond(send, 421, MISDIRECTED, TEXT, head=head)
+                return
             await self.app(scope, receive, send)
             return
         if scope["type"] != "http":
@@ -506,6 +709,11 @@ class GateMiddleware:
         if path == UNLOCK and method == "POST":
             await self.unlock(scope, receive, send, verifier, headers, cookies, secure)
             return
+        if path.startswith(ENROL) and method == "GET":
+            # Before the session: whoever opens the link is enrolled, or is
+            # refused as anyone asking for an /api/ path is.
+            await self.enrol(scope, send, path[len(ENROL):], secure)
+            return
 
         if verifier is not None and self.has_session(cookies.get(session_name), verifier):
             if method in UNSAFE and foreign(headers):
@@ -520,13 +728,13 @@ class GateMiddleware:
             # repository has them. The cover's own script and font are here.
             await self.app(scope, receive, send)
         elif path == "/api" or path.startswith("/api/"):
-            await respond(send, 401, b'{"error":"locked"}', JSON, head=head)
+            await respond(send, 401, LOCKED, JSON, head=head)
         elif method in ("GET", "HEAD") and page_like(path):
             # At whatever address was asked for, so that the page behind it
             # is the one that opens.
-            await respond(send, 200, cover.body(), "text/html; charset=utf-8", head=head)
+            await respond(send, 200, cover.body(), HTML, head=head)
         else:
-            await respond(send, 404, b"Not found", "text/plain; charset=utf-8", head=head)
+            await respond(send, 404, b"Not found", TEXT, head=head)
 
     def has_session(self, token: str | None, verifier: Verifier) -> bool:
         try:
@@ -548,10 +756,14 @@ class GateMiddleware:
         arrived = time.monotonic()
         body = await read_body(receive)
         chain = None
-        if body is not None and headers.get("content-type", "").startswith(JSON):
+        if (
+            body is not None
+            and headers.get("content-type", "").startswith(JSON)
+            and carried_safely(scope, secure)
+        ):
             try:
                 chain = valid_shape(json.loads(body))
-            except ValueError:
+            except Exception:  # noqa: BLE001 - nested past the parser's depth, too: refused like the rest
                 chain = None
 
         if chain is not None and verifier is not None and self.checking < IN_FLIGHT:
@@ -580,10 +792,12 @@ class GateMiddleware:
                             f"SameSite=Lax{tail}"
                         )
                         if device is None:
-                            made.append(
-                                f"{device_name}={new_device(now)}; Path={UNLOCK}; HttpOnly; "
-                                f"SameSite=Strict; Max-Age={DEVICE_DAYS * DAY}{tail}"
-                            )
+                            token = new_device(now)
+                        else:
+                            # The cookie it came with: known_device found it.
+                            token = cookies[device_name]
+                            renew_device(device, now)
+                        made.append(device_cookie(device_name, token, secure))
                     except Exception:  # noqa: BLE001 - no session was made, so none is claimed
                         log.exception("the gate could not open a session")
                         made = []
@@ -602,6 +816,42 @@ class GateMiddleware:
 
         await asyncio.sleep(max(0.0, FLOOR - (time.monotonic() - arrived)))
         await respond(send, 200, REFUSED, JSON)
+
+    async def enrol(self, scope: Scope, send: Send, code: str, secure: bool) -> None:
+        """Make the browser that opens an enrol link known, or refuse it.
+
+        A code is counted like a guess, against the address it came from, and
+        not against everyone together: strangers using that count up is what
+        the link is for. It could not be guessed in any case. A refusal, for
+        whatever reason, is what any /api/ path answers a visitor without a
+        session, after the same wait as a refused pattern.
+        """
+        arrived = time.monotonic()
+        token = None
+        if ENROL_CODE.fullmatch(code) and carried_safely(scope, secure):
+            now = time.time()
+            address = client_key(scope)
+            attempt = None
+            try:
+                attempt = admit(address, None, now, together=False)
+                if attempt is not None and redeem(code, now):
+                    forgive(attempt)
+                    token = new_device(now)
+            except Exception:  # noqa: BLE001 - a gate that cannot count does not enrol
+                log.exception("the gate could not enrol a browser")
+                token = None
+            if token is not None:
+                log.warning("a browser was enrolled from %s", address)
+                _, device_name = cookie_names(secure)
+                cookie = device_cookie(device_name, token, secure)
+                await respond(send, 200, ENROLLED, HTML, cookies=(cookie,))
+                return
+            # Only what was counted: one past its limit is not logged either.
+            if attempt is not None:
+                log.warning("an enrol link that did not work, from %s", address)
+
+        await asyncio.sleep(max(0.0, FLOOR - (time.monotonic() - arrived)))
+        await respond(send, 401, LOCKED, JSON)
 
 
 def private(send: Send) -> Send:
@@ -666,8 +916,23 @@ def status() -> str:
         used = _count(lane, None, now - window)
         lines.append(f"wrong guesses in the last day, {lane}s: {used} of {limit}")
     devices = int(db.rows("SELECT COUNT(*) AS n FROM gate_devices")[0]["n"])
-    lines.append(f"browsers that have opened it: {devices}")
+    lines.append(f"browsers it knows: {devices}")
+    waiting = db.rows(
+        "SELECT COUNT(*) AS n FROM gate_enrolments WHERE used IS NULL AND expires > ?", (now,)
+    )
+    lines.append(f"enrol links not yet used: {int(waiting[0]['n'])}")
     return "\n".join(lines)
+
+
+def enroll() -> str:
+    """What `python -m app.gate enroll` prints: the link's path, and what to do with it."""
+    code = new_enrolment(time.time())
+    return (
+        f"{ENROL}{code}\n"
+        f"Open that path on the site in the browser it should know, once, within "
+        f"{ENROL_MINUTES} minutes; that browser then draws the pattern, counted apart "
+        f"from strangers."
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -678,6 +943,8 @@ def main(argv: list[str]) -> int:
         print(f"ended {revoke_all()} session(s)")
     elif command == "reset":
         print(f"forgot {forget_attempts()} guess(es)")
+    elif command == "enroll":
+        print(enroll())
     else:
         print(__doc__)
         return 2

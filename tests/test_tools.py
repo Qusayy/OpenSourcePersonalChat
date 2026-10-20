@@ -156,6 +156,22 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.error, "division by zero")
         self.assertEqual(result.card, "calculator")
 
+    async def test_a_result_too_large_to_work_out_is_refused_at_once(self) -> None:
+        # Each of these once ran on for minutes, holding the whole server.
+        for expression in ("((((factorial(1000)**8)**8)**8)**8)**8", "9**9**9", "(10**100)**100",
+                           "factorial(1000)*factorial(1000)"):
+            with self.subTest(expression=expression):
+                result = await call_tool("calculator", {"expression": expression})
+                self.assertIs(result.ok, False)
+                self.assertEqual(result.error, "the result would be too large")
+                self.assertLess(result.ms, 1000)
+
+    async def test_a_large_result_that_fits_is_still_worked_out(self) -> None:
+        result = await call_tool("calculator", {"expression": "2**512"})
+        self.assertIs(result.ok, True)
+        self.assertTrue(result.summary.startswith("2**512 = 13,407,807,929,942,597"))
+        self.assertIsNotNone(result.data["float"])
+
     async def test_the_clock_needs_nothing_and_answers_in_utc(self) -> None:
         result = await call_tool("clock", {})
         self.assertIs(result.ok, True)
@@ -452,6 +468,22 @@ class GivenAddressTests(unittest.TestCase):
     def test_nothing_they_said_gives_no_address(self) -> None:
         self.assertFalse(was_given("https://example.org", []))
         self.assertFalse(was_given("https://example.org", ["tell me about tides"]))
+
+    def test_the_words_after_their_address_are_not_part_of_it(self) -> None:
+        # What follows an address in a message is the user's words, not a
+        # path: it must not be sent to that site under its name.
+        said = ["read https://evil.example/a and my key is X"]
+        self.assertTrue(was_given("https://evil.example/a", said))
+        for address in ("https://evil.example/a and my key is X",
+                        "https://evil.example/a%20and%20my%20key", "https://evil.example/a and"):
+            with self.subTest(address=address):
+                self.assertFalse(was_given(address, said))
+
+    def test_an_address_at_the_end_of_a_sentence_is_theirs(self) -> None:
+        said = ["Open example.org/tides.", "or (https://rivers.test/a), please"]
+        self.assertTrue(was_given("https://example.org/tides", said))
+        self.assertTrue(was_given("https://rivers.test/a", said))
+        self.assertTrue(was_given("example.org", said))
 
     def test_the_page_reader_is_the_tool_that_is_held_to_this(self) -> None:
         held = [(t.name, a.name) for t in base.REGISTRY.values() for a in t.args if a.quoted]

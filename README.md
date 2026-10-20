@@ -328,7 +328,11 @@ last, which on a model with recurrent layers is the difference between reading
 the new message and reading the whole conversation again. `AURORA_THINKING`
 says how it thinks (`on`, `off` for an empty block, `none` for a model without
 one), and `AURORA_THINK_BUDGET` caps a reply's thinking: at the cap the reply
-goes on with the line Qwen documents for ending a thought early.
+goes on with the line Qwen documents for ending a thought early. Each reply's
+step in the trace keeps how long its thought was, its budget, and how it ended:
+closed by the model, cut at the budget, cut where the window ran out, or the
+turn ending inside it. Whether a budget is the right one is what the reasoning
+tasks measure (*Does it do the right thing*, below).
 
 ```bash
 cd /srv/aurora
@@ -1187,6 +1191,8 @@ python scripts/eval_agent.py --engine real --compare evals/reports/before.json
 python scripts/eval_agent.py --engine real --single            # one call where a task does not ask for more
 python scripts/eval_agent.py --engine real --probe-cache       # what each request of four turns read
 python scripts/eval_agent.py --engine real --rules evals/rules/fewer-calls.txt   # another wording, this run only
+python scripts/eval_agent.py --engine real --tasks evals/reasoning.jsonl --category reasoning \
+    --thinking on --think-budget 2048 --rows                  # how it reasons, at another budget
 ```
 
 **Scripted**, each task brings what the model says, so the run measures the
@@ -1215,6 +1221,28 @@ run: who the model is, the rules for using tools, and a tool's description.
 It is how a rewording is measured before it is made the default, since with a
 model this small a reworded line can move what it does either way. The report names
 the file and its digest.
+
+**Reasoning** has a task file of its own, `evals/reasoning.jsonl`: word
+problems, dates, units, logic puzzles, a bug to fix and run in a project the
+task begins with, lookups with a sum after them, and answers held to a shape.
+They run on the model only, with the tools on, and are judged on the answer: a
+number within a tolerance (`answer_number`, which can also name the number a
+known slip leads to), one of several phrasings (`answer_any`), a word limit,
+or what is left in a file. Each expected answer was worked out by hand, and
+the task's `note` says how. The `reasoning` category is for trying a change;
+`reasoning-held` is kept back and run only to confirm one before it ships, so
+the numbers it gives have not been tuned to. A task that reads a page and then
+changes a file says how it answers the question the run puts before the change
+(`confirm`; no, unless it says otherwise), so a run never waits on nobody.
+
+`--thinking` and `--think-budget` run the suite with the model thinking
+otherwise than the settings say, so one server can be measured at several
+budgets without its `.env` being edited. Where the model thinks, each row says
+how long each thought was and how it ended, and the summary how often a
+thought was cut at its budget, where the thinking went (the first reply of a
+turn, or the replies after a tool), how the tasks whose thought was cut fared
+against the rest, and how fast the model wrote. `--rows` prints one line a
+task. `--compare` sets every figure beside the earlier report's.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

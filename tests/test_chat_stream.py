@@ -974,7 +974,8 @@ class ThinkingTests(ChatCase):
                          {"role": "assistant", "kind": "answer", "tools": [],
                           "content": "<think>\nRayleigh scattering.</think>\n\nLight scatters."})
         (row,) = runs.run_steps(stream[0][1]["request_id"])
-        self.assertEqual(row["input"], {"think_tokens": 2})
+        self.assertEqual(row["input"], {"think_tokens": 2, "think_end": "closed",
+                                        "think_budget": self.thinking.think_budget})
 
     def test_a_thought_before_a_call_and_one_before_the_answer_are_kept_in_order(self) -> None:
         self.thinks(

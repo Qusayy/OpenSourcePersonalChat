@@ -71,6 +71,11 @@ class Reply:
     cached_tokens: int | None = None
     completion_tokens: int = 0
     think_tokens: int = 0
+    # How its thought ended, when it had one to end: closed (by the model) |
+    # budget (cut at the thinking budget) | room (cut where the window ran
+    # out first) | eos (the turn ended inside the thought) | stopped |
+    # skipped (given no budget, so it opened with an empty thought).
+    think_end: str | None = None
     queue_wait_ms: float | None = None
     ttft_ms: float | None = None
     total_ms: float = 0.0
@@ -131,6 +136,13 @@ async def write(
     reply.raw = begin
     split = Splitter()
     phase = "think" if thinking == "on" else "prose"
+    if phase == "think" and budget <= 0:
+        # No thinking for this reply: the thought is closed before it begins,
+        # which written after the opener is the empty block, as with thinking
+        # off, so the prompt still only ever grows.
+        reply.raw += "\n" + THINK_CLOSE + "\n\n"
+        reply.think_end = "skipped"
+        phase = "prose"
     code_param: str | None = None
     line = ""
     fresh = False
@@ -157,6 +169,8 @@ async def write(
         left = room - reply.completion_tokens
         if left <= 0:
             reply.ended = "limit"
+            if phase == "think":
+                reply.think_end = "room"
             break
         if phase == "think":
             stops, n, mode = [THINK_CLOSE], min(budget, left), "prose"
@@ -233,6 +247,8 @@ async def write(
             return
         if finish == "cancelled" or (stop is not None and stop.is_set()):
             reply.ended = "stopped"
+            if phase == "think":
+                reply.think_end = "stopped"
             break
         if finish is None:
             reply.ended, reply.error = "failed", (
@@ -243,10 +259,14 @@ async def write(
         if phase == "think":
             if finish == "word":
                 reply.raw += THINK_CLOSE
+                reply.think_end = "closed"
             elif finish == "limit":
                 reply.raw += BUDGET_CLOSER
+                # Cut at its own budget, or sooner, where the window ran out.
+                reply.think_end = "budget" if n >= budget else "room"
             else:
                 # The model ended its turn while it was still thinking.
+                reply.think_end = "eos"
                 reply.ended = "answer"
                 break
             phase = "prose"

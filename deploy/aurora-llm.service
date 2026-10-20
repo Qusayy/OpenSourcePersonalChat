@@ -18,7 +18,9 @@ Environment=AURORA_N_THREADS=0
 Environment=AURORA_N_CTX=16384
 # Anything else this model needs, word by word, from the .env. The app writes
 # every prompt itself and sends it to /completion, so the server's chat
-# template is not used by it.
+# template is not used by it. With AURORA_LLM_KEY set, the same key goes in
+# here as a file, --api-key-file /srv/aurora/llm.key (mode 0600, owned by
+# aurora), and never as --api-key, which every user can read in `ps`.
 Environment=AURORA_LLM_ARGS=
 EnvironmentFile=/srv/aurora/.env
 

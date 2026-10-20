@@ -50,6 +50,8 @@ PROJECT_RULES = (
     "user sees beside the chat and can download. Code you only show in a reply is not saved.\n"
     "- Change only what needs changing: edit_file for a change inside a file, write_file for a "
     "new file or a whole rewrite. Never write a file again unchanged.\n"
+    "- move_file moves or renames a file or a whole folder, delete_file removes one: keep the "
+    "project organised as it grows, with files in the folders they belong in.\n"
     "- When the user reports an error, find the line that causes it (read_file shows the file "
     "with line numbers), say the cause in one sentence, then fix it."
 )

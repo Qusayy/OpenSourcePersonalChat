@@ -156,6 +156,42 @@ FIXED = (
     'def home():\n    return {"ok": True}\n'
 )
 
+# The other files of that project: two folders deep in places, and two at the top.
+HEALTH = '''from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/health")
+def health():
+    return {"ok": True}
+'''
+USERS = '''from fastapi import APIRouter
+
+router = APIRouter()
+USERS = {1: "ada", 2: "grace"}
+
+
+@router.get("/users/{uid}")
+def user(uid: int):
+    return {"id": uid, "name": USERS.get(uid)}
+'''
+TEST_MAIN = '''from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+def test_home():
+    assert TestClient(app).get("/").json() == {"ok": True}
+'''
+PROJECT_FILES = (
+    ("app/routes/health.py", HEALTH, "python"),
+    ("app/routes/users.py", USERS, "python"),
+    ("tests/test_main.py", TEST_MAIN, "python"),
+    ("README.md", "# A small app\n\nRun it with `uvicorn app.main:app --reload`.\n", "markdown"),
+    ("requirements.txt", "fastapi\nuvicorn\n", "text"),
+)
+
 # What the model wrote, reply by reply, as a run keeps it: its thinking, what
 # it said, and the call it ended in.
 CRASH_SAID = "The crash is on line 3: `app` is used before it is created. I'll create it first."
@@ -210,6 +246,9 @@ async def main() -> None:
     qid = conversations.add_message(cid, "user", CRASH_QUESTION)
     projects.add(cid, "app/main.py", BROKEN, lang="python")
     kept = projects.add(cid, "app/main.py", FIXED, lang="python")
+    # The rest of the project, in folders, as the panel's tree lists it.
+    for path, content, lang in PROJECT_FILES:
+        projects.add(cid, path, content, lang=lang)
     fixed_lines = kept["lines"]
     crash_calls = [
         conversations.add_tool_call(

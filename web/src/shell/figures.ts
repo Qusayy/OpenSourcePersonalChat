@@ -96,17 +96,19 @@ export function showFigures(ttftMs?: number | null): void {
   }
 }
 
-export type LivePhase = "working" | "queued" | "reading" | "thinking" | "writing";
+export type LivePhase = "working" | "queued" | "asking" | "reading" | "thinking" | "writing";
 
 // The status line's state while a request is in flight. Every phase but
 // "writing" is a wait for the reader, so it counts the seconds: on this
 // hardware a wait is long enough that a still label looks like a hang, and
-// the model can think for a good while before it says anything. The count
-// sits with the figures on the right, where it can change width without
-// moving anything.
+// the model can think for a good while before it says anything. "asking" is
+// the other way round: the run is waiting for the reader, to allow a change
+// or not. The count sits with the figures on the right, where it can change
+// width without moving anything.
 const PHASE_WORDS: Record<LivePhase, string> = {
   working: "working",
   queued: "queued",
+  asking: "your turn",
   reading: "reading",
   thinking: "thinking",
   writing: "writing",

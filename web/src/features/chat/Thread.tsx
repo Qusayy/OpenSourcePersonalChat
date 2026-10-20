@@ -8,11 +8,19 @@ import { Icon } from "@/lib/icons";
 import { renderAnswer } from "@/lib/markdown";
 import { Button, buttonClass } from "@/shell/Button";
 import { toast } from "@/state/shell";
-import { dom, send, streamed, toolLabel } from "./controller";
-import { costFigures, isLongMessage, ledgerRows, type StepRow } from "./rules";
+import { answerConfirm, dom, send, streamed, toolLabel } from "./controller";
+import {
+  confirmWording,
+  costFigures,
+  isLongMessage,
+  ledgerRows,
+  OUTCOME_WORDS,
+  type StepRow,
+} from "./rules";
 import {
   type BotItem,
   type CardPart,
+  type ConfirmPart,
   type NoticeItem,
   type Part,
   questionBefore,
@@ -162,6 +170,8 @@ const Answer = memo(function Answer({ item }: { item: BotItem }) {
             />
           ) : block.kind === "thought" ? (
             <Thought key={block.key} part={block} live={item.live} />
+          ) : block.kind === "confirm" ? (
+            <Confirm key={block.key} part={block} botKey={item.key} />
           ) : (
             <WritingFile key={block.key} path={block.path} />
           ),
@@ -286,6 +296,94 @@ function WritingFile({ path }: { path: string }) {
     </button>
   );
 }
+
+/* -------------------------------------------------- a change put to you -- */
+
+/**
+ * The run has read text somebody else wrote, and the call it is about to make
+ * changes the project or runs code: it is put to the owner first. A ruled
+ * note with the caution mark, saying what it wants to do and why it asks,
+ * then three word buttons. It is the one thing on the page that needs the
+ * owner, so focus goes to it as it arrives. Answered, or ended, it becomes
+ * one quiet line saying how; the call's card, after it, says what came of it.
+ */
+const Confirm = memo(function Confirm({ part, botKey }: { part: ConfirmPart; botKey: number }) {
+  const box = useRef<HTMLDivElement>(null);
+  // Only as it arrives, still waiting: not when a settled one is drawn again.
+  const arrived = useRef(part.outcome === null);
+  useEffect(() => {
+    if (arrived.current) box.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, []);
+
+  if (part.outcome !== null) {
+    return (
+      <p data-part="confirm" data-outcome={part.outcome} className="m-0 text-ink-2 text-1">
+        {OUTCOME_WORDS[part.outcome]}
+      </p>
+    );
+  }
+  const words = confirmWording(part.ask);
+  const title = `confirm-${part.key}`;
+  const busy = part.chosen !== null;
+  const choose = (choice: NonNullable<ConfirmPart["chosen"]>) =>
+    void answerConfirm(botKey, part.key, choice);
+  return (
+    <div
+      ref={box}
+      role="group"
+      aria-labelledby={title}
+      aria-busy={busy || undefined}
+      data-part="confirm"
+      className="py-3 border-y border-rule text-2"
+    >
+      <p
+        id={title}
+        className="flex items-start gap-2 m-0 [&>.icon]:flex-none [&>.icon]:mt-[3px] [&>.icon]:text-caution"
+      >
+        <Icon name="error" size={16} />
+        <span>
+          {"Before it goes on, the agent wants to "}
+          <b className="font-semibold">{words.action}</b>
+          {words.code ? ":" : `. ${words.why}`}
+        </span>
+      </p>
+      {words.code ? (
+        <div className="ml-6">
+          <div className="codeblock mt-2 mb-0">
+            <header>
+              <span>python</span>
+            </header>
+            <pre>
+              <code>{words.code}</code>
+            </pre>
+          </div>
+          <p className="mt-2 mb-0">{words.why}</p>
+        </div>
+      ) : null}
+      {/* Word buttons, their words lined up with the note's. */}
+      <div className="flex flex-wrap gap-x-1 gap-y-1 mt-2 ml-4">
+        {(
+          [
+            ["once", "Allow"],
+            ["reply", "Allow for this reply"],
+            ["no", "Don't allow"],
+          ] as const
+        ).map(([choice, said]) => (
+          <Button
+            key={choice}
+            variant="text"
+            data-choice={choice}
+            data-chosen={part.chosen === choice || undefined}
+            disabled={busy}
+            onClick={() => choose(choice)}
+          >
+            {said}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+});
 
 /* ------------------------------------------------------ calls under way -- */
 

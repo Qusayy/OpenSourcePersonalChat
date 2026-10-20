@@ -112,6 +112,9 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             failed.append(f"file: {path} was never written")
             continue
         failed += [f"file: {path} does not contain {t!r}" for t in wanted if t not in content]
+    left = project(turns)
+    failed += [f"file: {path} is still there" for path in expect.get("files_absent") or []
+               if path in left]
 
     outcome = expect.get("outcome", "answered")
     if trace.outcome != outcome:
@@ -147,12 +150,27 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
     return failed
 
 
-def written(turns: list[Turn], path: str) -> str | None:
-    """A project file as the task's turns left it: the content of the last
-    call that wrote or edited it and was kept. None if none was."""
-    content = None
+def project(turns: list[Turn]) -> dict[str, str]:
+    """The project as the task's turns left it, file by file: every call
+    that wrote, edited, moved or deleted a file and was kept, in order."""
+    files: dict[str, str] = {}
     for turn in turns:
         for call, result in turn.trace.calls:
-            if call.name in ("write_file", "edit_file") and result.ok and result.data.get("path") == path:
-                content = result.data.get("content")
-    return content
+            if not result.ok:
+                continue
+            data = result.data or {}
+            if call.name in ("write_file", "edit_file") and data.get("path"):
+                files[data["path"]] = data.get("content") or ""
+            elif data.get("action") == "move":
+                moving = {m["from"]: files.pop(m["from"], "") for m in data["moves"]}
+                for m in data["moves"]:
+                    files[m["to"]] = moving[m["from"]]
+            elif data.get("action") == "delete":
+                for gone in data["paths"]:
+                    files.pop(gone, None)
+    return files
+
+
+def written(turns: list[Turn], path: str) -> str | None:
+    """A project file as the task's turns left it. None if it is not there."""
+    return project(turns).get(path)

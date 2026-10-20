@@ -214,6 +214,8 @@ register(Tool(
     run=_write_file,
     card="file",
     example="",
+    project=True,
+    changes=True,
 ))
 
 register(Tool(
@@ -234,4 +236,6 @@ register(Tool(
     example="",
     budget=400,
     observe=_observe_edit,
+    project=True,
+    changes=True,
 ))

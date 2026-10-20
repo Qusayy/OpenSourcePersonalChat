@@ -25,6 +25,13 @@
 #   RELEASE_REMOTE      where to push                      (default: origin)
 #   RELEASE_BRANCH      the branch to publish to           (default: release)
 #   RELEASE_SKIP_BUILD  1 = web/dist is already built; do not build again
+#   RELEASE_TOKEN       a GitHub token for the push alone  (CI; default: none,
+#                       and git uses whatever credentials it has)
+#
+# The token is handed to git in its environment, as the header GitHub reads
+# it from, for the one push: never on a command line, where any process could
+# read it, and never in the clone's config. Everything else is read from the
+# remote without it.
 #
 # The commit is made as whoever git is configured to be (user.name and
 # user.email, or GIT_AUTHOR_* / GIT_COMMITTER_*).
@@ -102,5 +109,14 @@ fi
 
 # No force. If someone else has published in the meantime this is refused,
 # which is right: the next run publishes on top of theirs.
-git push "$REMOTE" "$commit:refs/heads/$BRANCH"
+if [ -n "${RELEASE_TOKEN:-}" ]; then
+  auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 | tr -d '\n')"
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+  GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+    git push "$REMOTE" "$commit:refs/heads/$BRANCH"
+  unset auth
+else
+  git push "$REMOTE" "$commit:refs/heads/$BRANCH"
+fi
 echo "publish: $BRANCH is now $(git rev-parse --short "$commit") (from $short_sha)"

@@ -19,15 +19,24 @@
 # libraries beside it. The site can stay up: the compile runs at low priority,
 # and two jobs keep it inside the memory the site leaves free. The first build
 # takes 30-45 minutes on four cores. The build is kept in BUILD (by default
-# /var/tmp/aurora-llm-build-<user>), so if anything after it fails, running
-# this again picks up where it stopped instead of compiling everything twice.
+# ~/.cache/aurora-llm-build), so if anything after it fails, running this
+# again picks up where it stopped instead of compiling everything twice. It
+# is yours alone: what is compiled there is installed as root, so nobody else
+# may put anything in it.
 set -euo pipefail
 
 COMMIT=3dbc2c9f899519c5daaa83ea683dc99b146fddae
 REPO=https://github.com/ikawrakow/ik_llama.cpp
 PREFIX=${PREFIX:-/opt/aurora-llm}
 JOBS=${JOBS:-2}
-BUILD=${BUILD:-/var/tmp/aurora-llm-build-$(id -un)}
+BUILD=${BUILD:-${XDG_CACHE_HOME:-$HOME/.cache}/aurora-llm-build}
+
+mkdir -p -m 700 "$BUILD"
+if [ ! -O "$BUILD" ]; then
+  echo "$BUILD is not a directory of your own; set BUILD to one that is." >&2
+  exit 1
+fi
+chmod 700 "$BUILD"
 
 src=$BUILD/src
 if [ "$(git -C "$src" rev-parse HEAD 2>/dev/null || true)" != "$COMMIT" ]; then

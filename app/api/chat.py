@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .. import agent
+from ..agent import confirm
 from ..agent.context import turns_from
 from ..store import conversations, projects
 from ..tools import REGISTRY
@@ -107,3 +108,16 @@ def last_links(cid: str) -> tuple:
 @router.post("/api/cancel/{request_id}")
 async def api_cancel(request_id: str):
     return {"cancelled": deps.engine.cancel(request_id)}
+
+
+class ConfirmRequest(BaseModel):
+    """The user's answer to a change put to them: this once, for the rest of
+    the reply, or no."""
+
+    id: str = Field(min_length=1, max_length=64)
+    choice: str = Field(pattern="^(once|reply|no)$")
+
+
+@router.post("/api/confirm/{request_id}")
+async def api_confirm(request_id: str, payload: ConfirmRequest):
+    return {"answered": confirm.answer(request_id, payload.id, payload.choice)}

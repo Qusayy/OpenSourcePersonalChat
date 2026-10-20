@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # address (http://127.0.0.1:8081): every pass goes to the llama-server
     # there instead, which deploy/aurora-llm.service runs from this same file.
     llm_url: str = ""
+    # A key the model server asks every request for (llama-server --api-key),
+    # so that no other process on the machine can use it. Empty: none, and
+    # the server must then not be started with one.
+    llm_key: str = ""
     n_ctx: int = 16384
     # What the KV cache holds per token of context, in KiB, for the memory
     # estimate on the Benchmark page: Qwen2.5-1.5B's 28 (28 layers, 2 KV
@@ -122,6 +126,18 @@ class Settings(BaseSettings):
     # phone whose browser never does.
     gate_session_hours: float = 12.0
     gate_idle_minutes: float = 60.0
+    # Refuse the pattern when it comes over plain http, where anyone on the
+    # way can read it, unless it comes from this machine itself. Off by
+    # default: a site served on a bare address over http would lock its owner
+    # out. Turn it on once the site is served over https.
+    gate_https_only: bool = False
+    # With the gate off, the host names the site answers to, besides this
+    # machine's own (localhost, 127.0.0.1, ::1), comma-separated. A page
+    # elsewhere that points its own name at this machine is refused.
+    allowed_hosts: str = ""
+    # How long an answer to "may the agent change this?" is waited for, in
+    # seconds, before it counts as no.
+    confirm_seconds: float = 600.0
 
     # app
     host: str = "127.0.0.1"

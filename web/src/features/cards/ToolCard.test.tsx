@@ -304,6 +304,42 @@ describe("each kind of card, with everything the tool can send", () => {
     expect(shown.querySelector("[data-sign]")?.textContent).toBe("- <b>x</b>\n");
   });
 
+  it("a move says where each file went, and the new path opens it", () => {
+    const one = draw("file", {
+      action: "move",
+      moves: [{ from: "main.py", to: "app/main.py", version: 2 }],
+    });
+    expect(one.querySelector("figcaption")?.textContent).toContain("Moved file");
+    const chip = one.querySelector(".file-chip");
+    expect(chip?.getAttribute("data-file")).toBe("app/main.py");
+    expect(words(chip as Element)).toBe("main.py → app/main.pyversion 2");
+    const many = draw("file", {
+      action: "move",
+      moves: [
+        { from: "a.py", to: "src/a.py", version: 3 },
+        { from: "b.py", to: "src/b.py" },
+        { from: "c.py" },
+      ],
+    });
+    expect(many.querySelector("figcaption")?.textContent).toContain("Moved 2 files");
+    expect(
+      [...many.querySelectorAll(".file-chip")].map((c) => c.getAttribute("data-file")),
+    ).toEqual(["src/a.py", "src/b.py"]);
+  });
+
+  it("a delete lists what went, with nothing to open", () => {
+    const one = draw("file", { action: "delete", paths: ["old.py"] });
+    expect(one.querySelector("figcaption")?.textContent).toContain("Deleted file");
+    expect(one.querySelectorAll("li")).toHaveLength(1);
+    expect(one.querySelector(".file-chip, [data-file]")).toBeNull();
+    const many = draw("file", { action: "delete", paths: ["a.py", "b/c.py", ""] });
+    expect(many.querySelector("figcaption")?.textContent).toContain("Deleted 2 files");
+    expect([...many.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "a.py",
+      "b/c.py",
+    ]);
+  });
+
   it("a long edit is cut, and says how much more there was", () => {
     const added = Array.from({ length: 50 }, (_, i) => `line ${i}`);
     const el = draw("file", { path: "a.py", action: "edit", removed: ["old"], added });

@@ -33,7 +33,7 @@ import { reduced } from "@/lib/frame";
 import { Meter } from "@/lib/meter";
 import { type ProseRenderer, proseRenderer } from "@/lib/prose-stream";
 import { sseFetch } from "@/lib/sse";
-import type { ChatEvents } from "@/lib/types";
+import type { ChatEvents, ConfirmChoice } from "@/lib/types";
 import {
   type LivePhase,
   livePhase,
@@ -44,7 +44,7 @@ import {
 } from "@/shell/figures";
 import { refreshConversations } from "@/state/queries";
 import { announce, holdPhase, toast } from "@/state/shell";
-import { queueWording, trimmedWording } from "./rules";
+import { confirmWording, OUTCOME_WORDS, outcomeOf, queueWording, trimmedWording } from "./rules";
 import {
   addBot,
   addNotice,
@@ -53,6 +53,7 @@ import {
   type BotItem,
   botItem,
   type CardPart,
+  type ConfirmPart,
   newKey,
   type Part,
   patchBot,
@@ -238,6 +239,33 @@ export async function stopGeneration(): Promise<void> {
 }
 
 /**
+ * Answer a change the run put to you: this call, every such call of this
+ * reply, or no. The buttons go quiet as soon as one is pressed; the part
+ * says how it ended when the run does. If the answer cannot be sent, the
+ * buttons come back so it can be sent again.
+ */
+export async function answerConfirm(
+  botKey: number,
+  partKey: number,
+  choice: ConfirmChoice,
+): Promise<void> {
+  const run = requestId;
+  const part = botItem(botKey)?.parts.find((p) => p.key === partKey);
+  if (!run || part?.kind !== "confirm" || part.chosen || part.outcome) return;
+  const choose = (chosen: ConfirmChoice | null) =>
+    patchPart(botKey, partKey, (p) => (p.kind === "confirm" ? { ...p, chosen } : p));
+  choose(choice);
+  try {
+    // False when the question is no longer waiting (its time was up): the
+    // run says how it ended either way.
+    await api.confirm(run, part.ask.id, choice);
+  } catch {
+    choose(null);
+    toast("Your answer did not reach the server. Try again.", "err");
+  }
+}
+
+/**
  * The page is being left with an answer in flight: stop it, and keep what was
  * written, the same as pressing Stop. A request whose stream has not said
  * anything yet has no id to stop by, so its connection is closed instead.
@@ -283,6 +311,9 @@ export async function send(text: string): Promise<void> {
   let replying = false;
   // The part standing in for that file, until its call's card arrives.
   let fileKey: number | null = null;
+  let filePath = "";
+  // The changes put to the user, by the question's name, to the part that asks.
+  const asked = new Map<string, number>();
   let figures = false;
   let phase: LivePhase | null = null;
   let dirty = false;
@@ -438,10 +469,42 @@ export async function send(text: string): Promise<void> {
               close();
               enter("working");
             }
+          } else if (data.kind === "confirm") {
+            // Answered, or not in time, or the run was stopped: the question
+            // becomes the line that says which.
+            const key = asked.get(data.id);
+            const outcome = outcomeOf(data);
+            if (key !== undefined) {
+              patchPart(bot.key, key, (p) => (p.kind === "confirm" ? { ...p, outcome } : p));
+            }
+            announce(OUTCOME_WORDS[outcome]);
+            if (data.status !== "stopped") enter("working");
           }
-          if (data.status === "failed") {
+          if (data.status === "failed" && data.kind !== "confirm") {
             announce(`${data.label} failed: ${data.detail || "unknown error"}`);
           }
+        } else if (event === "confirm") {
+          // Asked where it came: after what the reply said. A file the reply
+          // was writing goes below the question, so the card that takes its
+          // place comes after the answer, as it will.
+          const part: ConfirmPart = {
+            kind: "confirm",
+            key: newKey(),
+            ask: data,
+            chosen: null,
+            outcome: null,
+          };
+          if (fileKey !== null) removePart(bot.key, fileKey);
+          place(part);
+          asked.set(data.id, part.key);
+          if (fileKey !== null) {
+            const file: Part = { kind: "file", key: newKey(), path: filePath };
+            place(file);
+            fileKey = file.key;
+          }
+          enter("asking");
+          const words = confirmWording(data);
+          announce(`Allow the agent to ${words.action}? ${words.why}`);
         } else if (event === "card") {
           // Where it came: after what was said before the call, and before
           // anything said after it. It takes the place of the file its call
@@ -469,6 +532,7 @@ export async function send(text: string): Promise<void> {
             const part: Part = { kind: "file", key: newKey(), path: data.path };
             place(part);
             fileKey = part.key;
+            filePath = data.path;
             enter("writing");
           }
         } else if (event === "start") {
@@ -537,6 +601,12 @@ export async function send(text: string): Promise<void> {
     close();
     // A file whose call was never made is not part of the answer.
     if (fileKey !== null) removePart(bot.key, fileKey);
+    // A question the run never said the end of ended with it.
+    for (const key of asked.values()) {
+      patchPart(bot.key, key, (p) =>
+        p.kind === "confirm" && !p.outcome ? { ...p, outcome: "stopped" } : p,
+      );
+    }
     dismiss(queueKey);
     meter.stop();
     setMode(false);

@@ -292,10 +292,67 @@ const FILE_VERBS: Record<string, string> = {
   edit: "Edited file",
 };
 
+/** "Moved file", "Moved 3 files". */
+const counted = (verb: string, n: number) => (n === 1 ? `${verb} file` : `${verb} ${n} files`);
+
+/* Files moved: each as a row from where it was to where it is, the new path
+   a chip that opens it there. */
+function MovedFiles({ data, meta }: KindProps) {
+  const moves = list(data, "moves")
+    .map(record)
+    .map((m) => ({ from: text(m, "from"), to: text(m, "to"), version: m.version }))
+    .filter((m) => m.to);
+  return (
+    <Figure tool="file" card="file" name={counted("Moved", moves.length)} meta={meta}>
+      {moves.map((m) => (
+        <button
+          key={`${m.from}>${m.to}`}
+          type="button"
+          className="file-chip"
+          data-file={m.to}
+          data-state="done"
+        >
+          <span className="file-chip-name">
+            <span className="font-normal text-ink-2">{m.from}</span>
+            <span className="font-normal text-ink-2">{" → "}</span>
+            {m.to}
+          </span>
+          {m.version !== undefined && m.version !== null ? (
+            <span className="file-chip-meta num">{`version ${num(m.version)}`}</span>
+          ) : null}
+        </button>
+      ))}
+    </Figure>
+  );
+}
+
+/* Files deleted: their paths, and nothing to open, since they are gone. */
+function DeletedFiles({ data, meta }: KindProps) {
+  const paths = list(data, "paths")
+    .map((p) => String(p ?? ""))
+    .filter(Boolean);
+  return (
+    <Figure tool="file" card="file" name={counted("Deleted", paths.length)} meta={meta}>
+      <ul className="m-0 p-0 list-none">
+        {paths.map((p) => (
+          <li
+            key={p}
+            className="py-2 px-3 border-b border-rule first:border-t [overflow-wrap:anywhere]"
+          >
+            {p}
+          </li>
+        ))}
+      </ul>
+    </Figure>
+  );
+}
+
 function ProjectFile({ data, meta }: KindProps) {
   const path = text(data, "path");
   const lines = num(data.lines);
   const action = text(data, "action") || "read";
+  if (action === "move") return <MovedFiles data={data} meta={meta} />;
+  if (action === "delete") return <DeletedFiles data={data} meta={meta} />;
   const name =
     action === "write" && data.created === true ? "Created file" : (FILE_VERBS[action] ?? "File");
   return (

@@ -76,6 +76,15 @@ def _project(name: str) -> bool:
     return bool(tool and tool.project)
 
 
+def thought(reply: Reply, budget: int) -> dict | None:
+    """What a reply's step keeps of its thinking: how long it was, how it
+    ended and the budget it had, so a thought cut short can be told from one
+    the model closed. Nothing when the reply had no thought to end."""
+    if reply.think_end is None:
+        return {"think_tokens": reply.think_tokens} if reply.think_tokens else None
+    return {"think_tokens": reply.think_tokens, "think_end": reply.think_end, "think_budget": budget}
+
+
 def _what(call: ToolCall) -> str:
     """A change put to the user, in a line: the files it touches, or the
     start of the program it runs."""
@@ -442,9 +451,10 @@ class _Run:
         messages = transcript.messages()
         self.trace.prompt = messages
         waited, self.slot_wait = self.slot_wait, 0.0
+        budget = self.think_budget
         async with aclosing(write(
             self.engine, messages, room=left, final=final, thinking=thinking,
-            budget=self.think_budget, request_id=self.request_id, seed=self.seed,
+            budget=budget, request_id=self.request_id, seed=self.seed,
             held=True, stop=self.stop, reply=reply,
         )) as events:
             async for event in events:
@@ -457,7 +467,7 @@ class _Run:
         queued = reply.queue_wait_ms
         self.trace.steps.append(Step(
             "call" if called else "answer", model=True, name=name, via="model",
-            input={"think_tokens": reply.think_tokens} if reply.think_tokens else None,
+            input=thought(reply, budget),
             output=reply.call if called else None,
             prompt_tokens=reply.prompt_tokens, new_tokens=reply.read_tokens,
             output_tokens=reply.completion_tokens,
@@ -468,7 +478,7 @@ class _Run:
             error="stopped" if stopped else reply.error,
         ))
         tool = REGISTRY.get(name) if name else None
-        yield "step", {
+        done = {
             "id": step_id, "kind": "model",
             "status": "stopped" if stopped else "failed" if reply.ended == "failed" else "ok",
             "label": (f"Called {tool.label}" if tool else "Called a tool") if called else "Answer",
@@ -476,6 +486,9 @@ class _Run:
             "tokens_in": reply.prompt_tokens, "tokens_out": reply.completion_tokens,
             "think_tokens": reply.think_tokens,
         }
+        if reply.think_end is not None:
+            done["think_end"] = reply.think_end
+        yield "step", done
 
     async def _ended(self, transcript: Transcript, reply: Reply | None, number: int | None):
         """How a run ends once the model has answered."""

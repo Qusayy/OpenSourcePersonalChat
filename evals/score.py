@@ -8,9 +8,10 @@ run in production goes wrong.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from .tasks import Task, Turn
+from .tasks import Task, Turn, _numbers
 
 # What a call that never reached its tool fails with: a call refused before it
 # was made, by the run or by the dispatcher; one the model wrote that named no
@@ -20,6 +21,27 @@ REFUSED = frozenset({
 })
 # Of those, the calls that named no tool at all.
 NO_TOOL = frozenset({"bad call", "unknown tool"})
+
+# A number as an answer writes one: thousands commas, decimals, and a sign
+# only where nothing is joined to it in front, so the hyphens of 2026-10-20
+# are not minus signs. Digits that end a word (Qwen3, x2) are not numbers of
+# the answer; a unit joined behind (27km, 18%) does not stop one.
+_NUMBER = re.compile(
+    r"(?<![\w.])(?P<sign>[-−])?(?P<digits>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+)
+
+
+def numbers(text: str) -> list[float]:
+    """Every number in ``text``, signed, in order."""
+    found: list[float] = []
+    for match in _NUMBER.finditer(text or ""):
+        value = float(match.group("digits").replace(",", ""))
+        found.append(-value if match.group("sign") else value)
+    return found
+
+
+def _near(value: float, target: float, tol: float) -> bool:
+    return abs(value - target) <= tol + 1e-9
 
 
 def _plain(value: Any) -> Any:
@@ -106,13 +128,19 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             f"passes: {passes} through the model, at most {expect['max_model_passes']} expected"
         )
 
+    left = project(turns, task.project)
     for path, wanted in (expect.get("file_contains") or {}).items():
-        content = written(turns, path)
+        content = left.get(path)
         if content is None:
             failed.append(f"file: {path} was never written")
             continue
         failed += [f"file: {path} does not contain {t!r}" for t in wanted if t not in content]
-    left = project(turns)
+    for path, unwanted in (expect.get("file_not_contains") or {}).items():
+        content = left.get(path)
+        if content is None:
+            failed.append(f"file: {path} is not there")
+            continue
+        failed += [f"file: {path} still contains {t!r}" for t in unwanted if t in content]
     failed += [f"file: {path} is still there" for path in expect.get("files_absent") or []
                if path in left]
 
@@ -147,13 +175,38 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
         f"answer: contains {t!r}"
         for t in expect.get("answer_not_contains") or [] if t.casefold() in answer
     ]
+    anyof = expect.get("answer_any") or []
+    if anyof and not any(t.casefold() in answer for t in anyof):
+        failed.append(f"answer: contains none of {anyof}")
+    failed += _numbers_in(trace.answer or "", expect.get("answer_number"))
+    most = expect.get("answer_max_words")
+    if most is not None and len((trace.answer or "").split()) > most:
+        failed.append(f"answer: {len((trace.answer or '').split())} words, at most {most} expected")
     return failed
 
 
-def project(turns: list[Turn]) -> dict[str, str]:
-    """The project as the task's turns left it, file by file: every call
-    that wrote, edited, moved or deleted a file and was kept, in order."""
-    files: dict[str, str] = {}
+def _numbers_in(answer: str, spec: Any) -> list[str]:
+    """What an ``answer_number`` expectation finds wrong with an answer: a
+    number it should give and does not, within its tolerance, or a number it
+    should not give (the answer a known slip leads to) and does."""
+    found = numbers(answer)
+    failed: list[str] = []
+    for want in _numbers(spec):
+        tol = float(want.get("tol", 0))
+        if not any(_near(n, want["value"], tol) for n in found):
+            within = f" within {tol:g}" if tol else ""
+            failed.append(f"answer: no number{within} of {want['value']:g} (found {found[:8]})")
+        for bad in want.get("not") or []:
+            if any(_near(n, bad, tol) for n in found):
+                failed.append(f"answer: gives {bad:g}, the answer a known mistake leads to")
+    return failed
+
+
+def project(turns: list[Turn], seed: dict[str, str] | None = None) -> dict[str, str]:
+    """The project as the task's turns left it, file by file: the files it
+    began with, then every call that wrote, edited, moved or deleted a file
+    and was kept, in order."""
+    files: dict[str, str] = dict(seed or {})
     for turn in turns:
         for call, result in turn.trace.calls:
             if not result.ok:
@@ -171,6 +224,6 @@ def project(turns: list[Turn]) -> dict[str, str]:
     return files
 
 
-def written(turns: list[Turn], path: str) -> str | None:
+def written(turns: list[Turn], path: str, seed: dict[str, str] | None = None) -> str | None:
     """A project file as the task's turns left it. None if it is not there."""
-    return project(turns).get(path)
+    return project(turns, seed).get(path)

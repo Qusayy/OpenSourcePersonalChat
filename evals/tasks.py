@@ -21,6 +21,12 @@ that samples, two correct answers are rarely the same text.
 A task marked ``pending`` is expected to fail, and says why. It is how a known
 gap is written down: the day it starts passing the suite says so, and the mark
 has to come off.
+
+A task may begin with files in its project (``project``: path to content), say
+how it answers if the run asks before a change (``confirm``: once, reply or
+no), and say how its expected answer was worked out (``note``).
+``reasoning.jsonl`` holds the tasks about reasoning, kept apart so that the
+ordinary suite stays quick.
 """
 
 from __future__ import annotations
@@ -47,9 +53,16 @@ EXPECTATIONS = {
     "corrected",            # whether the answer drew a correction: a figure nothing returned
     "answer_contains",      # each of these is in the answer, whatever its case
     "answer_not_contains",
+    "answer_any",           # at least one of these is in the answer, whatever its case
+    "answer_number",        # {"value", "tol", "not"}, or a list of them: a number in the answer
+                            # within tol of value, and none within tol of a "not"
+    "answer_max_words",     # the answer is at most this many words long
+    "file_not_contains",    # {path: [text, ...]}: none of these is left in the project file
 }
 FIELDS = {"id", "category", "turns", "tools", "script", "scripted_only", "loop", "expect",
-          "pending"}
+          "pending", "project", "confirm", "note"}
+# How a task answers when the run asks before a change (``app.agent.confirm``).
+CONFIRMS = frozenset({"once", "reply", "no"})
 
 
 @dataclass(frozen=True)
@@ -69,6 +82,12 @@ class Task:
     loop: bool = False
     expect: dict[str, Any] = field(default_factory=dict)
     pending: str | None = None
+    # Files the task's project holds before its first message: path -> content.
+    project: dict[str, str] = field(default_factory=dict)
+    # What the task answers if the run asks before a change: once | reply | no.
+    confirm: str = "no"
+    # How the expected answer was worked out, for whoever reads the task.
+    note: str | None = None
 
     def runs_with(self, engine_kind: str) -> bool:
         if engine_kind == "scripted":
@@ -112,6 +131,14 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
         unknown = set(expect) - EXPECTATIONS
         if unknown:
             raise ValueError(f"{where}: unknown expectation {sorted(unknown)[0]!r}")
+        for spec in _numbers(expect.get("answer_number")):
+            if not isinstance(spec, dict) or not isinstance(spec.get("value"), (int, float)):
+                raise ValueError(f"{where}: answer_number needs a number as its value")
+        project = raw.get("project") or {}
+        if not isinstance(project, dict) or not all(isinstance(v, str) for v in project.values()):
+            raise ValueError(f"{where}: project must map paths to their content")
+        if raw.get("confirm", "no") not in CONFIRMS:
+            raise ValueError(f"{where}: confirm must be one of {sorted(CONFIRMS)}")
         tasks.append(Task(
             id=raw["id"],
             category=raw["category"],
@@ -122,5 +149,15 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
             loop=bool(raw.get("loop")),
             expect=expect,
             pending=raw.get("pending"),
+            project=project,
+            confirm=raw.get("confirm", "no"),
+            note=raw.get("note"),
         ))
     return tasks
+
+
+def _numbers(spec: Any) -> list:
+    """An ``answer_number`` expectation as a list of its parts."""
+    if spec is None:
+        return []
+    return spec if isinstance(spec, list) else [spec]

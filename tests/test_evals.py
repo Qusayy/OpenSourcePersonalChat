@@ -14,6 +14,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -26,7 +27,7 @@ try:
     from app.tools.base import call_tool
     from evals import fixtures
     from evals.runner import FAILED, PASSED, PENDING, SKIPPED, UNEXPECTED, compare, run_suite
-    from evals.score import route_match, score
+    from evals.score import numbers, route_match, score
     from evals.tasks import Task, Turn, load_tasks
     from scripts import eval_agent
     from tests import support
@@ -34,6 +35,7 @@ except ImportError as exc:  # pragma: no cover - only without the requirements
     raise unittest.SkipTest(f"app requirements are not installed: {exc}")
 
 CLOCK = render_call("clock", {"timezone_name": "UTC"})
+REASONING = Path(__file__).resolve().parent.parent / "evals" / "reasoning.jsonl"
 
 
 class TaskFileTests(unittest.TestCase):
@@ -83,6 +85,13 @@ class TaskFileTests(unittest.TestCase):
             (['{"category": "c", "turns": ["hi"]}'], "tasks.jsonl:1: 'id' is missing"),
             (['{"id": "a", "category": "c", "turns": []}'], "tasks.jsonl:1: 'turns' is missing"),
             ([good, "", good], "tasks.jsonl:3: the id 'a' is used twice"),
+            ([good, '{"id": "b", "category": "c", "turns": ["hi"], "confirm": "maybe"}'],
+             "tasks.jsonl:2: confirm must be one of"),
+            ([good, '{"id": "b", "category": "c", "turns": ["hi"], "project": {"a.py": 1}}'],
+             "tasks.jsonl:2: project must map paths to their content"),
+            ([good, '{"id": "b", "category": "c", "turns": ["hi"], '
+                    '"expect": {"answer_number": [{"value": 1}, {"value": "two"}]}}'],
+             "tasks.jsonl:2: answer_number needs a number as its value"),
         ):
             with self.subTest(complaint=complaint), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "tasks.jsonl"
@@ -90,6 +99,45 @@ class TaskFileTests(unittest.TestCase):
                 with self.assertRaises(ValueError) as caught:
                     load_tasks(path)
                 self.assertIn(complaint, str(caught.exception))
+
+    def test_a_task_can_begin_with_files_answer_a_question_and_say_how_it_was_worked_out(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.jsonl"
+            path.write_text(json.dumps({
+                "id": "a", "category": "c", "turns": ["hi"], "project": {"a.py": "print(1)\n"},
+                "confirm": "once", "note": "worked out by hand",
+            }) + "\n", encoding="utf-8")
+            (loaded,) = load_tasks(path)
+        self.assertEqual((loaded.project, loaded.confirm, loaded.note),
+                         ({"a.py": "print(1)\n"}, "once", "worked out by hand"))
+        self.assertEqual(load_tasks()[0].confirm, "no")
+
+
+class ReasoningFileTests(unittest.TestCase):
+    """The reasoning tasks: a file of their own, run on the model, with a few
+    kept back to confirm a change before it ships."""
+
+    def test_it_loads_with_tasks_to_tune_on_and_tasks_held_out(self) -> None:
+        tasks = load_tasks(REASONING)
+        by = {c: [t for t in tasks if t.category == c] for c in {t.category for t in tasks}}
+        self.assertGreaterEqual(len(by["reasoning"]), 20)
+        self.assertGreaterEqual(len(by["reasoning-held"]), 8)
+        for task_ in by["reasoning"] + by["reasoning-held"]:
+            with self.subTest(task=task_.id):
+                # Run on the model only, and judged on what the answer says.
+                self.assertIsNone(task_.script)
+                self.assertTrue(task_.runs_with("real"))
+                self.assertTrue(set(task_.expect) & {"answer_number", "answer_any", "answer_contains"})
+        for task_ in by["reasoning-scripted"]:
+            self.assertTrue(task_.scripted_only)
+        self.assertFalse({t.id for t in load_tasks()} & {t.id for t in tasks})
+
+    def test_every_recording_it_names_is_there(self) -> None:
+        for task_ in load_tasks(REASONING):
+            for files in task_.tools.values():
+                for name in [files] if isinstance(files, str) else files:
+                    with self.subTest(task=task_.id, file=name):
+                        self.assertIn("ok", fixtures.load(name)["result"])
 
 
 class FixtureTests(unittest.IsolatedAsyncioTestCase):
@@ -285,6 +333,62 @@ class ScoreTests(unittest.TestCase):
             ["answer: does not contain 'Porto'", "answer: contains 'i cannot'"],
         )
 
+    def test_numbers_are_read_as_an_answer_writes_them(self) -> None:
+        self.assertEqual(
+            numbers("It comes to $2,840.90, or −7 and -5 on 2026-10-20; Qwen3 ran 27km at 18%."),
+            [2840.90, -7.0, -5.0, 2026.0, 10.0, 20.0, 27.0, 18.0],
+        )
+        self.assertEqual(numbers("1,000,000 and 12,34 and 18."), [1000000.0, 12.0, 34.0, 18.0])
+        self.assertEqual(numbers("no figures here"), [])
+
+    def test_a_number_is_found_within_its_tolerance_and_a_known_slip_is_caught(self) -> None:
+        said = turn(ANSWER, answer="The sale price is £76.44, down from £84.")
+        self.assertEqual(score(task(answer_number={"value": 76.44, "tol": 0.01}), [said]), [])
+        self.assertEqual(score(task(answer_number={"value": 76.4, "tol": 0.05}), [said]), [])
+        self.assertEqual(
+            score(task(answer_number={"value": 76.43}), [said]),
+            ["answer: no number of 76.43 (found [76.44, 84.0])"],
+        )
+        self.assertEqual(
+            score(task(answer_number={"value": 76.44, "not": [84]}), [said]),
+            ["answer: gives 84, the answer a known mistake leads to"],
+        )
+        both = turn(ANSWER, answer="6 loaves, with 200 g left.")
+        self.assertEqual(score(task(answer_number=[{"value": 6}, {"value": 200}]), [both]), [])
+        self.assertEqual(
+            score(task(answer_number=[{"value": 6}, {"value": 125}]), [both]),
+            ["answer: no number of 125 (found [6.0, 200.0])"],
+        )
+        self.assertEqual(
+            score(task(answer_number={"value": 15}), [turn(ANSWER, answer="Fifteen cents.")]),
+            ["answer: no number of 15 (found [])"],
+        )
+        self.assertEqual(score(task(answer_number={"value": -3}), [turn(ANSWER, answer="It is -3.")]), [])
+
+    def test_one_of_several_answers_will_do_and_a_long_answer_is_too_long(self) -> None:
+        said = turn(ANSWER, answer="Train B arrives first.")
+        self.assertEqual(score(task(answer_any=["train b", "the second"]), [said]), [])
+        self.assertEqual(score(task(answer_any=["train a"]), [said]),
+                         ["answer: contains none of ['train a']"])
+        self.assertEqual(score(task(answer_max_words=4), [said]), [])
+        self.assertEqual(score(task(answer_max_words=3), [said]),
+                         ["answer: 4 words, at most 3 expected"])
+
+    def test_a_file_the_task_began_with_is_judged_as_the_turns_left_it(self) -> None:
+        seeded = Task(id="t", category="c", turns=("x",), project={"stats.py": "range(1, n)\n"},
+                      expect={"file_not_contains": {"stats.py": ["range(1, n)"], "gone.py": ["x"]},
+                              "file_contains": {"stats.py": ["range(1, n)"]}})
+        untouched = turn(ANSWER, answer="Fixed.")
+        self.assertEqual(
+            score(seeded, [untouched]),
+            ["file: stats.py still contains 'range(1, n)'", "file: gone.py is not there"],
+        )
+        edited = agent.Trace(outcome="answered", answer="Fixed.")
+        edited.calls = [(ToolCall("edit_file", {"path": "stats.py"}),
+                         base.ToolResult(True, "", data={"path": "stats.py", "content": "range(n)\n"}))]
+        fixed = dataclasses.replace(seeded, expect={"file_not_contains": {"stats.py": ["range(1, n)"]}})
+        self.assertEqual(score(fixed, [Turn(user="x", events=[], trace=edited)]), [])
+
     def test_a_file_is_read_as_the_turns_left_it(self) -> None:
         def wrote(path: str, content: str, ok: bool = True) -> Turn:
             trace = agent.Trace(outcome="answered", answer="Done.")
@@ -389,9 +493,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         report = await run_suite(load_tasks(), engine_kind="scripted")
         self.assertEqual(
             set(report),
-            {"engine", "seed", "loop", "rules", "created", "model", "tokens_are_estimates", "summary",
-             "by_category", "tasks"},
+            {"engine", "seed", "loop", "thinking", "rules", "created", "model", "tokens_are_estimates",
+             "summary", "by_category", "tasks"},
         )
+        self.assertEqual(set(report["thinking"]), {"mode", "budget"})
         summary = report["summary"]
         self.assertEqual(
             set(summary),
@@ -399,8 +504,13 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
              "task_success", "routing_accuracy", "argument_match",
              "invalid_call_rate", "unsupported_rate", "correction_rate",
              "second_step_rate", "limit_rate", "repeat_rate",
-             "steps", "passes", "prompt_tokens", "output_tokens"},
+             "steps", "passes", "prompt_tokens", "output_tokens",
+             "no_answer_rate", "calls_by_tool",
+             "think_tokens", "think_first", "think_later", "think_later_share",
+             "budget_hit_rate", "budget_task_rate", "think_eos_rate",
+             "success_when_cut", "success_when_uncut"},
         )
+        self.assertGreater(summary["calls_by_tool"]["weather"], 0)
         self.assertEqual(summary["tasks"], summary["ran"] + summary["skipped"])
         self.assertEqual(
             summary["ran"],
@@ -476,21 +586,145 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
 
     def test_two_reports_are_set_side_by_side(self) -> None:
         was = {"engine": "real", "seed": 0, "created": "then",
-               "summary": {"task_success": 0.8, "passed": 8, "seconds": {"total": {}}},
+               "thinking": {"mode": "on", "budget": 1024},
+               "summary": {"task_success": 0.8, "passed": 8, "seconds": {"total": {"median": 40.0}},
+                           "think_tokens": {"median": 600.0, "p95": 1024.0}, "success_when_cut": None,
+                           "calls_by_tool": {"python": 2}},
                "tasks": [{"id": "a", "status": PASSED}, {"id": "b", "status": FAILED},
                          {"id": "gone", "status": PASSED}]}
-        now = {"summary": {"task_success": 0.9, "passed": 9, "seconds": {"total": {}}},
+        now = {"summary": {"task_success": 0.9, "passed": 9, "seconds": {"total": {"median": 55.5}},
+                           "think_tokens": {"median": 900.0, "p95": 2048.0}, "success_when_cut": 0.5,
+                           "calls_by_tool": {"python": 5, "calculator": 1}},
                "tasks": [{"id": "a", "status": PASSED}, {"id": "b", "status": PASSED},
                          {"id": "new", "status": FAILED}]}
         change = compare(now, was)
-        self.assertEqual(change["previous"], {"engine": "real", "seed": 0, "created": "then"})
+        self.assertEqual(change["previous"], {"engine": "real", "seed": 0, "created": "then",
+                                              "thinking": {"mode": "on", "budget": 1024},
+                                              "rules": None, "task_file": None})
         self.assertEqual(change["figures"]["task_success"], {"was": 0.8, "now": 0.9, "change": 0.1})
         self.assertEqual(change["figures"]["passed"]["change"], 1)
+        # Spreads and the parts of the time are set side by side figure by figure.
+        self.assertEqual(change["figures"]["seconds.total.median"]["change"], 15.5)
+        self.assertEqual(change["figures"]["think_tokens.p95"], {"was": 1024.0, "now": 2048.0, "change": 1024.0})
+        self.assertEqual(change["figures"]["calls_by_tool.python"]["change"], 3)
+        # A figure one report lacks is not compared.
+        self.assertNotIn("success_when_cut", change["figures"])
+        self.assertNotIn("calls_by_tool.calculator", change["figures"])
         self.assertEqual(
             change["changed"],
             [{"id": "b", "was": FAILED, "now": PASSED}, {"id": "new", "was": "absent", "now": FAILED}],
         )
         self.assertEqual(change["removed"], ["gone"])
+
+    def test_each_thought_is_counted_and_a_cut_one_is_told_from_one_the_model_closed(self) -> None:
+        from evals.runner import Outcome, summarise
+
+        def thought(tokens: int, end: str) -> agent.Step:
+            return agent.Step("answer", model=True, via="model",
+                              input={"think_tokens": tokens, "think_end": end, "think_budget": 100})
+
+        def turn_(*steps: agent.Step) -> Turn:
+            return Turn(user="x", events=[],
+                        trace=agent.Trace(steps=list(steps), outcome="answered", answer="Done."))
+
+        ran = agent.Step("tool", name="python", via="model")
+        cut = Outcome(Task(id="cut", category="c", turns=("x",)), FAILED, ["wrong"],
+                      [turn_(thought(100, "budget"), ran, thought(40, "closed"))])
+        clean = Outcome(Task(id="clean", category="c", turns=("x", "y")), PASSED, [],
+                        [turn_(thought(30, "closed")), turn_(thought(0, "skipped"), thought(20, "eos"))])
+        plain = Outcome(Task(id="plain", category="c", turns=("x",)), PASSED, [], [turn_(ANSWER)])
+
+        row = cut.row(False)
+        self.assertEqual(
+            (row["think_tokens"], row["thinks"], row["think_cut"], row["think_eos"], row["called"]),
+            (140, [[100, "budget"], [40, "closed"]], 1, 0, ["python"]),
+        )
+        self.assertIs(row["no_answer"], False)
+        self.assertNotIn("thinks", plain.row(False))
+
+        s = summarise([cut, clean, plain], timed=False)
+        # Four replies thought (a reply given no budget did not): one was
+        # cut at the budget, one ended the turn inside its thought.
+        self.assertEqual((s["budget_hit_rate"], s["think_eos_rate"]), (0.25, 0.25))
+        self.assertEqual(s["budget_task_rate"], 0.5)
+        self.assertEqual((s["success_when_cut"], s["success_when_uncut"]), (0.0, 1.0))
+        self.assertEqual(s["think_tokens"]["median"], 95.0)          # 140 and 50
+        self.assertEqual(s["think_first"]["median"], 65.0)           # 100 and 30
+        self.assertEqual(s["think_later"]["median"], 30.0)           # 40 and 20
+        self.assertEqual(s["think_later_share"], round(60 / 190, 4))
+        self.assertEqual(s["calls_by_tool"], {"python": 1})
+        self.assertEqual(s["no_answer_rate"], 0.0)
+        nothing = summarise([plain], timed=False)
+        self.assertIsNone(nothing["think_tokens"])
+        self.assertIsNone(nothing["budget_hit_rate"])
+
+    async def test_a_run_can_think_otherwise_than_the_settings_say(self) -> None:
+        cut = Task(id="cut", category="c", turns=("Hi",),
+                   script=("one two three four five</think>\n\nnever said", "Hello."))
+        report = await run_suite([cut], engine_kind="scripted",
+                                 config={"thinking": "on", "think_budget": 3})
+        self.assertEqual(report["thinking"], {"mode": "on", "budget": 3})
+        row = report["tasks"][0]
+        self.assertEqual((row["status"], row["thinks"], row["think_cut"]), (PASSED, [[3, "budget"]], 1))
+        self.assertEqual(report["summary"]["budget_hit_rate"], 1.0)
+        plain = await run_suite([dataclasses.replace(cut, script=("Hello.",))], engine_kind="scripted",
+                                config={"thinking": "none"})
+        self.assertEqual(plain["thinking"]["mode"], "none")
+        self.assertNotIn("thinks", plain["tasks"][0])
+
+    async def test_a_real_run_with_other_settings_leaves_the_engine_as_it_found_it(self) -> None:
+        from evals.scripted import ScriptedEngine
+
+        engine = ScriptedEngine(
+            ["one two three four five</think>\n\nnever said", "Hello."],
+            cfg=settings.model_copy(update={"mock": True, "mock_delay": 0.0, "thinking": "none"}),
+        )
+        self.addAsyncCleanup(engine.settled)
+        was = engine.cfg
+        report = await run_suite([Task(id="t", category="c", turns=("Hi",))], engine_kind="real",
+                                 engine=engine, config={"thinking": "on", "think_budget": 3})
+        self.assertIs(engine.cfg, was)
+        self.assertEqual(report["thinking"], {"mode": "on", "budget": 3})
+        self.assertEqual(engine.passes[0].sampling["max_tokens"], 3)
+        self.assertEqual(report["tasks"][0]["think_cut"], 1)
+
+    async def test_every_scripted_task_passes_with_thinking_on_as_well(self) -> None:
+        report = await run_suite(load_tasks(), engine_kind="scripted", config={"thinking": "on"})
+        self.assertEqual(report["summary"]["failed"], 0)
+        self.assertEqual(report["summary"]["budget_hit_rate"], 0.0)
+
+    async def test_a_task_begins_with_its_files_and_the_model_is_told_of_them(self) -> None:
+        from evals.runner import run_task
+        from evals.scripted import ScriptedEngine
+
+        engine = ScriptedEngine(["Done."])
+        self.addAsyncCleanup(engine.settled)
+        seeded = Task(id="seeded", category="c", turns=("Fix it.",), project={"stats.py": "print(1)\n"})
+        outcome = await run_task(seeded, engine=engine)
+        read = "\n".join(m["content"] for m in outcome.last.prompt)
+        self.assertIn("Project files: stats.py (1 line, v1).", read)
+
+    async def test_a_change_after_reading_a_page_is_answered_as_the_task_says(self) -> None:
+        from evals.runner import run_task
+        from evals.scripted import ScriptedEngine
+
+        support.with_settings(self, tools_enabled=True, agent_loop=True)
+        script = (render_call("wikipedia", {"query": "Python"}),
+                  render_call("write_file", {"path": "notes.md", "content": "Python, 1991.\n"}),
+                  "Noted.")
+        for answer, kept in (("once", True), ("no", False)):
+            with self.subTest(answer=answer):
+                engine = ScriptedEngine(script)
+                self.addAsyncCleanup(engine.settled)
+                asked = Task(id=f"asked-{answer}", category="c", turns=("Look Python up and note its year.",),
+                             tools={"wikipedia": "wikipedia_python.json"}, loop=True, confirm=answer,
+                             expect={"file_contains": {"notes.md": ["1991"]}})
+                began = time.perf_counter()
+                outcome = await run_task(asked, engine=engine)
+                # Answered at once: nobody is waited for.
+                self.assertLess(time.perf_counter() - began, 5)
+                self.assertTrue(any(name == "confirm" for t in outcome.turns for name, _ in t.events))
+                self.assertEqual(outcome.status == PASSED, kept, outcome.failures)
 
 
 class CommandTests(unittest.TestCase):
@@ -531,6 +765,24 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(report["compared"]["changed"], [])
         self.assertIn("nothing changed", said)
+
+    def test_a_run_can_be_told_how_to_think_and_shown_task_by_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "r.json"
+            status, said = self.run_command("--tasks", str(REASONING), "--thinking", "on",
+                                            "--think-budget", "7", "--rows", "--out", str(out))
+            report = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(status, 0)
+        self.assertEqual(report["thinking"], {"mode": "on", "budget": 7})
+        self.assertEqual(report["task_file"], REASONING.as_posix())
+        self.assertIn("thinking on (budget 7 a reply)", said)
+        self.assertIn("thinking tokens per task", said)
+        self.assertRegex(said, r"scripted-debug-the-mean\s+passed\s+2\s+0\s+0\s+0\s+-\s+edit_file")
+
+    def test_a_thinking_budget_must_be_some_tokens(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self.run_command("--think-budget", "0")
+        self.assertEqual(caught.exception.code, 2)
 
     def test_probing_the_cache_needs_the_real_model(self) -> None:
         with self.assertRaises(SystemExit) as caught:

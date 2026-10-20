@@ -6,6 +6,8 @@
     python scripts/eval_agent.py --engine real --compare previous.json
     python scripts/eval_agent.py --engine real --probe-cache
     python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt
+    python scripts/eval_agent.py --engine real --tasks evals/reasoning.jsonl \
+        --category reasoning --thinking on --think-budget 2048 --rows
 
 With ``--engine scripted`` each task brings what the model says, so the run
 measures the code around the model. It needs no weights and takes a second.
@@ -177,7 +179,13 @@ def show(report: dict, file=None) -> None:
         return "n/a" if value is None else f"{value:.0%}"
 
     loop = "" if report.get("loop", True) else ", one call where a task does not ask for more"
-    print(f"\n{report['engine']} engine, seed {report['seed']}{loop}", file=file)
+    thinking = report.get("thinking") or {}
+    thought = ""
+    if thinking.get("mode") == "on":
+        thought = f", thinking on (budget {thinking['budget']} a reply)"
+    elif thinking.get("mode"):
+        thought = f", thinking {thinking['mode']}"
+    print(f"\n{report['engine']} engine, seed {report['seed']}{loop}{thought}", file=file)
     if report.get("rules"):
         print(f"  worded by {report['rules']['file']} ({report['rules']['sha256']})", file=file)
     print(
@@ -194,9 +202,22 @@ def show(report: dict, file=None) -> None:
     if s.get("correction_rate") is not None:
         print(f"  corrections {pct(s['correction_rate'])} of checked answers "
               f"(a figure nothing returned: {pct(s['unsupported_rate'])})", file=file)
+    if s.get("think_tokens"):
+        t = s["think_tokens"]
+        print(f"  thinking tokens per task: median {t['median']}, 95% within {t['p95']}; "
+              f"cut at the budget in {pct(s['budget_hit_rate'])} of thoughts, "
+              f"{pct(s['budget_task_rate'])} of tasks; ended inside a thought "
+              f"{pct(s['think_eos_rate'])}", file=file)
+        if s.get("success_when_cut") is not None:
+            print(f"  success where a thought was cut {pct(s['success_when_cut'])}, "
+                  f"where none was {pct(s['success_when_uncut'])}", file=file)
+    if s.get("no_answer_rate"):
+        print(f"  no answer written: {pct(s['no_answer_rate'])} of tasks", file=file)
     if s.get("seconds") and s["seconds"]["total"]:
         t = s["seconds"]["total"]
         print(f"  seconds per task: median {t['median']}, 95% within {t['p95']}", file=file)
+    if s.get("write_tps"):
+        print(f"  writing speed: median {s['write_tps']['median']} tokens a second", file=file)
     if s.get("read_tokens"):
         r = s["read_tokens"]
         print(f"  prompt tokens the model read per task: median {r['median']}, most {r['max']}", file=file)
@@ -211,11 +232,31 @@ def show(report: dict, file=None) -> None:
                 print(f"      it is marked as a known gap: {row.get('pending')}", file=file)
 
 
+def show_rows(report: dict, file=None) -> None:
+    """One line a task: how it ended, its replies, its thinking, the tools it
+    called and its time."""
+    file = file or sys.stderr
+    print(f"\n  {'task':<28} {'status':<8} {'passes':>6} {'think':>6} {'cut':>3} {'eos':>3} "
+          f"{'seconds':>8}  called", file=file)
+    for row in report["tasks"]:
+        if row["status"] == "skipped":
+            continue
+        ms = (row.get("ms") or {}).get("total")
+        seconds = "-" if ms is None else f"{ms / 1000:.1f}"
+        print(f"  {row['id'][:28]:<28} {row['status'][:8]:<8} {row.get('passes', 0):>6} "
+              f"{row.get('think_tokens', 0):>6} {row.get('think_cut', 0):>3} "
+              f"{row.get('think_eos', 0):>3} {seconds:>8}  {','.join(row.get('called', [])) or '-'}",
+              file=file)
+
+
 def show_change(change: dict, file=None) -> None:
     file = file or sys.stderr
     print(f"\nagainst the report of {change['previous'].get('created')}", file=file)
     for key, f in change["figures"].items():
-        if f["change"]:
+        # A spread is shown by its median, and the time by its p95 as well;
+        # the rest is in the report.
+        shown = not key.endswith((".mean", ".max", ".p95")) or key == "seconds.total.p95"
+        if f["change"] and shown:
             print(f"  {key}: {f['was']} -> {f['now']}", file=file)
     for row in change["changed"]:
         print(f"  {row['id']}: {row['was']} -> {row['now']}", file=file)
@@ -244,11 +285,27 @@ def main(argv: list[str] | None = None) -> int:
         "--probe-cache", action="store_true",
         help="play a short conversation and show what each request read (real engine only)",
     )
+    parser.add_argument(
+        "--thinking", choices=("on", "off", "none"),
+        help="how the model thinks for this run, whatever the settings say",
+    )
+    parser.add_argument(
+        "--think-budget", type=int, metavar="N",
+        help="the most tokens a reply may think for this run (with thinking on)",
+    )
+    parser.add_argument("--rows", action="store_true", help="show one line a task")
     args = parser.parse_args(argv)
     try:
         wording = load_wording(args.rules) if args.rules else None
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
+    if args.think_budget is not None and args.think_budget < 1:
+        parser.error("--think-budget must be at least 1")
+    config = {}
+    if args.thinking:
+        config["thinking"] = args.thinking
+    if args.think_budget is not None:
+        config["think_budget"] = args.think_budget
 
     if args.probe_cache:
         if args.engine != "real":
@@ -263,12 +320,15 @@ def main(argv: list[str] | None = None) -> int:
     engine = load_engine() if args.engine == "real" else None
     report = asyncio.run(run_suite(
         tasks, engine_kind=args.engine, engine=engine, seed=args.seed, categories=args.category,
-        loop=False if args.single else None, wording=wording,
+        loop=False if args.single else None, wording=wording, config=config or None,
     ))
+    report["task_file"] = args.tasks.as_posix()
     if args.compare:
         report["compared"] = compare(report, json.loads(args.compare.read_text(encoding="utf-8")))
 
     show(report)
+    if args.rows:
+        show_rows(report)
     if args.compare:
         show_change(report["compared"])
     text = json.dumps(report, indent=2, ensure_ascii=False)

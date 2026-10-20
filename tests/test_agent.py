@@ -29,7 +29,8 @@ try:
     from app.agent.calls import CALL_CLOSE, CALL_OPEN, render_call
     from app.agent.context import SUMMARY_HEADING, Part, Turn, key, run_room
     from app.agent.loop import NO_ANSWER, REPLY_ROOM
-    from app.agent.reply import BUDGET_CLOSER, CODE_END, CODE_OPENERS
+    from app.agent.reply import BUDGET_CLOSER, CODE_END, CODE_OPENERS, Reply
+    from app.agent.reply import write as write_reply
     from app.agent.style import CODE, PROSE, PROSE_THINKING
     from app.agent.transcript import NO_MORE_CALLS, SYSTEM_WITHOUT_TOOLS, system_for
     from app.chatml import THINK_BLOCK, THINK_CLOSE, THINK_OPEN
@@ -680,7 +681,8 @@ class ThinkingTests(AgentCase):
         self.assertEqual(support.step(stream, "reply-1", "ok")["think_tokens"], 9)
         done = only(stream, "done")[0]
         self.assertEqual((done["think_tokens"], done["requests"]), (9, 2))
-        self.assertEqual(trace.steps[0].input, {"think_tokens": 9})
+        self.assertEqual(trace.steps[0].input, {"think_tokens": 9, "think_end": "closed", "think_budget": 1024})
+        self.assertEqual(support.step(stream, "reply-1", "ok")["think_end"], "closed")
         # One reply, two requests: the thought, then what is said.
         thought, spoken = engine.passes
         self.assertEqual(thought.stop, [THINK_CLOSE])
@@ -701,7 +703,10 @@ class ThinkingTests(AgentCase):
         self.assertEqual(trace.prompt[2], {"role": "assistant", "content": raw})
         self.assertEqual(trace.answer, "Take a coat.")
         self.assertEqual(trace.steps[0].output, WEATHER)
-        self.assertEqual([s.input for s in trace.steps if s.model], [{"think_tokens": 9}, None])
+        self.assertEqual([s.input for s in trace.steps if s.model], [
+            {"think_tokens": 9, "think_end": "closed", "think_budget": 1024},
+            {"think_tokens": 0, "think_end": "closed", "think_budget": 1024},
+        ])
         self.assertAppendOnly(engine)
 
     async def test_a_thought_that_runs_out_of_its_budget_is_closed_for_it_and_the_reply_goes_on(self) -> None:
@@ -717,7 +722,41 @@ class ThinkingTests(AgentCase):
         self.assertEqual(trace.sent[-1].content,
                          THINK_OPEN + "one two three " + BUDGET_CLOSER + "The answer.")
         self.assertEqual(only(stream, "done")[0]["think_tokens"], 3)
+        # Recorded as cut at its budget, not closed by the model.
+        self.assertEqual(trace.steps[0].input, {"think_tokens": 3, "think_end": "budget", "think_budget": 3})
+        self.assertEqual(support.step(stream, "reply-1", "ok")["think_end"], "budget")
         self.assertAppendOnly(engine)
+
+    async def test_a_thought_cut_where_the_window_runs_out_is_told_from_one_cut_at_its_budget(self) -> None:
+        engine = self.scripted("one two three four five six seven eight</think>\n\nnever said", cfg=thinking())
+        reply = Reply()
+        await collect(write_reply(engine, [{"role": "user", "content": "Hi"}], room=5,
+                                  thinking="on", budget=1024, reply=reply))
+        self.assertEqual(engine.passes[0].sampling["max_tokens"], 5)
+        self.assertEqual((reply.think_end, reply.ended, reply.think_tokens), ("room", "limit", 5))
+        self.assertEqual(reply.said, "")
+
+    async def test_a_turn_that_ends_inside_its_thought_is_recorded_as_such(self) -> None:
+        # An engine that does not close the thought for the script: the model
+        # ends its turn before it ever writes </think>.
+        engine = self.scripted("I am still wondering", cfg=thinking("none"))
+        reply = Reply()
+        await collect(write_reply(engine, [{"role": "user", "content": "Hi"}], room=100,
+                                  thinking="on", budget=1024, reply=reply))
+        self.assertEqual((reply.think_end, reply.ended, reply.said), ("eos", "answer", ""))
+        self.assertEqual(reply.thought, "I am still wondering")
+
+    async def test_a_reply_given_no_thinking_budget_opens_with_an_empty_thought(self) -> None:
+        engine = self.scripted("Hello.", cfg=thinking())
+        reply = Reply()
+        stream = await collect(write_reply(engine, [{"role": "user", "content": "Hi"}], room=100,
+                                           thinking="on", budget=0, reply=reply))
+        self.assertEqual(only(stream, "think"), [])
+        self.assertEqual(len(engine.passes), 1)
+        self.assertEqual(engine.passes[0].stop, PROSE_STOPS)
+        self.assertTrue(engine.passes[0].prompt.endswith("<|im_start|>assistant\n" + THINK_BLOCK))
+        self.assertEqual(reply.raw, THINK_BLOCK + "Hello.")
+        self.assertEqual((reply.think_end, reply.think_tokens, reply.said), ("skipped", 0, "Hello."))
 
     async def test_with_thinking_off_each_reply_opens_with_an_empty_thought(self) -> None:
         engine = self.scripted(WEATHER, "Take a coat.", cfg=thinking("off"))

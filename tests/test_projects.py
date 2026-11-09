@@ -375,6 +375,42 @@ class ReadFileTests(ToolCase):
                                                                     "start_line": 13}), budget=100)
         self.assertTrue(rest.startswith("huge.py (v1, 400 lines):\n13│ line = 13\n"))
 
+    async def test_find_shows_only_the_lines_with_it_and_a_few_around(self) -> None:
+        projects.add("c", "stock.csv", "".join(f"SKU-{n},{n * 3}\n" for n in range(1, 1501)),
+                     lang="text")
+        seen = self.read("read_file", await self.call(
+            "read_file", {"path": "stock.csv", "find": "sku-1240,"}))
+        self.assertEqual(seen, (
+            "stock.csv (v1, 1500 lines): 1 line with 'sku-1240,':\n"
+            "1237│ SKU-1237,3711\n1238│ SKU-1238,3714\n1239│ SKU-1239,3717\n"
+            "1240│ SKU-1240,3720\n"
+            "1241│ SKU-1241,3723\n1242│ SKU-1242,3726\n1243│ SKU-1243,3729"
+        ))
+
+    async def test_lines_found_apart_are_marked_apart_and_near_ones_joined(self) -> None:
+        text = "".join(f"x = {n}\n" for n in range(1, 41)).replace("x = 10\n", "hit\n") \
+            .replace("x = 12\n", "hit\n").replace("x = 30\n", "hit\n")
+        projects.add("c", "m.py", text, lang="python")
+        seen = self.read("read_file", await self.call("read_file", {"path": "m.py", "find": "hit"}))
+        self.assertTrue(seen.startswith("m.py (v1, 40 lines): 3 lines with 'hit':\n 7│ x = 7\n"))
+        self.assertIn("15│ x = 15\n…\n27│ x = 27", seen)
+        self.assertTrue(seen.endswith("33│ x = 33"))
+
+    async def test_find_falls_back_to_every_word_and_says_when_nothing_is_there(self) -> None:
+        projects.add("c", "n.md", "The launch moves to 14 March.\nNothing else.\n", lang="markdown")
+        words = self.read("read_file", await self.call("read_file", {"path": "n.md",
+                                                                     "find": "march launch"}))
+        self.assertIn("1│ The launch moves to 14 March.", words)
+        none = self.read("read_file", await self.call("read_file", {"path": "n.md", "find": "June"}))
+        self.assertEqual(none, "No line of n.md (2 lines) contains 'June'. Try fewer or other "
+                               "words, or read it from a line with start_line.")
+
+    async def test_many_lines_found_say_where_to_go_on_from(self) -> None:
+        projects.add("c", "w.py", "".join(f"hit = {n}\n" for n in range(1, 301)), lang="python")
+        seen = self.read("read_file", await self.call("read_file", {"path": "w.py", "find": "hit"}),
+                         budget=100)
+        self.assertRegex(seen, r"\(\d+ of 300 shown; call read_file with start_line \d+ for the next\)$")
+
     async def test_a_start_past_the_end_reads_the_last_line(self) -> None:
         result = await self.call("read_file", {"path": "app.py", "start_line": 99})
         self.assertEqual(self.read("read_file", result), "app.py (v1, 2 lines):\n2│ print(2)")

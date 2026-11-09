@@ -453,28 +453,29 @@ class LongContextFileTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(task_.n_ctx, 8192)
         self.assertFalse({t.id for t in load_tasks()} & {t.id for t in tasks})
 
-    async def test_every_scripted_task_ends_as_it_is_marked_and_trims(self) -> None:
+    async def test_every_scripted_task_ends_as_it_is_marked_and_the_trim_tasks_trim(self) -> None:
         report = await run_suite(load_tasks(LONGCTX), engine_kind="scripted")
         ran = [r for r in report["tasks"] if r["status"] != SKIPPED]
-        self.assertGreaterEqual(len(ran), 3)
+        self.assertGreaterEqual(len(ran), 5)
         for row in ran:
             with self.subTest(task=row["id"]):
-                self.assertEqual(row["n_ctx"], 8192)
-                self.assertGreater(row["trims"], 0)
+                if row["category"] == "recall-after-trim":
+                    self.assertEqual(row["n_ctx"], 8192)
+                    self.assertGreater(row["trims"], 0)
                 if row.get("pending"):
                     self.assertEqual(row["status"], PENDING, "a known gap closed: unmark it")
                     self.assertTrue(all(f.startswith("prompt:") for f in row["failures"]),
                                     row["failures"])
                 else:
                     self.assertEqual(row["status"], PASSED, row["failures"])
-        self.assertEqual(report["summary"]["trim_rate"], 1.0)
+        self.assertEqual(report["by_category"]["recall-after-trim"]["trim_rate"], 1.0)
 
     async def test_a_window_given_for_the_run_wins_over_the_tasks_own(self) -> None:
         report = await run_suite(load_tasks(LONGCTX), engine_kind="scripted",
                                  config={"n_ctx": 32768})
         self.assertEqual(report["n_ctx"], 32768)
         for row in report["tasks"]:
-            if row["status"] != SKIPPED:
+            if row["status"] != SKIPPED and row["category"] == "recall-after-trim":
                 with self.subTest(task=row["id"]):
                     self.assertEqual(row["trims"], 0)
                     self.assertTrue(any(f.startswith("trimmed:") for f in row["failures"]))

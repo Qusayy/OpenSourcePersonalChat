@@ -80,6 +80,12 @@ class Trace:
     # once the run has answered.
     sent: list[Part] | None = None
     system_key: str | None = None
+    # How the conversation was fitted to the window when the run began: the
+    # opening prompt's tokens, the earlier turns replayed and summarised, and
+    # how many of those tokens (estimated) were earlier thoughts carried along.
+    window: dict | None = None
+    # What ended the run's calls, when a limit did: steps | time | room.
+    limited_by: str | None = None
     # Whether the answer was checked against what was looked up, and what
     # was found wrong with it: the figures in it that nothing returned, and
     # the line the visitor is shown about them.

@@ -84,6 +84,8 @@ class Outcome:
         }
         if self.task.pending:
             row["pending"] = self.task.pending
+        if self.task.n_ctx:
+            row["n_ctx"] = self.task.n_ctx
         if not self.turns:
             return row
         if self.last.correction:
@@ -105,6 +107,7 @@ class Outcome:
             called=[s.name for s in steps if s.kind == "tool" and s.error not in REFUSED],
             # Whether the model ended without saying anything to answer with.
             no_answer=(self.last.answer or "").strip() == NO_ANSWER,
+            **self.context,
         )
         thoughts = self.thoughts
         if thoughts:
@@ -131,6 +134,23 @@ class Outcome:
             # replies really were: the speed a visitor waits on.
             row["write_tps"] = round(row["output_tokens"] / (writing / 1000), 2) if writing else None
         return row
+
+    @property
+    def context(self) -> dict:
+        """How long the prompts grew, and what had to give: the longest
+        prompt any reply read, the opening prompt of the last turn and the
+        earlier thoughts it carried, how many turns began with older turns
+        summarised, and the limits that ended a turn's calls."""
+        windows = [t.trace.window for t in self.turns if t.trace.window]
+        prompts = [s.prompt_tokens for t in self.turns for s in t.trace.steps
+                   if s.model and s.prompt_tokens]
+        return {
+            "peak_prompt_tokens": max(prompts, default=0),
+            "opening_tokens": windows[-1]["tokens"] if windows else 0,
+            "carried_thought": windows[-1]["thought"] if windows else 0,
+            "trims": sum(1 for w in windows if w["summarised"]),
+            "limited_by": [t.trace.limited_by for t in self.turns if t.trace.limited_by],
+        }
 
     @property
     def thoughts(self) -> list[tuple[int, str, bool]]:
@@ -239,6 +259,7 @@ async def run_suite(
             tempfile.TemporaryDirectory() as scratch, db.elsewhere(Path(scratch) / "evals.db"):
         cfg = engine.cfg if engine_kind == "real" else scripted_cfg
         thinking = {"mode": cfg.think_mode, "budget": int(cfg.think_budget or 1024)}
+        window = int(cfg.n_ctx)
         outcomes: list[Outcome] = []
         for task in tasks:
             if wanted is not None and task.category not in wanted:
@@ -246,10 +267,14 @@ async def run_suite(
             if not task.runs_with(engine_kind):
                 outcomes.append(Outcome(task, SKIPPED, [], []))
                 continue
+            # A task's own window, where the run did not set one for all.
+            own = {"n_ctx": task.n_ctx} if task.n_ctx and "n_ctx" not in (config or {}) else None
             if engine_kind == "real":
-                outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
+                with configured(engine, own):
+                    outcomes.append(await run_task(task, engine=engine, seed=seed, loop=loop))
                 continue
-            scripted = ScriptedEngine(task.script or (), cfg=scripted_cfg)
+            task_cfg = scripted_cfg.model_copy(update=own) if own else scripted_cfg
+            scripted = ScriptedEngine(task.script or (), cfg=task_cfg)
             try:
                 outcomes.append(await run_task(task, engine=scripted, seed=seed, loop=loop))
             finally:
@@ -264,6 +289,8 @@ async def run_suite(
         "loop": settings.agent_loop if loop is None else loop,
         # How the model thought in this run, and its budget a reply.
         "thinking": thinking,
+        # The window every prompt was fitted to: the settings', or --n-ctx.
+        "n_ctx": window,
         # Other texts the model was given in place of its own, if any were.
         "rules": wording.describe() if wording else None,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -376,6 +403,14 @@ def summarise(outcomes: list[Outcome], *, timed: bool) -> dict:
         "output_tokens": _spread([float(r["output_tokens"]) for r in rows]),
         # Answers that were the run's own "could not finish".
         "no_answer_rate": _share(sum(bool(r.get("no_answer")) for r in rows), len(rows)),
+        # How long prompts grew: the longest any reply read, per task, and
+        # the earlier thoughts the last turn's opening prompt carried.
+        "peak_prompt_tokens": _spread([float(r["peak_prompt_tokens"]) for r in rows]),
+        "carried_thought": _spread([float(r["carried_thought"]) for r in rows if r["carried_thought"]]),
+        # Tasks where older turns had to be summarised to fit the window, and
+        # tasks where the window (not the steps or the time) ended the calls.
+        "trim_rate": _share(sum(r["trims"] > 0 for r in rows), len(rows)),
+        "room_limit_rate": _share(sum("room" in r["limited_by"] for r in rows), len(rows)),
         # How often each tool was called, over every task.
         "calls_by_tool": dict(sorted(Counter(n for r in rows for n in r.get("called", [])).items())),
         **_thinking(ran),
@@ -459,7 +494,8 @@ def compare(report: dict, previous: dict) -> dict:
     gone = [task_id for task_id in before if task_id not in {r["id"] for r in report["tasks"]}]
     return {
         "previous": {
-            k: previous.get(k) for k in ("engine", "seed", "created", "thinking", "rules", "task_file")
+            k: previous.get(k)
+            for k in ("engine", "seed", "created", "thinking", "n_ctx", "rules", "task_file")
         },
         "figures": figures,
         "changed": changed,

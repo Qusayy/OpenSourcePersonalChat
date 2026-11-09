@@ -22,10 +22,15 @@ A task marked ``pending`` is expected to fail, and says why. It is how a known
 gap is written down: the day it starts passing the suite says so, and the mark
 has to come off.
 
-A task may begin with files in its project (``project``: path to content), say
-how it answers if the run asks before a change (``confirm``: once, reply or
-no), and say how its expected answer was worked out (``note``).
-``reasoning.jsonl`` holds the tasks about reasoning, kept apart so that the
+A task may begin with files in its project (``project``: path to content, or
+``project_files``: path to a file under ``evals/projects`` for one too long to
+write on a line), say how it answers if the run asks before a change
+(``confirm``: once, reply or no), and say how its expected answer was worked
+out (``note``). A task may name the window its prompts are fitted to
+(``n_ctx``), for a run that does not set one itself: how a task about trimming
+makes sure it trims.
+``reasoning.jsonl`` holds the tasks about reasoning, and ``longctx.jsonl`` those
+about conversations and files longer than the window, kept apart so that the
 ordinary suite stays quick.
 """
 
@@ -37,6 +42,10 @@ from pathlib import Path
 from typing import Any
 
 TASKS = Path(__file__).resolve().parent / "tasks.jsonl"
+# Where a task's long project files are kept (``project_files``).
+PROJECTS = Path(__file__).resolve().parent / "projects"
+# The least window a task may ask for: the system text alone takes about half.
+LEAST_N_CTX = 4096
 
 # What `expect` may hold. A key outside this is a typo, and a typo in an
 # expectation is an expectation that silently never fails.
@@ -58,9 +67,10 @@ EXPECTATIONS = {
                             # within tol of value, and none within tol of a "not"
     "answer_max_words",     # the answer is at most this many words long
     "file_not_contains",    # {path: [text, ...]}: none of these is left in the project file
+    "trimmed",              # whether the last turn began with older turns summarised to fit
 }
 FIELDS = {"id", "category", "turns", "tools", "script", "scripted_only", "loop", "expect",
-          "pending", "project", "confirm", "note"}
+          "pending", "project", "project_files", "confirm", "note", "n_ctx"}
 # How a task answers when the run asks before a change (``app.agent.confirm``).
 CONFIRMS = frozenset({"once", "reply", "no"})
 
@@ -88,6 +98,8 @@ class Task:
     confirm: str = "no"
     # How the expected answer was worked out, for whoever reads the task.
     note: str | None = None
+    # The window its prompts are fitted to, where the run does not set one.
+    n_ctx: int | None = None
 
     def runs_with(self, engine_kind: str) -> bool:
         if engine_kind == "scripted":
@@ -137,8 +149,20 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
         project = raw.get("project") or {}
         if not isinstance(project, dict) or not all(isinstance(v, str) for v in project.values()):
             raise ValueError(f"{where}: project must map paths to their content")
+        files = raw.get("project_files") or {}
+        if not isinstance(files, dict) or not all(isinstance(v, str) for v in files.values()):
+            raise ValueError(f"{where}: project_files must map paths to files in evals/projects")
+        project = dict(project)
+        for path, name in files.items():
+            source = PROJECTS / name
+            if not source.is_file():
+                raise ValueError(f"{where}: there is no evals/projects/{name}")
+            project[path] = source.read_text(encoding="utf-8")
         if raw.get("confirm", "no") not in CONFIRMS:
             raise ValueError(f"{where}: confirm must be one of {sorted(CONFIRMS)}")
+        n_ctx = raw.get("n_ctx")
+        if n_ctx is not None and (not isinstance(n_ctx, int) or n_ctx < LEAST_N_CTX):
+            raise ValueError(f"{where}: n_ctx must be a whole number of at least {LEAST_N_CTX}")
         tasks.append(Task(
             id=raw["id"],
             category=raw["category"],
@@ -152,6 +176,7 @@ def load_tasks(path: Path | str = TASKS) -> list[Task]:
             project=project,
             confirm=raw.get("confirm", "no"),
             note=raw.get("note"),
+            n_ctx=n_ctx,
         ))
     return tasks
 

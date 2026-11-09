@@ -30,12 +30,12 @@ from functools import cached_property
 from typing import AsyncIterator, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
-from ..chatml import THINK_BLOCK
+from ..chatml import THINK_BLOCK, split_thought
 from ..config import settings
 from ..llm import Engine, Stop, engine as default_engine
 from ..llm.usage import blank
 from ..projects import paths
-from ..text import first_sentence
+from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
     CALL, CallContext, Link, Rejection, ToolResult, available, check, enabled, fresh_for,
@@ -44,7 +44,10 @@ from ..tools.base import (
 from ..tools.results import links_of
 from . import confirm
 from .calls import Call, parse_call, render_call
-from .context import SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history
+from .context import (
+    LOOK_BACK_LINE, Part, Turn, Window, brief_room, cap, fit, key, run_room, searchable,
+    turns_from_history,
+)
 from .policy import call_key, refusal, users_words
 from .reply import Reply, write
 from .route import URL_RE, ToolCall, free_route
@@ -74,6 +77,20 @@ def _project(name: str) -> bool:
     """Whether a tool works on the project: what it returns is no lookup."""
     tool = REGISTRY.get(name)
     return bool(tool and tool.project)
+
+
+def carried(window: Window, own: int) -> dict:
+    """How a run's opening prompt was made up: its tokens, the earlier turns
+    replayed whole and given only in the summary, and an estimate of the
+    tokens of earlier thoughts it carried. ``own`` is how many of the last
+    parts are this message's."""
+    earlier = window.parts[1:len(window.parts) - own]
+    thoughts = sum(
+        estimate(split_thought(p.content)[0])
+        for p in earlier if p.role == "assistant" and p.kind in ("call", "answer")
+    )
+    return {"tokens": window.tokens, "turns": window.turns,
+            "summarised": window.summarised, "thought": thoughts}
 
 
 def thought(reply: Reply, budget: int) -> dict | None:
@@ -306,7 +323,7 @@ class _Run:
         """The message cut to what the window can give it beside the system
         text and a summary of older turns, if it is longer. Counted only when
         it might be: no message has more tokens than bytes."""
-        limit = self._room() - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        limit = self._room() - self.engine.count_tokens(system) - brief_room(self.engine.cfg.n_ctx)
         if len(self.message.encode("utf-8")) <= limit:
             return self.message, False
         return cap(self.message, max(1, limit), self.engine.count_tokens)
@@ -334,9 +351,12 @@ class _Run:
         window = fit(
             system, self.turns or [], message, room=self._room(),
             count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
+            brief=brief_room(self.engine.cfg.n_ctx),
+            tail=LOOK_BACK_LINE if any(t.name == "look_back" for t in tools) else "",
         )
         self._trimmed(window)
         self.trace.system_key = key(system)
+        self.trace.window = carried(window, len(message))
         return Transcript(window.parts, own=len(message))
 
     def _trimmed(self, window: Window) -> None:
@@ -404,6 +424,12 @@ class _Run:
                     or time.perf_counter() - began >= self.max_seconds
                     or left < MIN_REPLY + (self.think_budget if self.thinking == "on" else 0)
                 )
+                if final and tools and self.trace.limited_by is None:
+                    self.trace.limited_by = (
+                        "steps" if steps >= self.max_steps
+                        else "time" if time.perf_counter() - began >= self.max_seconds
+                        else "room"
+                    )
                 if final and steps and not noted:
                     transcript.note(NO_MORE_CALLS)
                     noted = True
@@ -787,7 +813,8 @@ class _Run:
     async def _scoped(self, call: ToolCall) -> ToolResult:
         """The call, made in this run's conversation. Set inside the call's
         own task, so that it reaches the tool and goes no further."""
-        CALL.set(CallContext(conversation_id=self.scope, links=self.links, run_id=self.request_id))
+        CALL.set(CallContext(conversation_id=self.scope, links=self.links, run_id=self.request_id,
+                             earlier=searchable(self.turns or [])))
         return await self.call_tool(call.name, call.args)
 
     async def _call(self, call: ToolCall) -> ToolResult | None:

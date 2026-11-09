@@ -405,18 +405,28 @@ function Diff({ data }: { data: CardData }) {
 
 /* ---------------------------------------------------------------- note -- */
 
-// A note kept, or the notes found. The words are the user's own, set as
-// they were kept; whose notes they are is the caption's qualifier.
+// A note kept, or the notes found; or what was found looking back through
+// this conversation. The words are the user's own, set as they were kept;
+// whose notes they are is the caption's qualifier.
 function Note({ data, meta }: KindProps) {
-  const kept = text(data, "action") === "remember";
+  const action = text(data, "action");
+  const kept = action === "remember";
+  const back = action === "look_back";
   const notes = list(data, "notes").map((n) => String(n ?? ""));
   const whose = text(data, "scope") === "site" ? "this site" : "this conversation";
   const query = text(data, "query");
+  const none = back
+    ? query
+      ? `Nothing earlier in this conversation matches “${query}”.`
+      : "There is nothing earlier in this conversation."
+    : query
+      ? `No note matches “${query}”.`
+      : "There are no notes yet.";
   return (
     <Figure
       tool="note"
       card="note"
-      name={kept ? "Remember" : "Recall"}
+      name={kept ? "Remember" : back ? "Look back" : "Recall"}
       note={kept ? `kept for ${whose}` : query ? `“${query}”` : whose}
       meta={meta}
     >
@@ -430,9 +440,7 @@ function Note({ data, meta }: KindProps) {
           ))}
         </ul>
       ) : (
-        <p className="my-1 text-ink-2">
-          {query ? `No note matches “${query}”.` : "There are no notes yet."}
-        </p>
+        <p className="my-1 text-ink-2">{none}</p>
       )}
     </Figure>
   );

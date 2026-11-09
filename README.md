@@ -630,7 +630,7 @@ Everything is `AURORA_`-prefixed, read from the environment or `.env`.
 
 ## Tools
 
-Twenty tools, no API keys anywhere:
+Twenty-one tools, no API keys anywhere:
 
 | Tool | | Network |
 |---|---|---|
@@ -646,13 +646,14 @@ Twenty tools, no API keys anywhere:
 | `read_url` | fetch a page and extract its readable text | yes |
 | `open_result` | read the page behind one of the numbered results, by its number | yes |
 | `python` | run a short program in the sandbox and read what it prints; offered only where the sandbox runs | — |
-| `read_file` | one file of this conversation's project, as it stands, with line numbers | — |
+| `read_file` | one file of this conversation's project, as it stands, with line numbers; or only the lines that hold some text (`find`) | — |
 | `write_file` | create a file of the project, or replace one whole | — |
 | `edit_file` | replace one exact piece of a file with another, and leave the rest | — |
 | `move_file` | move or rename a file, or a whole folder; never onto a file that is there | — |
 | `delete_file` | delete a file, or a whole folder | — |
 | `run_file` | run a `.py` file of the project in the sandbox, with the rest of the project beside it; offered only where the sandbox runs | — |
 | `remember` · `recall` | notes kept on the user's word; see *Notes* | — |
+| `look_back` | what was said earlier in this conversation, once the window shows it only in brief | — |
 
 There is one agent, and every message can use every tool. Nothing is chosen
 before sending: no persona, no skill button, no palette.
@@ -789,10 +790,30 @@ answer.
 
 A result that goes out of date is replaced, once it has, by a line saying so:
 the weather after three hours, a rate after a day, the time after ten minutes.
+A message too long for the window is cut, and the page says so. A
+conversation from before any of this was kept is read as its messages.
+
 A conversation that outgrows the window loses its oldest turns in blocks, and
-they are summed up in a few lines at the top. A message too long for the
-window is cut, and the page says so. A conversation from before any of this
-was kept is read as its messages.
+they become a brief at the top. Not a retelling: what the work ahead may need
+of them, the latest first. What was asked, nearly as it was put; what each
+tool returned, to the figure; what failed; and the first line of the answer.
+The latest turns are given in full in up to half its room, the ones before
+them a line each, and a line cut short still carries the codes, file names,
+dates and numbers from the part that was cut ("(also: Zurich 3rd, LX 1824,
+18:40)"). Its room grows with the window: a 24th of it, 150 to 600 tokens.
+
+A brief always loses something, so the turns stay searchable: the brief ends
+by saying so, and `look_back` finds the parts of earlier turns that share the
+most words with what it is asked for, or reads one turn whole by its number.
+It searches only this conversation, as the run was given it, and nothing it
+returns is new to the run. A long file is read the same way: `read_file` with
+`find` shows only the lines that hold some text, with a few around each.
+
+This follows Belcak et al., *You don't need long context* (arXiv 2611.05306):
+across long agent tasks, a short window kept up to date with a brief, and
+selective reading instead of whole inputs, matched or beat keeping
+everything. The brief changes only when a block is cut, so the cache holds
+between trims.
 
 What was sent is kept with the conversation and deleted with it. It holds
 fetched pages, so it decides nothing: which addresses the reader may open is
@@ -1243,6 +1264,27 @@ thought was cut at its budget, where the thinking went (the first reply of a
 turn, or the replies after a tool), how the tasks whose thought was cut fared
 against the rest, and how fast the model wrote. `--rows` prints one line a
 task. `--compare` sets every figure beside the earlier report's.
+
+**Long context** has a task file of its own too, `evals/longctx.jsonl`: a fact
+given early (in a short message, deep in a long one, in what a tool
+returned, in a file written) and asked for after enough long answers to push
+it out of the window; and answers far down long project files
+(`evals/projects`): a row of a 1,500-line CSV, a decision in meeting notes,
+a bug 850 lines from the function it calls. A task can name the window its
+prompts are fitted to (`n_ctx`), and says it expects a trim (`trimmed`), so a
+task about what survives a trim fails if nothing was trimmed. `--n-ctx` fits
+every prompt of a run to a smaller window than the server's, to see how the
+agent fares when it must trim:
+
+```bash
+python scripts/eval_agent.py --engine real --tasks evals/longctx.jsonl --rows          # each task's own window
+python scripts/eval_agent.py --engine real --tasks evals/longctx.jsonl --n-ctx 6144 --rows
+```
+
+Every report says how long the prompts grew (the longest any reply read), how
+many tasks began a turn with older turns given only in brief, how many had
+their calls ended by the window rather than the step limit, and how much
+earlier thinking the last turn carried.
 
 A task marked `pending` is a known gap, written down with its reason. It is
 expected to fail; the day it passes, the run fails until the mark comes off.

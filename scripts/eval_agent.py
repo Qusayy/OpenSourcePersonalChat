@@ -8,6 +8,7 @@
     python scripts/eval_agent.py --engine real --rules evals/rules/default-none.txt
     python scripts/eval_agent.py --engine real --tasks evals/reasoning.jsonl \
         --category reasoning --thinking on --think-budget 2048 --rows
+    python scripts/eval_agent.py --engine real --tasks evals/longctx.jsonl --n-ctx 8192 --rows
 
 With ``--engine scripted`` each task brings what the model says, so the run
 measures the code around the model. It needs no weights and takes a second.
@@ -46,7 +47,7 @@ from app.config import settings  # noqa: E402
 from app.store import db, projects  # noqa: E402
 from evals import fixtures  # noqa: E402
 from evals.runner import BAD, compare, run_suite  # noqa: E402
-from evals.tasks import TASKS, load_tasks  # noqa: E402
+from evals.tasks import LEAST_N_CTX, TASKS, load_tasks  # noqa: E402
 from evals.wording import applied, load as load_wording  # noqa: E402
 
 
@@ -211,6 +212,14 @@ def show(report: dict, file=None) -> None:
         if s.get("success_when_cut") is not None:
             print(f"  success where a thought was cut {pct(s['success_when_cut'])}, "
                   f"where none was {pct(s['success_when_uncut'])}", file=file)
+    if s.get("peak_prompt_tokens"):
+        peak = s["peak_prompt_tokens"]
+        print(f"  longest prompt per task: median {peak['median']}, most {peak['max']}; "
+              f"older turns summarised in {pct(s.get('trim_rate'))} of tasks; "
+              f"window ended the calls in {pct(s.get('room_limit_rate'))}", file=file)
+        if s.get("carried_thought"):
+            print(f"  earlier thoughts carried into the last turn: median "
+                  f"{s['carried_thought']['median']} tokens", file=file)
     if s.get("no_answer_rate"):
         print(f"  no answer written: {pct(s['no_answer_rate'])} of tasks", file=file)
     if s.get("seconds") and s["seconds"]["total"]:
@@ -237,7 +246,7 @@ def show_rows(report: dict, file=None) -> None:
     called and its time."""
     file = file or sys.stderr
     print(f"\n  {'task':<28} {'status':<8} {'passes':>6} {'think':>6} {'cut':>3} {'eos':>3} "
-          f"{'seconds':>8}  called", file=file)
+          f"{'peak':>6} {'trims':>5} {'seconds':>8}  called", file=file)
     for row in report["tasks"]:
         if row["status"] == "skipped":
             continue
@@ -245,7 +254,8 @@ def show_rows(report: dict, file=None) -> None:
         seconds = "-" if ms is None else f"{ms / 1000:.1f}"
         print(f"  {row['id'][:28]:<28} {row['status'][:8]:<8} {row.get('passes', 0):>6} "
               f"{row.get('think_tokens', 0):>6} {row.get('think_cut', 0):>3} "
-              f"{row.get('think_eos', 0):>3} {seconds:>8}  {','.join(row.get('called', [])) or '-'}",
+              f"{row.get('think_eos', 0):>3} {row.get('peak_prompt_tokens', 0):>6} "
+              f"{row.get('trims', 0):>5} {seconds:>8}  {','.join(row.get('called', [])) or '-'}",
               file=file)
 
 
@@ -293,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
         "--think-budget", type=int, metavar="N",
         help="the most tokens a reply may think for this run (with thinking on)",
     )
+    parser.add_argument(
+        "--n-ctx", type=int, metavar="N",
+        help="fit every prompt to a window of N tokens for this run, as if the server's were "
+             "that size (at most the server's own): how the agent fares when it must trim",
+    )
     parser.add_argument("--rows", action="store_true", help="show one line a task")
     args = parser.parse_args(argv)
     try:
@@ -306,6 +321,10 @@ def main(argv: list[str] | None = None) -> int:
         config["thinking"] = args.thinking
     if args.think_budget is not None:
         config["think_budget"] = args.think_budget
+    if args.n_ctx is not None:
+        if args.n_ctx < LEAST_N_CTX:
+            parser.error(f"--n-ctx must be at least {LEAST_N_CTX}: the system text alone takes about half")
+        config["n_ctx"] = args.n_ctx
 
     if args.probe_cache:
         if args.engine != "real":

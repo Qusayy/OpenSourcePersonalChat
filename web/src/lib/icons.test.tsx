@@ -91,7 +91,7 @@ describe("iconSvg", () => {
 
 describe("hasIcon", () => {
   it("knows every picture and every alias", () => {
-    expect(ICON_NAMES).toHaveLength(21 + 17);
+    expect(ICON_NAMES).toHaveLength(21 + 18);
     for (const name of ICON_NAMES) expect(hasIcon(name)).toBe(true);
   });
 

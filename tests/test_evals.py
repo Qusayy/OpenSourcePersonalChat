@@ -36,6 +36,7 @@ except ImportError as exc:  # pragma: no cover - only without the requirements
 
 CLOCK = render_call("clock", {"timezone_name": "UTC"})
 REASONING = Path(__file__).resolve().parent.parent / "evals" / "reasoning.jsonl"
+LONGCTX = Path(__file__).resolve().parent.parent / "evals" / "longctx.jsonl"
 
 
 class TaskFileTests(unittest.TestCase):
@@ -430,6 +431,109 @@ class ScoreTests(unittest.TestCase):
         )
 
 
+class LongContextFileTests(unittest.IsolatedAsyncioTestCase):
+    """The tasks about conversations and files longer than the window: that
+    they load, that the trimming ones do trim, and that each known gap is
+    the gap it says it is."""
+
+    def setUp(self) -> None:
+        support.no_network(self)
+
+    def test_it_loads_and_its_long_files_are_long(self) -> None:
+        tasks = load_tasks(LONGCTX)
+        by = {c: [t for t in tasks if t.category == c] for c in {t.category for t in tasks}}
+        self.assertGreaterEqual(len(by["recall-after-trim"]), 4)
+        self.assertGreaterEqual(len(by["long-file"]), 3)
+        for task_ in by["long-file"]:
+            with self.subTest(task=task_.id):
+                self.assertTrue(any(c.count("\n") > 500 for c in task_.project.values()))
+        for task_ in by["recall-after-trim"]:
+            with self.subTest(task=task_.id):
+                self.assertTrue(task_.expect["trimmed"])
+                self.assertEqual(task_.n_ctx, 8192)
+        self.assertFalse({t.id for t in load_tasks()} & {t.id for t in tasks})
+
+    async def test_every_scripted_task_ends_as_it_is_marked_and_the_trim_tasks_trim(self) -> None:
+        report = await run_suite(load_tasks(LONGCTX), engine_kind="scripted")
+        ran = [r for r in report["tasks"] if r["status"] != SKIPPED]
+        self.assertGreaterEqual(len(ran), 5)
+        for row in ran:
+            with self.subTest(task=row["id"]):
+                if row["category"] == "recall-after-trim":
+                    self.assertEqual(row["n_ctx"], 8192)
+                    self.assertGreater(row["trims"], 0)
+                if row.get("pending"):
+                    self.assertEqual(row["status"], PENDING, "a known gap closed: unmark it")
+                    self.assertTrue(all(f.startswith("prompt:") for f in row["failures"]),
+                                    row["failures"])
+                else:
+                    self.assertEqual(row["status"], PASSED, row["failures"])
+        self.assertEqual(report["by_category"]["recall-after-trim"]["trim_rate"], 1.0)
+
+    async def test_a_window_given_for_the_run_wins_over_the_tasks_own(self) -> None:
+        report = await run_suite(load_tasks(LONGCTX), engine_kind="scripted",
+                                 config={"n_ctx": 32768})
+        self.assertEqual(report["n_ctx"], 32768)
+        for row in report["tasks"]:
+            if row["status"] != SKIPPED and row["category"] == "recall-after-trim":
+                with self.subTest(task=row["id"]):
+                    self.assertEqual(row["trims"], 0)
+                    self.assertTrue(any(f.startswith("trimmed:") for f in row["failures"]))
+
+    def test_a_task_may_name_its_window_and_long_files_and_neither_may_be_wrong(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.jsonl"
+            path.write_text(json.dumps({
+                "id": "a", "category": "c", "turns": ["hi"], "n_ctx": 8192,
+                "project_files": {"stock.csv": "inventory.csv"},
+            }) + "\n", encoding="utf-8")
+            (loaded,) = load_tasks(path)
+            self.assertEqual(loaded.n_ctx, 8192)
+            self.assertIn("QX-4471,hinge 35mm,Graz,386", loaded.project["stock.csv"])
+            for bad, complaint in (({"n_ctx": 1000}, "n_ctx"),
+                                   ({"project_files": {"a": "nowhere.txt"}}, "evals/projects")):
+                path.write_text(json.dumps({"id": "a", "category": "c", "turns": ["hi"], **bad}) + "\n",
+                                encoding="utf-8")
+                with self.subTest(bad=bad), self.assertRaises(ValueError) as caught:
+                    load_tasks(path)
+                self.assertIn(complaint, str(caught.exception))
+
+
+class WindowTests(unittest.IsolatedAsyncioTestCase):
+    """What a run keeps of how its prompt was fitted, and of what ended it."""
+
+    def setUp(self) -> None:
+        support.no_network(self)
+
+    async def test_a_run_says_how_its_prompt_was_made_up_and_counts_earlier_thoughts(self) -> None:
+        from evals.runner import run_task
+        from evals.scripted import ScriptedEngine
+
+        cfg = settings.model_copy(update={"mock": True, "mock_delay": 0.0, "thinking": "on"})
+        engine = ScriptedEngine(["<think>\nweighing it up carefully here\n</think>\n\nFirst.",
+                                 "Second."], cfg=cfg)
+        self.addAsyncCleanup(engine.settled)
+        two = Task(id="two", category="c", turns=("one?", "two?"))
+        outcome = await run_task(two, engine=engine)
+        first, second = (t.trace.window for t in outcome.turns)
+        self.assertEqual((first["turns"], first["summarised"], first["thought"]), (0, 0, 0))
+        self.assertEqual((second["turns"], second["summarised"]), (1, 0))
+        self.assertGreater(second["thought"], 0)
+        self.assertGreater(second["tokens"], first["tokens"])
+        self.assertEqual(outcome.row(False)["carried_thought"], second["thought"])
+
+    async def test_the_limit_that_ended_the_calls_is_named(self) -> None:
+        from evals.runner import run_task
+        from evals.scripted import ScriptedEngine
+
+        # With the loop off a run makes one call, and then must answer.
+        engine = ScriptedEngine([CLOCK, "Done."])
+        self.addAsyncCleanup(engine.settled)
+        outcome = await run_task(Task(id="t", category="c", turns=("time?",)), engine=engine, loop=False)
+        self.assertEqual(outcome.last.limited_by, "steps")
+        self.assertEqual(outcome.row(False)["limited_by"], ["steps"])
+
+
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         support.no_network(self)
@@ -493,8 +597,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         report = await run_suite(load_tasks(), engine_kind="scripted")
         self.assertEqual(
             set(report),
-            {"engine", "seed", "loop", "thinking", "rules", "created", "model", "tokens_are_estimates",
-             "summary", "by_category", "tasks"},
+            {"engine", "seed", "loop", "thinking", "n_ctx", "rules", "created", "model",
+             "tokens_are_estimates", "summary", "by_category", "tasks"},
         )
         self.assertEqual(set(report["thinking"]), {"mode", "budget"})
         summary = report["summary"]
@@ -506,6 +610,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
              "second_step_rate", "limit_rate", "repeat_rate",
              "steps", "passes", "prompt_tokens", "output_tokens",
              "no_answer_rate", "calls_by_tool",
+             "peak_prompt_tokens", "carried_thought", "trim_rate", "room_limit_rate",
              "think_tokens", "think_first", "think_later", "think_later_share",
              "budget_hit_rate", "budget_task_rate", "think_eos_rate",
              "success_when_cut", "success_when_uncut"},
@@ -600,7 +705,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         change = compare(now, was)
         self.assertEqual(change["previous"], {"engine": "real", "seed": 0, "created": "then",
                                               "thinking": {"mode": "on", "budget": 1024},
-                                              "rules": None, "task_file": None})
+                                              "n_ctx": None, "rules": None, "task_file": None})
         self.assertEqual(change["figures"]["task_success"], {"was": 0.8, "now": 0.9, "change": 0.1})
         self.assertEqual(change["figures"]["passed"]["change"], 1)
         # Spreads and the parts of the time are set side by side figure by figure.
@@ -777,7 +882,8 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(report["task_file"], REASONING.as_posix())
         self.assertIn("thinking on (budget 7 a reply)", said)
         self.assertIn("thinking tokens per task", said)
-        self.assertRegex(said, r"scripted-debug-the-mean\s+passed\s+2\s+0\s+0\s+0\s+-\s+edit_file")
+        self.assertRegex(said, r"scripted-debug-the-mean\s+passed\s+2\s+0\s+0\s+0\s+\d+\s+0\s+-\s+edit_file")
+        self.assertIn("longest prompt per task", said)
 
     def test_a_thinking_budget_must_be_some_tokens(self) -> None:
         with self.assertRaises(SystemExit) as caught:

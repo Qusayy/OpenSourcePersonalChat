@@ -45,7 +45,8 @@ from ..tools.results import links_of
 from . import confirm
 from .calls import Call, parse_call, render_call
 from .context import (
-    Part, Turn, Window, brief_room, cap, fit, key, run_room, turns_from_history,
+    LOOK_BACK_LINE, Part, Turn, Window, brief_room, cap, fit, key, run_room, searchable,
+    turns_from_history,
 )
 from .policy import call_key, refusal, users_words
 from .reply import Reply, write
@@ -351,6 +352,7 @@ class _Run:
             system, self.turns or [], message, room=self._room(),
             count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
             brief=brief_room(self.engine.cfg.n_ctx),
+            tail=LOOK_BACK_LINE if any(t.name == "look_back" for t in tools) else "",
         )
         self._trimmed(window)
         self.trace.system_key = key(system)
@@ -811,7 +813,8 @@ class _Run:
     async def _scoped(self, call: ToolCall) -> ToolResult:
         """The call, made in this run's conversation. Set inside the call's
         own task, so that it reaches the tool and goes no further."""
-        CALL.set(CallContext(conversation_id=self.scope, links=self.links, run_id=self.request_id))
+        CALL.set(CallContext(conversation_id=self.scope, links=self.links, run_id=self.request_id,
+                             earlier=searchable(self.turns or [])))
         return await self.call_tool(call.name, call.args)
 
     async def _call(self, call: ToolCall) -> ToolResult | None:

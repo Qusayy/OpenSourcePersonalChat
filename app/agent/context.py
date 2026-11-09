@@ -301,15 +301,25 @@ _FIGURE = re.compile(
 )
 # The most of them a cut line carries along, and the room they may take.
 FIGURES_KEPT = 4
-FIGURES_ROOM = 16
+FIGURES_ROOM = 24
 
 
-def figures(text: str) -> list[str]:
-    """The codes, names of files and numbers in ``text``, each once, in order."""
+def figures(text: str, *, named: bool = False) -> list[str]:
+    """The codes, names of files and numbers in ``text``, each once, in order.
+    ``named``: a number is given with the nearest capitalised word of the
+    few before it ("Raman 2734"), so that a list of them still says whose
+    each is."""
     found: list[str] = []
     for match in _FIGURE.finditer(text):
         value = match.group(0).strip(".,:")
-        if value and value not in found:
+        if not value:
+            continue
+        if named and value[:1].isdigit():
+            before = [w.strip(",;:()") for w in text[:match.start()].split()[-4:]]
+            names = [w for w in before if w.istitle() and w.isalpha() and len(w) > 1]
+            if names:
+                value = f"{names[-1]} {value}"
+        if value not in found:
             found.append(value)
     return found
 
@@ -323,7 +333,7 @@ def _one_line(text: str, room: int) -> str:
     if cut == text:
         return cut
     kept = cut.rstrip(" …")
-    rest = [f for f in figures(text[len(kept):]) if f not in kept][:FIGURES_KEPT]
+    rest = [f for f in figures(text[len(kept):], named=True) if f not in kept][:FIGURES_KEPT]
     while rest and estimate(", ".join(rest)) > FIGURES_ROOM:
         rest.pop()
     return f"{cut} (also: {', '.join(rest)})" if rest else cut
@@ -352,6 +362,23 @@ def entry(turn: Turn, *, full: bool, gone: Callable[[Part], bool] = lambda part:
     if not turn.question:
         lines[0] = "- " + lines[0].lstrip()
     return "\n".join(lines)
+
+
+def searchable(turns: list[Turn]) -> tuple[dict, ...]:
+    """Earlier turns as look_back searches them: each its message, its
+    answer, and what each of its lookups returned, by tool."""
+    out = []
+    for turn in turns:
+        found = tuple(
+            (part.tools[0] if part.tools else "lookup", result_text(part))
+            for part in turn.parts if part.kind in FOUND
+        )
+        out.append({"question": turn.question, "answer": turn.answer, "found": found})
+    return tuple(out)
+
+
+# The brief's last line where the turns it stands for can be searched.
+LOOK_BACK_LINE = "These turns are kept in full: look_back finds what was said in them."
 
 
 def summary(

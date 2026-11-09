@@ -84,6 +84,7 @@ const ALIAS = {
   text_stats: "textstats",
   remember: "note",
   recall: "note",
+  look_back: "note",
   exchange: "currency",
   answer: "model",
   calc: "calculator",

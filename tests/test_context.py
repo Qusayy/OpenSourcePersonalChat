@@ -183,9 +183,11 @@ class SummaryTests(unittest.TestCase):
                 "and my return flight is LX 1824 on the 9th at 18:40. Just say OK.")
         line = entry(Turn(trip, "OK."), full=False)
         self.assertIn("…", line)
-        self.assertIn("(also: 3rd, LX 1824, 9th, 18:40)", line)
+        self.assertIn("(also: Zurich 3rd, LX 1824, 9th, 18:40)", line)
         self.assertEqual(figures("app/main.py line 40, QX-4471 qty 386 on 2026-03-14"),
                          ["app/main.py", "40", "QX-4471", "386", "2026-03-14"])
+        self.assertEqual(figures("Hannah Berg is on extension 2617, LX 1824 on the 9th", named=True),
+                         ["Berg 2617", "LX 1824", "9th"])
 
     def test_a_result_out_of_date_is_left_out(self) -> None:
         turn = Turn("Weather?", "Mild.", parts=(

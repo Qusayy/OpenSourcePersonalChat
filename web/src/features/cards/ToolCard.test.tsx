@@ -205,6 +205,21 @@ describe("each kind of card, with everything the tool can send", () => {
     expect(words(none)).toContain("No note matches “boat”.");
   });
 
+  it("looking back lists what was found earlier in the conversation, or says nothing was", () => {
+    const back = draw("note", {
+      action: "look_back",
+      query: "flight",
+      notes: ["Turn 1, you asked: my return flight is LX 1824 on the 9th"],
+    });
+    expect(words(back)).toContain("Look back");
+    expect(words(back)).toContain("“flight”");
+    expect([...back.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+      "Turn 1, you asked: my return flight is LX 1824 on the 9th",
+    ]);
+    const none = draw("note", { action: "look_back", query: "boat", notes: [] });
+    expect(words(none)).toContain("Nothing earlier in this conversation matches “boat”.");
+  });
+
   it("a search lists its pages numbered, each linking out, under the engine's answer", () => {
     const el = draw("search", FULL.search);
     expect(words(el)).toContain("Web search“python release”");

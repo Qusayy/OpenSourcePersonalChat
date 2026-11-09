@@ -94,6 +94,10 @@ class CallContext:
     links: tuple[Link, ...] = ()
     # The run the call belongs to, which a file it writes is kept under.
     run_id: str | None = None
+    # The conversation's earlier turns as the run was given them, oldest
+    # first, each {"question", "answer", "found": ((tool, text), ...)}: what
+    # look_back searches.
+    earlier: tuple[dict, ...] = ()
 
 
 CALL: ContextVar[CallContext] = ContextVar("tool_call", default=CallContext())

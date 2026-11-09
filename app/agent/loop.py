@@ -44,7 +44,9 @@ from ..tools.base import (
 from ..tools.results import links_of
 from . import confirm
 from .calls import Call, parse_call, render_call
-from .context import SUMMARY_TOKENS, Part, Turn, Window, cap, fit, key, run_room, turns_from_history
+from .context import (
+    Part, Turn, Window, brief_room, cap, fit, key, run_room, turns_from_history,
+)
 from .policy import call_key, refusal, users_words
 from .reply import Reply, write
 from .route import URL_RE, ToolCall, free_route
@@ -320,7 +322,7 @@ class _Run:
         """The message cut to what the window can give it beside the system
         text and a summary of older turns, if it is longer. Counted only when
         it might be: no message has more tokens than bytes."""
-        limit = self._room() - self.engine.count_tokens(system) - SUMMARY_TOKENS
+        limit = self._room() - self.engine.count_tokens(system) - brief_room(self.engine.cfg.n_ctx)
         if len(self.message.encode("utf-8")) <= limit:
             return self.message, False
         return cap(self.message, max(1, limit), self.engine.count_tokens)
@@ -348,6 +350,7 @@ class _Run:
         window = fit(
             system, self.turns or [], message, room=self._room(),
             count=self.engine.count_tokens, now=time.time(), fresh_for=fresh_for,
+            brief=brief_room(self.engine.cfg.n_ctx),
         )
         self._trimmed(window)
         self.trace.system_key = key(system)

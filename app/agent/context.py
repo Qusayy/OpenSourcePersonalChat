@@ -16,7 +16,11 @@ saying so: the prompt changes once, at that point, and not every turn after.
 When the conversation outgrows the window, its oldest turns are dropped whole,
 and only where a block of about ``TRIM_STEP`` tokens begins. A trim then
 happens about once in that many tokens, and every prompt in between extends
-the one before. The dropped turns become one short summary at the top.
+the one before. The dropped turns become one brief at the top: not a retelling
+of them but what the work ahead may need of them, the latest first. What was
+asked, nearly as it was put; what each tool returned, to the figure; what
+failed; and the first line of the answer. The latest turns are given in full
+as far as the room goes, and the ones before them a line each.
 
 Nothing here reaches the model. Counting is the caller's, given as a function,
 and every text is counted at most once a fit; the choice of where to cut is
@@ -26,14 +30,25 @@ made on an estimate, and one whole-prompt count checks it.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from ..chatml import render_chatml
 from ..text import clip, estimate, first_sentence
 
-# The most a summary of dropped turns takes.
+# The least room the brief of dropped turns is given, and the most; in
+# between it is a share of the window (``brief_room``).
 SUMMARY_TOKENS = 150
+SUMMARY_MOST = 600
+# What the brief keeps of one dropped turn, given in full: the message, each
+# of the first few things its tools returned, and the answer's first line.
+ASKED_ROOM = 80
+RESULT_ROOM = 40
+RESULTS_KEPT = 3
+SAID_ROOM = 30
+# A turn given a line only: the start of the message.
+STUB_ROOM = 20
 # The most an earlier message takes when its turn is replayed compact. A
 # longer one (a pasted file, say) is cut, so that it cannot crowd out the rest
 # of the conversation for as long as it stays in the window. A turn replayed
@@ -83,6 +98,13 @@ FOUND = frozenset({"data", "failed", "observation", "response"})
 # What a result that is out of date is replayed as.
 STALE = "This was looked up earlier and is out of date now."
 SUMMARY_HEADING = "Earlier in this conversation, in short:"
+
+
+def brief_room(n_ctx: int) -> int:
+    """The room the brief of dropped turns is given in a window of ``n_ctx``
+    tokens: a twenty-fourth of it, never less than ``SUMMARY_TOKENS`` or more
+    than ``SUMMARY_MOST``."""
+    return max(SUMMARY_TOKENS, min(SUMMARY_MOST, n_ctx // 24))
 
 
 
@@ -258,23 +280,119 @@ def replayed(
     return [stale(p) if gone(p) else p for p in parts]
 
 
-def summary(turns: list[Turn], budget: int = SUMMARY_TOKENS) -> Part | None:
-    """Turns that no longer fit, each as a line: the message, and the first
-    sentence of its answer. As many of the latest as fit ``budget``."""
-    lines: list[str] = []
-    used = estimate(SUMMARY_HEADING) + 1
-    for turn in reversed(turns):
+def result_text(part: Part) -> str:
+    """What a lookup brought back, without the tags it is read in."""
+    text = part.content.strip()
+    for open_, close in (("<tool_response>", "</tool_response>"), ("<data", "</data>")):
+        if text.startswith(open_) and text.endswith(close):
+            text = text[len(open_):-len(close)]
+            if open_ == "<data":
+                text = text.split(">", 1)[1] if ">" in text else text
+    return " ".join(text.split())
+
+
+# What in a text is worth keeping to the character when the rest is cut: a
+# code (LX 1824, QX-4471), a file's name, a time, a date or a number.
+_FIGURE = re.compile(
+    r"\b[A-Z]{1,5}[- ]?\d{2,}[A-Za-z0-9-]*\b"
+    r"|[\w/-]+\.(?:py|md|csv|toml|json|txt|js|ts|tsx|html|css|yaml|yml|sh|sql)\b"
+    r"|\b\d+(?:st|nd|rd|th)\b"
+    r"|\d[\d,.:/-]*\d|\b\d\b"
+)
+# The most of them a cut line carries along, and the room they may take.
+FIGURES_KEPT = 4
+FIGURES_ROOM = 16
+
+
+def figures(text: str) -> list[str]:
+    """The codes, names of files and numbers in ``text``, each once, in order."""
+    found: list[str] = []
+    for match in _FIGURE.finditer(text):
+        value = match.group(0).strip(".,:")
+        if value and value not in found:
+            found.append(value)
+    return found
+
+
+def _one_line(text: str, room: int) -> str:
+    """``text`` on one line in ``room`` tokens: cut where it must be, and
+    then followed by what it went on to give to the figure, as far as the
+    room for them goes."""
+    text = " ".join(text.split())
+    cut = clip(text, room)
+    if cut == text:
+        return cut
+    kept = cut.rstrip(" …")
+    rest = [f for f in figures(text[len(kept):]) if f not in kept][:FIGURES_KEPT]
+    while rest and estimate(", ".join(rest)) > FIGURES_ROOM:
+        rest.pop()
+    return f"{cut} (also: {', '.join(rest)})" if rest else cut
+
+
+def entry(turn: Turn, *, full: bool, gone: Callable[[Part], bool] = lambda part: False) -> str:
+    """One dropped turn as the brief gives it. In full: the message, what
+    each of its first few lookups returned, by tool, and the first line of
+    the answer. Otherwise the start of the message and of the answer."""
+    if not full:
+        line = "- " + _one_line(turn.question, STUB_ROOM)
         said = first_sentence(turn.answer.strip()) if turn.answer else ""
-        line = "- " + clip(" ".join(turn.question.split()), 25)
-        if said:
-            line += " — " + clip(" ".join(said.split()), 25)
-        cost = estimate(line) + 1
-        if used + cost > budget:
-            break
-        lines.insert(0, line)
-        used += cost
+        return line + (" — " + _one_line(said, STUB_ROOM) if said else "")
+    lines = ["- Asked: " + _one_line(turn.question, ASKED_ROOM)] if turn.question else []
+    found = [p for p in turn.parts if p.kind in FOUND and not gone(p)]
+    for part in found[:RESULTS_KEPT]:
+        tool = part.tools[0] if part.tools else "lookup"
+        text = result_text(part)
+        if text and text != STALE:
+            lines.append(f"  {tool}: " + _one_line(text, RESULT_ROOM))
+    said = first_sentence(turn.answer.strip()) if turn.answer else ""
+    if said:
+        lines.append("  Answered: " + _one_line(said, SAID_ROOM))
     if not lines:
+        return ""
+    if not turn.question:
+        lines[0] = "- " + lines[0].lstrip()
+    return "\n".join(lines)
+
+
+def summary(
+    turns: list[Turn],
+    budget: int = SUMMARY_TOKENS,
+    *,
+    gone: Callable[[Turn, Part], bool] = lambda turn, part: False,
+    tail: str = "",
+) -> Part | None:
+    """The brief of turns that no longer fit, in ``budget`` tokens.
+
+    The latest are given in full, one by one, in up to half the room; the
+    ones before them a line each, the latest first, in what is left. The
+    lines are in the conversation's order. ``gone`` says which results are
+    out of date, and are left out. ``tail`` is a last line: where the rest
+    can be found.
+    """
+    used = estimate(SUMMARY_HEADING) + 1 + (estimate(tail) + 1 if tail else 0)
+    shown: dict[int, str] = {}
+    index = len(turns) - 1
+    while index >= 0:
+        turn = turns[index]
+        line = entry(turn, full=True, gone=lambda part, turn=turn: gone(turn, part))
+        cost = estimate(line) + 1
+        if not line or used + cost > budget // 2:
+            break
+        shown[index] = line
+        used += cost
+        index -= 1
+    while index >= 0:
+        line = entry(turns[index], full=False)
+        cost = estimate(line) + 1
+        if line.strip("- "):
+            if used + cost > budget:
+                break
+            shown[index] = line
+            used += cost
+        index -= 1
+    if not shown:
         return None
+    lines = [shown[i] for i in sorted(shown)] + ([tail] if tail else [])
     return Part("user", "summary", SUMMARY_HEADING + "\n" + "\n".join(lines))
 
 
@@ -337,6 +455,8 @@ def fit(
     now: float,
     fresh_for: Callable[[str], float | None] = lambda tool: None,
     system_key: str | None = None,
+    brief: int = SUMMARY_TOKENS,
+    tail: str = "",
 ) -> Window:
     """The prompt for this message: ``system``, the conversation so far, and
     ``now_parts``, the message and whatever goes with it, in at most ``room``
@@ -347,15 +467,20 @@ def fit(
     scaled by how far the estimate was off for the whole conversation, and
     checked with ``count``; a check that fails moves the cut on one block.
     ``system_key`` is the key turns sent under ``system`` were kept with; it
-    is worked out from ``system`` when not given.
+    is worked out from ``system`` when not given. ``brief`` is the room the
+    summary of dropped turns may take, and ``tail`` its last line.
     """
     count = _Memo(count)
     sys_key = system_key or key(system)
     head = [Part("system", "instruction", system)]
     replays = [replayed(t, sys_key, now=now, fresh_for=fresh_for) for t in turns]
 
+    def gone(turn: Turn, part: Part) -> bool:
+        lives = [fresh_for(tool) for tool in part.tools]
+        return any(life is not None and now - turn.at > life for life in lives)
+
     def prompt(cut: int) -> list[Part]:
-        top = summary(turns[:cut]) if cut else None
+        top = summary(turns[:cut], brief, gone=gone, tail=tail) if cut else None
         return [*head, *([top] if top else []), *(p for r in replays[cut:] for p in r), *now_parts]
 
     def window(parts: list[Part], cut: int, used: int) -> Window:

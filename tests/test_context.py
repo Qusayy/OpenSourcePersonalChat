@@ -9,7 +9,8 @@ import unittest
 try:
     from app.agent.context import (
         RUN_ROOM, RUN_ROOM_MOST, STALE, SUMMARY_HEADING, SUMMARY_TOKENS, TRIM_STEP, TURN_ROOM,
-        Part, Turn, blocks, cap, compact, fit, key, merged, replayed, run_room, stale, summary,
+        Part, Turn, blocks, brief_room, cap, compact, entry, figures, fit, key, merged, replayed,
+        run_room, stale, summary,
         turns_from, turns_from_history,
     )
     from app.llm import render_chatml
@@ -148,10 +149,69 @@ class ReplayTests(unittest.TestCase):
 
 
 class SummaryTests(unittest.TestCase):
-    def test_each_dropped_turn_is_its_message_and_the_first_sentence_of_its_answer(self) -> None:
+    """The brief of dropped turns: what the work ahead may need of them."""
+
+    def test_each_dropped_turn_is_what_was_asked_and_the_first_line_of_its_answer(self) -> None:
         part = summary([Turn("Coat?", "Yes. It is cold out."), Turn("Why?", "Rain is coming.")])
         self.assertEqual(part.kind, "summary")
-        self.assertEqual(part.content, f"{SUMMARY_HEADING}\n- Coat? — Yes.\n- Why? — Rain is coming.")
+        self.assertEqual(part.content, f"{SUMMARY_HEADING}\n- Asked: Coat?\n  Answered: Yes.\n"
+                                       "- Asked: Why?\n  Answered: Rain is coming.")
+
+    def test_what_a_tool_returned_is_kept_to_the_figure_and_a_failure_too(self) -> None:
+        turn = Turn("Work out 4817 * 3.75, then the weather in Oslo.", "Done.", parts=(
+            Part("user", "question", "Work out 4817 * 3.75, then the weather in Oslo."),
+            Part("assistant", "call", "<tool_call>…</tool_call>", ("calculator",)),
+            Part("user", "response", "<tool_response>\n4817*3.75 = 18,063.75\n</tool_response>",
+                 ("calculator",)),
+            Part("user", "response", "<tool_response>\nError: no such place\n</tool_response>",
+                 ("weather",)),
+            Part("assistant", "answer", "Done."),
+        ))
+        content = summary([turn], 300).content
+        self.assertIn("  calculator: 4817*3.75 = 18,063.75", content)
+        self.assertIn("  weather: Error: no such place", content)
+        self.assertNotIn("<tool_response>", content)
+
+    def test_a_fact_well_into_a_message_survives(self) -> None:
+        trip = ("Here is my trip plan so you have it: I leave from Zurich on the 3rd, stay two "
+                "nights in Lyon, and my return flight is LX 1824 on the 9th. Just say OK.")
+        self.assertIn("LX 1824", summary([Turn(trip, "OK.")], 300).content)
+
+    def test_a_line_cut_short_still_carries_its_figures(self) -> None:
+        trip = ("Here is my trip plan so you have it: I leave from Zurich on the 3rd, stay two "
+                "nights with my sister in Lyon, then take the train to Marseille for a conference, "
+                "and my return flight is LX 1824 on the 9th at 18:40. Just say OK.")
+        line = entry(Turn(trip, "OK."), full=False)
+        self.assertIn("…", line)
+        self.assertIn("(also: 3rd, LX 1824, 9th, 18:40)", line)
+        self.assertEqual(figures("app/main.py line 40, QX-4471 qty 386 on 2026-03-14"),
+                         ["app/main.py", "40", "QX-4471", "386", "2026-03-14"])
+
+    def test_a_result_out_of_date_is_left_out(self) -> None:
+        turn = Turn("Weather?", "Mild.", parts=(
+            Part("user", "response", "<tool_response>\n14 degrees\n</tool_response>", ("weather",)),
+        ), at=0)
+        kept = summary([turn], 300, gone=lambda t, part: False).content
+        dropped = summary([turn], 300, gone=lambda t, part: "weather" in part.tools).content
+        self.assertIn("14 degrees", kept)
+        self.assertNotIn("14 degrees", dropped)
+        self.assertIn("Weather?", dropped)
+
+    def test_the_latest_are_given_in_full_and_older_ones_a_line_each(self) -> None:
+        turns = [Turn(f"Question {i} " + "about lighthouses " * 10, f"Answer {i}.") for i in range(6)]
+        part = summary(turns, 300)
+        self.assertLessEqual(estimate(part.content), 300)
+        self.assertIn("- Asked: Question 5", part.content)
+        self.assertIn("- Question 0 ", part.content)
+        self.assertNotIn("- Asked: Question 0 ", part.content)
+        lines = part.content.splitlines()[1:]
+        self.assertEqual(len([line for line in lines if line.startswith("- ")]), 6)
+        # Many turns: the latest still in full, and as many lines as fit.
+        many = [Turn(f"Question {i} " + "about lighthouses " * 10, f"Answer {i}.") for i in range(40)]
+        part = summary(many, 300)
+        self.assertLessEqual(estimate(part.content), 300)
+        self.assertIn("- Asked: Question 39", part.content)
+        self.assertNotIn("Question 0 ", part.content)
 
     def test_it_keeps_the_latest_that_fit(self) -> None:
         turns = [Turn(f"Question {i} " + "about lighthouses " * 10, f"Answer {i}.") for i in range(30)]
@@ -159,6 +219,19 @@ class SummaryTests(unittest.TestCase):
         self.assertLessEqual(estimate(part.content), SUMMARY_TOKENS)
         self.assertIn("Question 29", part.content)
         self.assertNotIn("Question 0 ", part.content)
+
+    def test_a_last_line_says_where_the_rest_is(self) -> None:
+        part = summary([Turn("Coat?", "Yes.")], 300, tail="Older turns can be searched.")
+        self.assertTrue(part.content.endswith("\nOlder turns can be searched."))
+
+    def test_the_same_turns_give_the_same_brief(self) -> None:
+        turns = [Turn(f"Question {i} " + "about lighthouses " * 10, f"Answer {i}.") for i in range(12)]
+        self.assertEqual(summary(turns, 300), summary(list(turns), 300))
+
+    def test_its_room_is_a_share_of_the_window_within_bounds(self) -> None:
+        self.assertEqual(brief_room(2048), SUMMARY_TOKENS)
+        self.assertEqual(brief_room(8192), 8192 // 24)
+        self.assertEqual(brief_room(131072), 600)
 
     def test_nothing_dropped_is_no_summary(self) -> None:
         self.assertIsNone(summary([]))

@@ -30,12 +30,12 @@ from functools import cached_property
 from typing import AsyncIterator, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
-from ..chatml import THINK_BLOCK
+from ..chatml import THINK_BLOCK, split_thought
 from ..config import settings
 from ..llm import Engine, Stop, engine as default_engine
 from ..llm.usage import blank
 from ..projects import paths
-from ..text import first_sentence
+from ..text import estimate, first_sentence
 from ..tools import REGISTRY, call_tool as default_call_tool
 from ..tools.base import (
     CALL, CallContext, Link, Rejection, ToolResult, available, check, enabled, fresh_for,
@@ -74,6 +74,20 @@ def _project(name: str) -> bool:
     """Whether a tool works on the project: what it returns is no lookup."""
     tool = REGISTRY.get(name)
     return bool(tool and tool.project)
+
+
+def carried(window: Window, own: int) -> dict:
+    """How a run's opening prompt was made up: its tokens, the earlier turns
+    replayed whole and given only in the summary, and an estimate of the
+    tokens of earlier thoughts it carried. ``own`` is how many of the last
+    parts are this message's."""
+    earlier = window.parts[1:len(window.parts) - own]
+    thoughts = sum(
+        estimate(split_thought(p.content)[0])
+        for p in earlier if p.role == "assistant" and p.kind in ("call", "answer")
+    )
+    return {"tokens": window.tokens, "turns": window.turns,
+            "summarised": window.summarised, "thought": thoughts}
 
 
 def thought(reply: Reply, budget: int) -> dict | None:
@@ -337,6 +351,7 @@ class _Run:
         )
         self._trimmed(window)
         self.trace.system_key = key(system)
+        self.trace.window = carried(window, len(message))
         return Transcript(window.parts, own=len(message))
 
     def _trimmed(self, window: Window) -> None:
@@ -404,6 +419,12 @@ class _Run:
                     or time.perf_counter() - began >= self.max_seconds
                     or left < MIN_REPLY + (self.think_budget if self.thinking == "on" else 0)
                 )
+                if final and tools and self.trace.limited_by is None:
+                    self.trace.limited_by = (
+                        "steps" if steps >= self.max_steps
+                        else "time" if time.perf_counter() - began >= self.max_seconds
+                        else "room"
+                    )
                 if final and steps and not noted:
                     transcript.note(NO_MORE_CALLS)
                     noted = True

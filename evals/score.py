@@ -128,6 +128,13 @@ def score(task: Task, turns: list[Turn]) -> list[str]:
             f"passes: {passes} through the model, at most {expect['max_model_passes']} expected"
         )
 
+    if "trimmed" in expect:
+        # A task about what survives a trim says nothing if nothing was trimmed.
+        summarised = bool((trace.window or {}).get("summarised"))
+        if summarised != expect["trimmed"]:
+            failed.append(f"trimmed: older turns {'were' if summarised else 'were not'} summarised, "
+                          f"expected {'they would be' if expect['trimmed'] else 'not'}")
+
     left = project(turns, task.project)
     for path, wanted in (expect.get("file_contains") or {}).items():
         content = left.get(path)
